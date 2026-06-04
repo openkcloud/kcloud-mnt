@@ -156,7 +156,7 @@ export default function LoginPage() {
 
             <div className="space-y-2.5 rounded-lg border border-dashed border-border bg-secondary/40 p-4">
               <div className="text-xs font-medium text-muted-foreground">
-                목업 시연 계정 (클릭하여 자동 입력)
+                계정 선택 (클릭하여 자동 입력)
               </div>
               <div className="grid gap-1.5">
                 {Object.entries(MOCK_USERS).map(([key, { user }]) => (

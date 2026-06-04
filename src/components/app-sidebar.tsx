@@ -51,14 +51,6 @@ export function AppSidebar() {
           ))}
         </nav>
       </ScrollArea>
-      <div className="border-t border-sidebar-border p-3">
-        <div className="rounded-lg bg-sidebar-accent/60 p-3 text-[11px] text-sidebar-foreground/80">
-          <div className="font-medium text-white">목업 환경</div>
-          <div className="mt-0.5">
-            MSW로 mock 데이터 제공 중. 실 API 연동 전 시연용입니다.
-          </div>
-        </div>
-      </div>
     </aside>
   );
 }
