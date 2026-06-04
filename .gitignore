@@ -39,3 +39,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python (docs generator)
+__pycache__/
+*.pyc
+
+# Office temp / lock files
+~$*
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
