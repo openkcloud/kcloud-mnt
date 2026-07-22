@@ -9,7 +9,17 @@ import {
   ShoppingBag,
   Boxes,
   Globe,
+  Zap,
+  MessageSquare,
+  ImageIcon,
+  Mic,
+  ArrowRight,
+  Check,
+  Rocket,
 } from "lucide-react";
+import { toast } from "sonner";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { GithubIcon } from "@/components/icons";
 import { BrandLogo } from "@/components/brand-logo";
 import { PageHeader } from "@/components/page-header";
@@ -53,6 +63,7 @@ export default function CatalogPage() {
   const [q, setQ] = React.useState("");
   const [cat, setCat] = React.useState<"all" | ModelCategory>("all");
   const [hw, setHw] = React.useState<"all" | RblnHardware>("all");
+  const [wizard, setWizard] = React.useState<SignatureScenario | null>(null);
 
   const stats = modelStats();
 
@@ -115,6 +126,11 @@ export default function CatalogPage() {
           </>
         }
       />
+
+      {/* 시그니처 시나리오 — ETRI 260615 §5 반영 */}
+      <SignatureShowcase onLaunch={(s) => setWizard(s)} />
+
+      <DeploymentWizard scenario={wizard} onClose={() => setWizard(null)} />
 
       {/* Filter band */}
       <Card className="p-4">
@@ -348,4 +364,390 @@ function categoryBarColor(c: ModelCategory) {
       Diffusion: "bg-gradient-to-r from-rose-500 to-rose-300",
     } as const
   )[c];
+}
+
+// ─────────────────────────────────────────────────────────────
+// 시그니처 시나리오 — ETRI 260615 §5 반영
+// ─────────────────────────────────────────────────────────────
+
+type SignatureScenario = {
+  id: "chatbot" | "image" | "voice";
+  title: string;
+  subtitle: string;
+  desc: string;
+  icon: React.ComponentType<{ className?: string }>;
+  accent: string;
+  ringAccent: string;
+  defaultModel: string;
+  modelOptions: string[];
+  defaultHardware: string;
+  hardwareOptions: string[];
+  defaultInfra: "VM" | "Container";
+  featured?: boolean;
+};
+
+const SCENARIOS: SignatureScenario[] = [
+  {
+    id: "chatbot",
+    title: "원클릭 챗봇 배포",
+    subtitle: "LLM + vLLM + Web UI",
+    desc: "모델 · 가속기 · 인프라를 조합해 30초 안에 챗봇 API + 데모 웹을 배포",
+    icon: MessageSquare,
+    accent: "bg-gradient-to-br from-brand-indigo-500 to-brand-mint-500 text-white",
+    ringAccent: "border-primary shadow-lg shadow-primary/20",
+    defaultModel: "Llama-3.1-8B-Instruct",
+    modelOptions: [
+      "Llama-3.1-8B-Instruct",
+      "Llama-3.1-70B-Instruct",
+      "Qwen2.5-14B-Instruct",
+      "Solar-10.7B",
+      "Mistral-7B-v0.3",
+    ],
+    defaultHardware: "Rebellions ATOM+ × 4",
+    hardwareOptions: [
+      "Rebellions ATOM+ × 4",
+      "Rebellions REBEL Quad × 1",
+      "NVIDIA A100 40GB × 1",
+      "NVIDIA H100 80GB × 1",
+      "Furiosa RNGD × 2",
+    ],
+    defaultInfra: "Container",
+    featured: true,
+  },
+  {
+    id: "image",
+    title: "이미지 생성 서비스",
+    subtitle: "Stable Diffusion + Gradio",
+    desc: "Diffusion 모델 카드에서 가속기 · 인프라 선택 후 원클릭 배포",
+    icon: ImageIcon,
+    accent: "bg-gradient-to-br from-violet-500 to-rose-500 text-white",
+    ringAccent: "border-violet-400",
+    defaultModel: "Stable Diffusion 3.5 Large",
+    modelOptions: [
+      "Stable Diffusion 3.5 Large",
+      "Stable Diffusion XL 1.0",
+      "FLUX.1 [schnell]",
+    ],
+    defaultHardware: "NVIDIA A100 40GB × 1",
+    hardwareOptions: [
+      "NVIDIA A100 40GB × 1",
+      "NVIDIA H100 80GB × 1",
+      "Rebellions REBEL Quad × 1",
+    ],
+    defaultInfra: "Container",
+  },
+  {
+    id: "voice",
+    title: "음성 STT · TTS",
+    subtitle: "Whisper + XTTS",
+    desc: "음성 인식(STT) + 음성 합성(TTS) 서비스를 함께 배포",
+    icon: Mic,
+    accent: "bg-gradient-to-br from-amber-500 to-rose-400 text-white",
+    ringAccent: "border-amber-300",
+    defaultModel: "Whisper-Large-v3 + XTTS-v2",
+    modelOptions: [
+      "Whisper-Large-v3 + XTTS-v2",
+      "Whisper-Medium + Coqui XTTS",
+    ],
+    defaultHardware: "Furiosa RNGD × 2",
+    hardwareOptions: [
+      "Furiosa RNGD × 2",
+      "NVIDIA A100 40GB × 1",
+      "Rebellions ATOM+ × 4",
+    ],
+    defaultInfra: "Container",
+  },
+];
+
+function SignatureShowcase({ onLaunch }: { onLaunch: (s: SignatureScenario) => void }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-baseline justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Zap className="size-4 text-brand-mint-600" />
+            openKcloud 시그니처 시나리오
+          </div>
+          <p className="text-xs text-muted-foreground">
+            카드 → 모델 → 가속기 → 인프라 4단계로 이종 AI반도체 위에서 서비스를 조합·배포한다.
+          </p>
+        </div>
+        <Badge variant="ghost" className="font-mono text-[10px]">
+          통합 시연용
+        </Badge>
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {SCENARIOS.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => onLaunch(s)}
+            className={cn(
+              "relative overflow-hidden rounded-xl border-2 p-4 text-left transition-all hover:-translate-y-0.5",
+              s.featured ? s.ringAccent : "border-border hover:border-primary/40",
+            )}
+          >
+            {s.featured && (
+              <div className="absolute right-3 top-3">
+                <Badge variant="default" className="gap-1 text-[10px]">
+                  <Rocket className="size-2.5" /> 대표
+                </Badge>
+              </div>
+            )}
+            <div className={cn("mb-3 flex size-11 items-center justify-center rounded-lg", s.accent)}>
+              <s.icon className="size-5" />
+            </div>
+            <div className="space-y-0.5">
+              <div className="text-base font-bold leading-tight">{s.title}</div>
+              <div className="text-xs text-muted-foreground">{s.subtitle}</div>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{s.desc}</p>
+            <div className="mt-3 flex items-center gap-1.5 text-[11px] font-medium text-primary">
+              배포 위저드 열기 <ArrowRight className="size-3" />
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// 배포 위저드 — 4단계 (모델 → 가속기 → 인프라 → 확인·실행)
+// ─────────────────────────────────────────────────────────────
+
+function DeploymentWizard({
+  scenario, onClose,
+}: {
+  scenario: SignatureScenario | null;
+  onClose: () => void;
+}) {
+  const [step, setStep] = React.useState(1);
+  const [model, setModel] = React.useState("");
+  const [hardware, setHardware] = React.useState("");
+  const [infra, setInfra] = React.useState<"VM" | "Container">("Container");
+  const [name, setName] = React.useState("");
+
+  React.useEffect(() => {
+    if (scenario) {
+      setStep(1);
+      setModel(scenario.defaultModel);
+      setHardware(scenario.defaultHardware);
+      setInfra(scenario.defaultInfra);
+      setName(`${scenario.id}-${Date.now().toString().slice(-4)}`);
+    }
+  }, [scenario]);
+
+  if (!scenario) return null;
+
+  const STEPS = [
+    { n: 1, label: "모델", icon: Sparkles },
+    { n: 2, label: "가속기", icon: Cpu },
+    { n: 3, label: "인프라", icon: Boxes },
+    { n: 4, label: "확인·실행", icon: Rocket },
+  ];
+
+  const submit = () => {
+    toast.success(`${scenario.title} 배포 시작 — ${name}`, {
+      description: `${model} · ${hardware} · ${infra}`,
+    });
+    onClose();
+  };
+
+  return (
+    <Dialog open={!!scenario} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <div className="flex items-center gap-3">
+            <div className={cn("flex size-10 items-center justify-center rounded-lg", scenario.accent)}>
+              <scenario.icon className="size-5" />
+            </div>
+            <div>
+              <DialogTitle>{scenario.title}</DialogTitle>
+              <DialogDescription>{scenario.subtitle} — 4단계 배포 위저드</DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+
+        {/* Step indicator */}
+        <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-3">
+          {STEPS.map((s, i) => (
+            <React.Fragment key={s.n}>
+              <div className="flex flex-col items-center gap-1">
+                <div
+                  className={cn(
+                    "flex size-8 items-center justify-center rounded-full border-2 transition-colors",
+                    step > s.n
+                      ? "border-brand-mint-500 bg-brand-mint-500 text-white"
+                      : step === s.n
+                        ? "border-primary bg-primary text-white"
+                        : "border-border bg-background text-muted-foreground",
+                  )}
+                >
+                  {step > s.n ? <Check className="size-4" /> : <s.icon className="size-3.5" />}
+                </div>
+                <div className={cn("text-[10px] font-medium", step >= s.n ? "text-foreground" : "text-muted-foreground")}>
+                  {s.label}
+                </div>
+              </div>
+              {i < STEPS.length - 1 && (
+                <div
+                  className={cn(
+                    "flex-1 border-t-2 mx-2 transition-colors",
+                    step > s.n ? "border-brand-mint-500" : "border-border",
+                  )}
+                />
+              )}
+            </React.Fragment>
+          ))}
+        </div>
+
+        {/* Step content */}
+        <div className="min-h-[180px] space-y-3 py-2">
+          {step === 1 && (
+            <div className="space-y-2">
+              <Label>모델 선택</Label>
+              <div className="space-y-1.5">
+                {scenario.modelOptions.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setModel(m)}
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                      model === m
+                        ? "border-primary bg-primary/5 text-foreground"
+                        : "border-border text-muted-foreground hover:border-primary/50",
+                    )}
+                  >
+                    <span className="font-mono text-xs">{m}</span>
+                    {model === m && <Check className="size-4 text-primary" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-2">
+              <Label>AI 가속기 선택</Label>
+              <div className="space-y-1.5">
+                {scenario.hardwareOptions.map((h) => (
+                  <button
+                    key={h}
+                    type="button"
+                    onClick={() => setHardware(h)}
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                      hardware === h
+                        ? "border-primary bg-primary/5 text-foreground"
+                        : "border-border text-muted-foreground hover:border-primary/50",
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Cpu className="size-3.5" />
+                      <span className="font-mono text-xs">{h}</span>
+                    </div>
+                    {hardware === h && <Check className="size-4 text-primary" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="space-y-3">
+              <Label>인프라 유형</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setInfra("Container")}
+                  className={cn(
+                    "rounded-lg border-2 p-4 text-left transition-colors",
+                    infra === "Container"
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/50",
+                  )}
+                >
+                  <Boxes className="mb-2 size-6 text-brand-mint-600" />
+                  <div className="text-sm font-semibold">Container (K8s Pod)</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    빠른 배포·자동 스케일·GitOps 친화. 무상태 서비스 권장.
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInfra("VM")}
+                  className={cn(
+                    "rounded-lg border-2 p-4 text-left transition-colors",
+                    infra === "VM"
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/50",
+                  )}
+                >
+                  <Sparkles className="mb-2 size-6 text-brand-indigo-600" />
+                  <div className="text-sm font-semibold">VM (OpenStack)</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    강한 격리·전용 GPU 패스스루. 대규모 학습 워크로드 권장.
+                  </div>
+                </button>
+              </div>
+              <div>
+                <Label>서비스 이름</Label>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs"
+                />
+              </div>
+            </div>
+          )}
+
+          {step === 4 && (
+            <div className="space-y-2">
+              <Label>배포 요약</Label>
+              <Card className="p-4">
+                <dl className="grid grid-cols-3 gap-y-3 text-xs">
+                  <dt className="text-muted-foreground">시나리오</dt>
+                  <dd className="col-span-2 font-medium">{scenario.title}</dd>
+                  <dt className="text-muted-foreground">모델</dt>
+                  <dd className="col-span-2 font-mono">{model}</dd>
+                  <dt className="text-muted-foreground">가속기</dt>
+                  <dd className="col-span-2 font-mono">{hardware}</dd>
+                  <dt className="text-muted-foreground">인프라</dt>
+                  <dd className="col-span-2">
+                    <Badge variant="outline" className="font-mono text-[10px]">{infra}</Badge>
+                  </dd>
+                  <dt className="text-muted-foreground">서비스 이름</dt>
+                  <dd className="col-span-2 font-mono">{name}</dd>
+                </dl>
+                <div className="mt-3 rounded-md border border-brand-mint-200 bg-brand-mint-50/60 p-2 text-[11px] text-brand-mint-900">
+                  💡 실행 시 자동으로 진행되는 단계: 프로젝트 쿼터 확인 → 이미지 준비 → 자원 할당 →
+                  {infra === "Container" ? " Deployment + Service + Ingress" : " VM + Cloud-init 스크립트"} 배포 → API endpoint 게시.
+                </div>
+              </Card>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          {step > 1 && (
+            <Button variant="outline" onClick={() => setStep(step - 1)} className="mr-auto">
+              이전
+            </Button>
+          )}
+          <Button variant="outline" onClick={onClose}>취소</Button>
+          {step < 4 ? (
+            <Button onClick={() => setStep(step + 1)}>
+              다음 <ArrowRight className="size-3.5" />
+            </Button>
+          ) : (
+            <Button onClick={submit}>
+              <Rocket className="size-3.5" /> 배포 실행
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
