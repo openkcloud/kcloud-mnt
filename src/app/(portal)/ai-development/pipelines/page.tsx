@@ -9,7 +9,10 @@ import {
   Clock,
   Database,
   Sparkles,
+  Upload,
+  FileCode,
 } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +20,9 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { cn, relativeTime } from "@/lib/utils";
 import type { KFPipeline } from "@/lib/types";
 
@@ -55,18 +61,28 @@ export default function PipelinesPage() {
     isLoading: boolean;
   };
   const [selected, setSelected] = React.useState<string | undefined>();
+  const [uploadOpen, setUploadOpen] = React.useState(false);
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const active = selected ? data.items.find((p) => p.id === selected) : data.items[0];
 
   return (
     <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
+      <UploadPipelineDialog open={uploadOpen} onClose={() => setUploadOpen(false)} />
       {/* Pipeline list */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-base">
             <span>파이프라인</span>
-            <Badge variant="ghost">{data.items.length}</Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="ghost">{data.items.length}</Badge>
+              <Button size="sm" onClick={() => setUploadOpen(true)}>
+                <Upload className="size-3.5" /> YAML 업로드
+              </Button>
+            </div>
           </CardTitle>
+          <CardDescription className="text-[11px]">
+            KFP Python DSL로 컴파일된 YAML 파일을 직접 업로드할 수 있다.
+          </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           <div className="divide-y divide-border">
@@ -250,5 +266,121 @@ function PipelineStep({
       </div>
       <div className="text-sm font-semibold leading-tight">{step.name}</div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// YAML 업로드 다이얼로그 — ETRI 260615 §6.B 반영
+// ─────────────────────────────────────────────────────────────
+
+function UploadPipelineDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [name, setName] = React.useState("");
+  const [ns, setNs] = React.useState("ai-research");
+  const [fileName, setFileName] = React.useState<string | null>(null);
+  const [pastedYaml, setPastedYaml] = React.useState("");
+  const [mode, setMode] = React.useState<"file" | "paste">("file");
+
+  const submit = () => {
+    if (!name.trim()) return;
+    if (mode === "file" && !fileName) return;
+    if (mode === "pastedYaml" && !pastedYaml.trim()) return;
+    toast.success(`Pipeline '${name}' 업로드 완료`, {
+      description: `${ns} 네임스페이스 · ${mode === "file" ? fileName : "붙여넣은 YAML"} · 검증 진행 중`,
+    });
+    setName("");
+    setFileName(null);
+    setPastedYaml("");
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <FileCode className="size-5 text-brand-indigo-600" />
+            Pipeline YAML 업로드
+          </DialogTitle>
+          <DialogDescription>
+            KFP Python DSL로 컴파일된 YAML 파일 또는 매니페스트를 직접 붙여넣어 등록한다.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 py-2">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>파이프라인 이름</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-training-pipeline" />
+            </div>
+            <div>
+              <Label>네임스페이스</Label>
+              <Input value={ns} onChange={(e) => setNs(e.target.value)} placeholder="ai-research" />
+            </div>
+          </div>
+
+          <div className="flex gap-1 rounded-md border border-border p-0.5">
+            <button
+              type="button"
+              onClick={() => setMode("file")}
+              className={cn(
+                "flex-1 rounded-sm px-2 py-1.5 text-xs font-medium transition-colors",
+                mode === "file" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary",
+              )}
+            >
+              파일 업로드
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("paste")}
+              className={cn(
+                "flex-1 rounded-sm px-2 py-1.5 text-xs font-medium transition-colors",
+                mode === "paste" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary",
+              )}
+            >
+              YAML 붙여넣기
+            </button>
+          </div>
+
+          {mode === "file" && (
+            <label className="block cursor-pointer rounded-lg border-2 border-dashed border-border p-6 text-center transition-colors hover:border-primary/50">
+              <input
+                type="file"
+                accept=".yaml,.yml"
+                className="hidden"
+                onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+              />
+              <Upload className="mx-auto mb-2 size-6 text-muted-foreground" />
+              <div className="text-sm font-medium">
+                {fileName ?? "파일을 여기로 드래그하거나 클릭하여 선택"}
+              </div>
+              <div className="mt-1 text-[11px] text-muted-foreground">.yaml · .yml · KFP v2 매니페스트</div>
+            </label>
+          )}
+
+          {mode === "paste" && (
+            <div>
+              <Label className="text-[11px]">YAML 내용</Label>
+              <textarea
+                value={pastedYaml}
+                onChange={(e) => setPastedYaml(e.target.value)}
+                className="mt-1 min-h-[160px] w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs"
+                placeholder={`apiVersion: argoproj.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: my-training-pipeline\n...`}
+              />
+            </div>
+          )}
+
+          <div className="rounded-md border border-amber-200 bg-amber-50/60 p-2 text-[11px] text-amber-900">
+            업로드 후 자동 검증 — DSL 스키마 · 아티팩트 참조 · 자원 요구사항 유효성 확인 후 카탈로그에 등록된다.
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>취소</Button>
+          <Button onClick={submit}>
+            <Upload className="size-3.5" /> 업로드 · 등록
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

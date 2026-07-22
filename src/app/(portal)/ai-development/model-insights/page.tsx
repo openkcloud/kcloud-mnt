@@ -194,10 +194,29 @@ export default function ModelInsightsPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>1 token 지연 분해</CardTitle>
-                <CardDescription>vllm-solar-10b · 980ms 평균 · 단계별 기여도</CardDescription>
+                <CardTitle>1 token 지연 분해 (TPOT)</CardTitle>
+                <CardDescription>
+                  vllm-solar-10b · <strong className="text-foreground">TPOT (Time Per Output Token)</strong> = 980ms 평균 · 단계별 기여도
+                </CardDescription>
               </CardHeader>
               <CardContent>
+                <div className="mb-3 grid grid-cols-3 gap-2 rounded-md border border-border bg-secondary/30 p-2 text-[11px]">
+                  <div>
+                    <div className="font-mono font-semibold">TTFT</div>
+                    <div className="text-muted-foreground">Time To First Token — 첫 토큰까지 지연 (prompt 처리 포함)</div>
+                    <div className="mt-0.5 font-mono">142ms</div>
+                  </div>
+                  <div>
+                    <div className="font-mono font-semibold">TPOT</div>
+                    <div className="text-muted-foreground">Time Per Output Token — 토큰 1개 생성 평균 시간</div>
+                    <div className="mt-0.5 font-mono">980ms</div>
+                  </div>
+                  <div>
+                    <div className="font-mono font-semibold">E2E Latency</div>
+                    <div className="text-muted-foreground">요청 전체 완료 시간 (TTFT + TPOT × 출력 토큰 수)</div>
+                    <div className="mt-0.5 font-mono">3.4s / 512 tok</div>
+                  </div>
+                </div>
                 <div className="space-y-2">
                   {LATENCY_BREAKDOWN.map((s) => (
                     <div key={s.stage} className="space-y-1">
@@ -216,6 +235,11 @@ export default function ModelInsightsPage() {
                       </div>
                     </div>
                   ))}
+                </div>
+                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50/60 p-2 text-[11px] text-amber-900">
+                  <strong>KV Cache 미스율 산출 방식:</strong> vLLM 표준 메트릭 <code className="font-mono text-[10px] bg-white/50 px-1 rounded">gpu_cache_usage_perc</code> +
+                  <code className="font-mono text-[10px] bg-white/50 px-1 rounded ml-1">num_preemptions_total</code>을 조합해 계산한다.
+                  Attention Layer 프로파일링은 <strong>1분 주기 샘플링</strong> (실시간 아님) — 추론 오버헤드 최소화.
                 </div>
               </CardContent>
             </Card>

@@ -81,13 +81,17 @@ export default function AIDevHomePage() {
           <div className="space-y-1">
             <div className="font-semibold">AI 노트북이란?</div>
             <p className="text-sm text-muted-foreground">
-              <strong className="text-foreground">Kubeflow</strong>는 K8s 위에서 ML 워크플로우 전 주기(데이터→학습→배포→모니터링)를 운영하는 오픈소스 플랫폼입니다.
+              <strong className="text-foreground">Kubeflow</strong>는 K8s 위에서 ML 워크플로우 전 주기(데이터→학습→배포→모니터링)를 운영하는 오픈소스 플랫폼이다.
               openKcloud는 Kubeflow를 통합하여 <strong className="text-foreground">OpenStack 프로젝트 = Kubeflow Profile</strong> 매핑으로
-              과금·격리·자원할당을 한 번에 처리합니다.
+              과금·격리·자원할당을 한 번에 처리한다.
             </p>
           </div>
         </CardContent>
       </Card>
+
+      {/* 전체 흐름 가이드 — ETRI 260615 §6.A 반영 */}
+      <WorkflowGuide />
+
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {MENUS.map((m) => (
@@ -118,3 +122,79 @@ export default function AIDevHomePage() {
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────
+// 전체 흐름 가이드 — ETRI 260615 §6.A 반영
+// 자원 신청 → Profile → 모델 선택 → Notebook → 템플릿 → GPU 프리셋 →
+// Pipeline → Katib HPO → Serving → API 호출
+// ─────────────────────────────────────────────────────────────
+
+const WORKFLOW_STEPS = [
+  { n: 1, label: "자원 신청", desc: "IaaS 프로젝트 · CPU·메모리·가속기 쿼터", href: "/iaas/projects", color: "bg-brand-indigo-100 text-brand-indigo-700" },
+  { n: 2, label: "Profile 생성", desc: "네임스페이스 분리 · 팀별 워크스페이스", href: "/ai-development/profiles", color: "bg-violet-100 text-violet-700" },
+  { n: 3, label: "모델 선택", desc: "마켓플레이스에서 사전 학습 모델 확보", href: "/catalog", color: "bg-brand-mint-100 text-brand-mint-700" },
+  { n: 4, label: "Notebook 생성", desc: "CUDA Training 템플릿 · GPU 2장 프리셋", href: "/ai-development/notebooks", color: "bg-sky-100 text-sky-700" },
+  { n: 5, label: "Pipeline", desc: "학습 워크플로우 DAG 정의 · 제출", href: "/ai-development/pipelines", color: "bg-amber-100 text-amber-700" },
+  { n: 6, label: "Experiments (HPO)", desc: "Katib · 하이퍼파라미터 최적화", href: "/ai-development/experiments", color: "bg-rose-100 text-rose-700" },
+  { n: 7, label: "Serving", desc: "KServe · 모델 배포 · Auto-scale 0→N", href: "/ai-development/serving", color: "bg-brand-indigo-100 text-brand-indigo-700" },
+  { n: 8, label: "API 호출", desc: "endpoint URL로 서비스 운영 확인", href: "/ai-development/serving", color: "bg-brand-mint-100 text-brand-mint-700" },
+];
+
+function WorkflowGuide() {
+  const [open, setOpen] = React.useState(true);
+  return (
+    <Card className="border-brand-mint-200 bg-gradient-to-br from-brand-mint-50/60 to-transparent">
+      <CardContent className="p-5">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="mb-3 flex w-full items-center justify-between text-left"
+        >
+          <div className="flex items-center gap-2">
+            <div className="flex size-8 items-center justify-center rounded-lg bg-brand-mint-100 text-brand-mint-700">
+              <ArrowRight className="size-4" />
+            </div>
+            <div>
+              <div className="font-semibold">전체 흐름 가이드 (Kubeflow 8단계)</div>
+              <div className="text-xs text-muted-foreground">
+                처음 사용하시면 이 순서로 진행하기 — 각 단계 클릭 시 해당 페이지로 이동
+              </div>
+            </div>
+          </div>
+          <Badge variant="ghost" className="text-[10px]">
+            {open ? "접기" : "펼치기"}
+          </Badge>
+        </button>
+
+        {open && (
+          <div className="grid gap-2 md:grid-cols-4 lg:grid-cols-8">
+            {WORKFLOW_STEPS.map((s, i) => (
+              <React.Fragment key={s.n}>
+                <Link
+                  href={s.href}
+                  className="group flex flex-col items-center gap-1.5 rounded-lg border border-border bg-card p-2.5 transition-all hover:-translate-y-0.5 hover:border-primary/40"
+                >
+                  <div className="relative">
+                    <div className={`flex size-9 items-center justify-center rounded-full ${s.color}`}>
+                      <span className="text-sm font-bold">{s.n}</span>
+                    </div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[11px] font-semibold leading-tight">{s.label}</div>
+                    <div className="mt-0.5 text-[9px] leading-tight text-muted-foreground">{s.desc}</div>
+                  </div>
+                </Link>
+                {i < WORKFLOW_STEPS.length - 1 && (
+                  <div className="hidden items-center justify-center text-muted-foreground lg:flex" style={{ marginLeft: "-6px", marginRight: "-6px" }}>
+                    <ArrowRight className="size-3" />
+                  </div>
+                )}
+              </React.Fragment>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
