@@ -210,7 +210,7 @@ export default function ServerDetailPage() {
               </TableHeader>
               <TableBody>
                 {data.accelerators.map((a) => (
-                  <TableRow key={a.id} className="cursor-pointer" onClick={() => window.location.assign(`/ai-accelerators/devices/${a.id}`)}>
+                  <TableRow key={a.id}>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Cpu className={cn(

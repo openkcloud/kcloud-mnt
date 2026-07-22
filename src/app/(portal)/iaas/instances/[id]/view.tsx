@@ -238,7 +238,7 @@ export default function VMDetailPage() {
                   {data.passthroughs.map((pt) => {
                     const acc = data.accelerators.find((a) => a.id === pt.acceleratorId);
                     return (
-                      <TableRow key={pt.acceleratorId} className="cursor-pointer" onClick={() => window.location.assign(`/ai-accelerators/devices/${pt.acceleratorId}`)}>
+                      <TableRow key={pt.acceleratorId}>
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <Cpu className="size-4 text-brand-mint-600" />

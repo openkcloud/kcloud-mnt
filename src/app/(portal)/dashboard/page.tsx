@@ -422,8 +422,7 @@ export default function DashboardPage() {
           <CardDescription>자주 접근하는 자원 관리 페이지</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-            <QuickLink href="/ai-accelerators/devices" icon={Cpu} label="AI반도체 통합 뷰" desc="GPU · NPU · PIM" accent="mint" />
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             <QuickLink href="/iaas/instances" icon={Server} label="가상서버 관리" desc="OpenStack VM" accent="indigo" />
             <QuickLink href="/paas/workloads" icon={Boxes} label="K8s 워크로드" desc="Deployment · Pod" accent="violet" />
             <QuickLink href="/ai-development/notebooks" icon={BrainCircuit} label="AI 개발환경" desc="Kubeflow Notebook" accent="amber" />

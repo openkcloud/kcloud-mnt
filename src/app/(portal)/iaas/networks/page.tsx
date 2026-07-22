@@ -186,9 +186,9 @@ export default function NetworksPage() {
             <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
             <Input placeholder="네트워크 이름 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
           </div>
-          <Button size="sm" className="ml-auto">
-            <Plus className="size-3.5" /> 네트워크 생성
-          </Button>
+          <span className="ml-auto text-xs text-muted-foreground">
+            네트워크 생성은 관리자만 가능하며, 자원풀 관리를 통해 제공된다.
+          </span>
         </div>
       </Card>
 

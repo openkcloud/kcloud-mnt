@@ -367,7 +367,6 @@ function SmartscapeViz({ data, showMetrics }: { data: TopologyResp; showMetrics:
             spark={makeSeries(a.id.length, 24, a.utilization, 18)}
             color={a.kind === "GPU" ? "bg-brand-indigo-600" : a.kind === "NPU" ? "bg-brand-mint-600" : "bg-violet-600"}
             showMetrics={showMetrics}
-            onClick={() => router.push(`/ai-accelerators/devices/${a.id}`)}
           />
         ))}
       </LayerStrip>

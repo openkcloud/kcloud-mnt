@@ -1,6 +1,5 @@
 import {
   LayoutDashboard,
-  Cpu,
   Server,
   Boxes,
   BrainCircuit,
@@ -127,7 +126,6 @@ const SECTION_AI_INFRA: NavSection = {
   items: [
     { label: "리소스 현황", href: "/resource-map", icon: Database },
     { label: "인프라 관리", href: "/infrastructure/servers", icon: Server },
-    { label: "AI반도체 관리", href: "/ai-accelerators", icon: Cpu },
     { label: "기술인벤토리 관리", href: "/topology", icon: Layers },
   ],
 };
