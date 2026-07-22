@@ -108,6 +108,8 @@ export default function PaasStoragePage() {
   const [selectedPvc, setSelectedPvc] = React.useState<PVC | undefined>();
   const [selectedSc, setSelectedSc] = React.useState<StorageClass | undefined>();
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [createPvOpen, setCreatePvOpen] = React.useState(false);
+  const [createScOpen, setCreateScOpen] = React.useState(false);
   const [snapshotOpen, setSnapshotOpen] = React.useState<PVC | undefined>();
   const [q, setQ] = React.useState("");
 
@@ -215,6 +217,14 @@ export default function PaasStoragePage() {
         </TabsContent>
 
         <TabsContent value="pv">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-xs text-muted-foreground">
+              PersistentVolume은 보통 StorageClass가 자동 프로비저닝하지만, 관리자가 직접 등록할 수도 있다.
+            </div>
+            <Button size="sm" onClick={() => setCreatePvOpen(true)}>
+              <Plus className="size-3.5" /> PV 생성 (관리자)
+            </Button>
+          </div>
           <Card>
             <Table>
               <TableHeader>
@@ -258,6 +268,14 @@ export default function PaasStoragePage() {
         </TabsContent>
 
         <TabsContent value="sc">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-xs text-muted-foreground">
+              StorageClass는 관리자만 생성·수정할 수 있다. 사용자는 PVC 생성 시 선택만 가능.
+            </div>
+            <Button size="sm" onClick={() => setCreateScOpen(true)}>
+              <Plus className="size-3.5" /> StorageClass 생성 (관리자)
+            </Button>
+          </div>
           <Card>
             <Table>
               <TableHeader>
@@ -318,6 +336,8 @@ export default function PaasStoragePage() {
 
       {/* Create PVC Dialog */}
       <CreatePVCDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+      <CreatePVDialog open={createPvOpen} onClose={() => setCreatePvOpen(false)} />
+      <CreateStorageClassDialog open={createScOpen} onClose={() => setCreateScOpen(false)} />
 
       {/* Snapshot Dialog */}
       <SnapshotDialog pvc={snapshotOpen} onClose={() => setSnapshotOpen(undefined)} />
@@ -519,6 +539,182 @@ function CreatePVCDialog({ open, onClose }: { open: boolean; onClose: () => void
                 </SelectContent>
               </Select>
             </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>취소</Button>
+          <Button onClick={submit}>생성</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CreatePVDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [name, setName] = React.useState("");
+  const [capacity, setCapacity] = React.useState("50");
+  const [access, setAccess] = React.useState<"RWO" | "RWX" | "ROX">("RWO");
+  const [reclaim, setReclaim] = React.useState<"Retain" | "Delete" | "Recycle">("Retain");
+  const [sc, setSc] = React.useState(STORAGE_CLASSES[0].name);
+  const [source, setSource] = React.useState("cinder://vol-001");
+
+  function submit() {
+    if (!name) return toast.error("이름을 입력하세요");
+    toast.success(`PV ${name} 생성 요청됨`, {
+      description: `${capacity}Gi · ${access} · ${reclaim} · ${sc}`,
+    });
+    setName("");
+    setCapacity("50");
+    onClose();
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>PV 생성 (관리자)</DialogTitle>
+          <DialogDescription>
+            PersistentVolume은 보통 StorageClass가 동적 프로비저닝한다. 특수 케이스에만 직접 생성.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label>이름</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="pv-shared-data-001" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>용량 (Gi)</Label>
+              <Input type="number" value={capacity} onChange={(e) => setCapacity(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>StorageClass</Label>
+              <Select value={sc} onValueChange={setSc}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {STORAGE_CLASSES.map((s) => (
+                    <SelectItem key={s.name} value={s.name}>{s.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>접근모드</Label>
+              <Select value={access} onValueChange={(v) => setAccess(v as "RWO" | "RWX" | "ROX")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="RWO">ReadWriteOnce</SelectItem>
+                  <SelectItem value="RWX">ReadWriteMany</SelectItem>
+                  <SelectItem value="ROX">ReadOnlyMany</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reclaim Policy</Label>
+              <Select value={reclaim} onValueChange={(v) => setReclaim(v as "Retain" | "Delete" | "Recycle")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Retain">Retain (수동 정리)</SelectItem>
+                  <SelectItem value="Delete">Delete (자동 삭제)</SelectItem>
+                  <SelectItem value="Recycle">Recycle (재사용, deprecated)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Source (백엔드 볼륨 ID)</Label>
+            <Input value={source} onChange={(e) => setSource(e.target.value)} className="font-mono text-xs" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>취소</Button>
+          <Button onClick={submit}>생성</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CreateStorageClassDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [name, setName] = React.useState("");
+  const [provisioner, setProvisioner] = React.useState("cinder.csi.openstack.org");
+  const [reclaim, setReclaim] = React.useState<"Retain" | "Delete">("Delete");
+  const [binding, setBinding] = React.useState<"Immediate" | "WaitForFirstConsumer">("WaitForFirstConsumer");
+  const [params, setParams] = React.useState("type=high-iops-ssd");
+  const [isDefault, setIsDefault] = React.useState(false);
+  const [expansion, setExpansion] = React.useState(true);
+
+  function submit() {
+    if (!name) return toast.error("이름을 입력하세요");
+    toast.success(`StorageClass ${name} 생성 요청됨`, {
+      description: `${provisioner} · ${reclaim} · ${binding}${isDefault ? " · default" : ""}`,
+    });
+    setName("");
+    onClose();
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>StorageClass 생성 (관리자)</DialogTitle>
+          <DialogDescription>
+            PVC가 자동으로 프로비저닝될 때 사용할 스토리지 종류를 정의한다.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label>이름</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nvme-high-iops" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Provisioner</Label>
+            <Select value={provisioner} onValueChange={setProvisioner}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="cinder.csi.openstack.org">cinder.csi.openstack.org (블록)</SelectItem>
+                <SelectItem value="manila.csi.openstack.org">manila.csi.openstack.org (NFS)</SelectItem>
+                <SelectItem value="rook-ceph.rbd.csi.ceph.com">rook-ceph.rbd.csi.ceph.com (Ceph RBD)</SelectItem>
+                <SelectItem value="rook-ceph.cephfs.csi.ceph.com">rook-ceph.cephfs.csi.ceph.com (CephFS)</SelectItem>
+                <SelectItem value="kubernetes.io/no-provisioner">no-provisioner (수동 PV)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Reclaim Policy</Label>
+              <Select value={reclaim} onValueChange={(v) => setReclaim(v as "Retain" | "Delete")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Delete">Delete</SelectItem>
+                  <SelectItem value="Retain">Retain</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Volume Binding Mode</Label>
+              <Select value={binding} onValueChange={(v) => setBinding(v as "Immediate" | "WaitForFirstConsumer")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Immediate">Immediate</SelectItem>
+                  <SelectItem value="WaitForFirstConsumer">WaitForFirstConsumer</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Parameters (key=value, 쉼표 구분)</Label>
+            <Input value={params} onChange={(e) => setParams(e.target.value)} className="font-mono text-xs" placeholder="type=ssd,fsType=ext4" />
+          </div>
+          <div className="flex items-center gap-4 text-xs">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} className="size-3.5" />
+              기본 StorageClass로 설정
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={expansion} onChange={(e) => setExpansion(e.target.checked)} className="size-3.5" />
+              AllowVolumeExpansion
+            </label>
           </div>
         </div>
         <DialogFooter>

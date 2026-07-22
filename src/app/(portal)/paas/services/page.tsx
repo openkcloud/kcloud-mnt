@@ -233,6 +233,7 @@ function ServiceDetailPanel({ svc }: { svc: KService }) {
           <TabsList>
             <TabsTrigger value="ports">포트 ({svc.ports.length})</TabsTrigger>
             <TabsTrigger value="endpoints">엔드포인트 ({svc.endpoints})</TabsTrigger>
+            <TabsTrigger value="ingress">Ingress</TabsTrigger>
             <TabsTrigger value="selector">셀렉터</TabsTrigger>
             <TabsTrigger value="yaml">YAML</TabsTrigger>
           </TabsList>
@@ -280,6 +281,10 @@ function ServiceDetailPanel({ svc }: { svc: KService }) {
                 </TableBody>
               </Table>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="ingress" className="space-y-3 pt-3">
+            <IngressRelationView svc={svc} />
           </TabsContent>
 
           <TabsContent value="selector" className="space-y-2 pt-3">
@@ -344,6 +349,168 @@ ${svc.externalIp ? `  externalIPs:
         </div>
       </div>
     </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Ingress 관계 뷰 — ETRI 260615 §4.B.i.2 반영
+// Service → Ingress → 접근 URL/Host/Path 관계를 직관적으로 표시
+// ─────────────────────────────────────────────────────────────
+
+interface IngressRule {
+  host: string;
+  path: string;
+  tls: boolean;
+  ingressClass: string;
+  ingressName: string;
+}
+
+function buildIngressRules(svc: KService): IngressRule[] {
+  // Service 유형에 따라 다른 시연 데이터 생성
+  if (svc.type === "LoadBalancer" || svc.type === "Ingress") {
+    const base = svc.name.replace(/-svc$/, "");
+    return [
+      {
+        host: `${base}.openkcloud.kr`,
+        path: "/",
+        tls: true,
+        ingressClass: "nginx",
+        ingressName: `${base}-ingress`,
+      },
+      {
+        host: `api.openkcloud.kr`,
+        path: `/${base}/*`,
+        tls: true,
+        ingressClass: "nginx",
+        ingressName: "api-gateway",
+      },
+    ];
+  }
+  return [];
+}
+
+function IngressRelationView({ svc }: { svc: KService }) {
+  const rules = buildIngressRules(svc);
+  const copy = (t: string, l: string) => {
+    navigator.clipboard.writeText(t);
+    toast.success(`${l} 복사됨`);
+  };
+
+  if (rules.length === 0) {
+    return (
+      <Card className="p-6">
+        <div className="text-center text-sm text-muted-foreground">
+          이 Service에 연결된 Ingress가 없다.
+        </div>
+        <div className="mt-3 flex justify-center">
+          <Button
+            size="sm"
+            onClick={() => toast.success(`${svc.name}에 Ingress 연결 다이얼로그`)}
+          >
+            <Plus className="size-3.5" /> Ingress 연결
+          </Button>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* 관계 다이어그램 */}
+      <Card className="p-4">
+        <div className="mb-3 text-[10px] uppercase tracking-wider text-muted-foreground">
+          트래픽 흐름
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col items-center gap-1 rounded-lg border border-brand-mint-200 bg-brand-mint-50 p-3">
+            <Globe className="size-5 text-brand-mint-700" />
+            <div className="text-[10px] font-semibold text-brand-mint-800">외부</div>
+          </div>
+          <div className="flex-1 border-t border-dashed border-border" />
+          <div className="flex flex-col items-center gap-1 rounded-lg border border-sky-200 bg-sky-50 p-3">
+            <Network className="size-5 text-sky-700" />
+            <div className="text-[10px] font-semibold text-sky-800">Ingress</div>
+            <div className="text-[10px] font-mono text-sky-700">{rules.length}개</div>
+          </div>
+          <div className="flex-1 border-t border-dashed border-border" />
+          <div className="flex flex-col items-center gap-1 rounded-lg border-2 border-primary bg-primary/10 p-3">
+            <Server className="size-5 text-primary" />
+            <div className="text-[10px] font-semibold text-primary">{svc.name}</div>
+            <div className="text-[10px] font-mono text-primary/70">Service</div>
+          </div>
+          <div className="flex-1 border-t border-dashed border-border" />
+          <div className="flex flex-col items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 p-3">
+            <Server className="size-5 text-violet-700" />
+            <div className="text-[10px] font-semibold text-violet-800">Pods</div>
+            <div className="text-[10px] font-mono text-violet-700">{svc.endpoints}개</div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Ingress 규칙 상세 */}
+      <div className="space-y-2">
+        <div className="text-[11px] font-semibold text-muted-foreground">
+          연결된 Ingress 규칙 ({rules.length})
+        </div>
+        {rules.map((r, i) => (
+          <Card key={i} className="p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="font-mono text-[10px]">
+                    {r.ingressName}
+                  </Badge>
+                  <Badge variant="ghost" className="font-mono text-[9px]">
+                    class: {r.ingressClass}
+                  </Badge>
+                  {r.tls && (
+                    <Badge variant="success" className="gap-1 text-[10px]">
+                      <Lock className="size-2.5" /> TLS
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 font-mono text-xs">
+                  <span className="text-brand-mint-700">{r.tls ? "https" : "http"}://</span>
+                  <span className="font-semibold">{r.host}</span>
+                  <span className="text-muted-foreground">{r.path}</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  title="URL 복사"
+                  onClick={() =>
+                    copy(`${r.tls ? "https" : "http"}://${r.host}${r.path.replace(/\*/, "")}`, "접근 URL")
+                  }
+                >
+                  <Copy className="size-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  title="새 탭에서 열기"
+                  onClick={() =>
+                    toast.success(`${r.tls ? "https" : "http"}://${r.host}${r.path.replace(/\*/, "")} 새 탭에서 열림`)
+                  }
+                >
+                  <ExternalLink className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2 border-t border-border pt-3">
+        <Button size="sm" variant="outline" onClick={() => toast.success(`${svc.name}에 Ingress 규칙 추가`)}>
+          <Plus className="size-3.5" /> 규칙 추가
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => toast.success(`Ingress YAML 편집`)}>
+          <Edit className="size-3.5" /> Ingress YAML 편집
+        </Button>
+      </div>
+    </div>
   );
 }
 
