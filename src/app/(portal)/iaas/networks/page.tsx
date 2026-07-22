@@ -462,9 +462,47 @@ function NetworkDetailPanel({ network, onClose }: { network: IaasNetwork; onClos
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <Button variant="ghost" size="icon-sm" onClick={() => copy(f.ip, "Floating IP")}>
-                            <Copy className="size-3.5" />
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button variant="ghost" size="icon-sm" onClick={() => copy(f.ip, "Floating IP")} title="IP 복사">
+                              <Copy className="size-3.5" />
+                            </Button>
+                            {f.status === "ACTIVE" ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-[11px]"
+                                onClick={() => toast.success(`${f.ip} 연결 해제 — ${f.mappedTo}에서 detach`)}
+                                title="연결 해제 (detach)"
+                              >
+                                해제
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-[11px]"
+                                onClick={() => toast.success(`${f.ip} 재할당 대상 선택`)}
+                                title="자원에 할당"
+                              >
+                                할당
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-[11px] text-rose-600"
+                              onClick={() => {
+                                if (f.status === "ACTIVE") {
+                                  toast.error(`${f.ip} 회수 거부 — 먼저 해제하기`);
+                                  return;
+                                }
+                                toast.success(`${f.ip} 풀로 반환됨 (release)`);
+                              }}
+                              title="Floating IP 회수 (release)"
+                            >
+                              회수
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
