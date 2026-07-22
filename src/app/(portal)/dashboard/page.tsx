@@ -4,11 +4,15 @@ import {
   Activity,
   AlertTriangle,
   ArrowRight,
+  Bell,
   BrainCircuit,
   Boxes,
   Cpu,
+  GitBranch,
   Layers,
+  ScrollText,
   Server,
+  Sparkles,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
@@ -387,11 +391,35 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* Quick links */}
+      {/* Observability quick links — ETRI 260615 §3.i.1 (개요 → 옵저버빌리티 연계) */}
+      <Card>
+        <CardHeader className="flex-row items-center justify-between">
+          <div>
+            <CardTitle>옵저버빌리티 바로가기</CardTitle>
+            <CardDescription>모니터링·트레이스·로그·알람으로 즉시 이동</CardDescription>
+          </div>
+          <Link href="/monitoring">
+            <Button variant="ghost" size="sm">
+              전체 옵저버빌리티 <ArrowRight className="size-3" />
+            </Button>
+          </Link>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
+            <QuickLink href="/monitoring" icon={Activity} label="인프라 모니터링" desc="CPU·MEM·전력" accent="indigo" />
+            <QuickLink href="/monitoring/insights" icon={Sparkles} label="AI 모델 분석" desc="추론 성능·권장조치" accent="mint" />
+            <QuickLink href="/monitoring/traces" icon={GitBranch} label="분산 트레이스" desc="서비스 호출 흐름" accent="violet" />
+            <QuickLink href="/monitoring/logs" icon={ScrollText} label="로그·이벤트" desc="플랫폼 이벤트" accent="amber" />
+            <QuickLink href="/monitoring/alerts" icon={Bell} label="알람·SLO" desc={`활성 ${(alerts.data?.counts.critical ?? 0) + (alerts.data?.counts.warning ?? 0)}건`} accent="rose" />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Quick links — 주요 자원 */}
       <Card>
         <CardHeader>
-          <CardTitle>빠른 이동</CardTitle>
-          <CardDescription>주요 메뉴로 바로 가기</CardDescription>
+          <CardTitle>주요 자원 바로가기</CardTitle>
+          <CardDescription>자주 접근하는 자원 관리 페이지</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
@@ -456,13 +484,14 @@ function QuickLink({
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   desc: string;
-  accent: "indigo" | "mint" | "amber" | "violet";
+  accent: "indigo" | "mint" | "amber" | "violet" | "rose";
 }) {
   const iconMap = {
     indigo: "bg-brand-indigo-100 text-brand-indigo-700",
     mint: "bg-brand-mint-50 text-brand-mint-700",
     amber: "bg-amber-50 text-amber-700",
     violet: "bg-violet-50 text-violet-700",
+    rose: "bg-rose-50 text-rose-700",
   };
   return (
     <Link

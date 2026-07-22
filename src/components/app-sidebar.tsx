@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
-import { NAV_SECTIONS, filterNavByRole, type NavItem } from "@/lib/nav";
+import { getNavByRole, type NavItem } from "@/lib/nav";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 
@@ -14,7 +14,7 @@ export function AppSidebar() {
   const pathname = usePathname();
 
   const sections = React.useMemo(
-    () => (user ? filterNavByRole(NAV_SECTIONS, user.role) : []),
+    () => (user ? getNavByRole(user.role) : []),
     [user],
   );
 
