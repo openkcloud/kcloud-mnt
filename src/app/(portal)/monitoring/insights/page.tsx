@@ -139,9 +139,12 @@ export default function AIInsightsPage() {
               </div>
 
               <div className="flex items-center gap-2">
-                <Button size="sm">권장 조치 자동 적용</Button>
+                <Button variant="outline" size="sm">조치 상세 보기</Button>
                 <Button variant="outline" size="sm">트레이스 보기</Button>
                 <Button variant="ghost" size="sm">유사 이슈 검색</Button>
+                <span className="ml-auto text-[10px] text-muted-foreground">
+                  자동 적용은 차차년도 과업 — 현재는 정보 제공까지
+                </span>
               </div>
             </div>
           </div>
