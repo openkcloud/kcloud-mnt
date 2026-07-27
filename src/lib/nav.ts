@@ -53,7 +53,7 @@ const SECTION_OBSERVABILITY: NavSection = {
     { label: "AI 모델 분석", href: "/monitoring/insights", icon: Sparkles },
     { label: "분산 트레이스", href: "/monitoring/traces", icon: GitBranch },
     { label: "로그·이벤트", href: "/monitoring/logs", icon: ScrollText },
-    { label: "알람·SLO", href: "/monitoring/alerts", icon: Bell },
+    { label: "알람", href: "/monitoring/alerts", icon: Bell },
   ],
 };
 

@@ -107,6 +107,10 @@ export default function VolumesPage() {
             <Plus className="size-3.5" /> 볼륨 생성
           </Button>
         </div>
+        <div className="mt-3 rounded-md border border-brand-mint-200 bg-brand-mint-50/50 p-2.5 text-[11px] text-brand-mint-900">
+          <strong>생성 주체 정책:</strong> 사용자는 자신의 프로젝트 쿼터 범위 안에서 볼륨을 <strong>직접 생성·확장·스냅샷·삭제</strong> 가능하다.
+          자원 신청 위저드에서도 <strong>기존 볼륨을 VM에 연결</strong>할 수 있다. 관리자 승인 없음.
+        </div>
       </Card>
 
       <Card>

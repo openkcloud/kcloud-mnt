@@ -135,7 +135,7 @@ export default function ProvidersPage() {
               <CardTitle className="flex items-center gap-2">
                 <Server className="size-4" /> 자원풀
               </CardTitle>
-              <CardDescription>OpenStack 멀티 리전 + OpenShift 엣지</CardDescription>
+              <CardDescription>OpenStack 멀티 리전 자원풀</CardDescription>
             </div>
             <Button size="sm" onClick={() => setPoolCreateOpen(true)}>
               <Plus className="size-3.5" /> 풀 추가
@@ -421,7 +421,7 @@ function CreatePoolDialog({ open, onClose }: { open: boolean; onClose: () => voi
       <DialogContent>
         <DialogHeader>
           <DialogTitle>자원풀 등록</DialogTitle>
-          <DialogDescription>OpenStack 또는 OpenShift 클러스터를 자원풀로 등록합니다.</DialogDescription>
+          <DialogDescription>OpenStack 클러스터를 자원풀로 등록한다.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1.5"><Label>풀 이름</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="DJ-OpenStack-Edge" /></div>
@@ -431,7 +431,6 @@ function CreatePoolDialog({ open, onClose }: { open: boolean; onClose: () => voi
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="OpenStack">OpenStack</SelectItem>
-                <SelectItem value="OpenShift">OpenShift</SelectItem>
               </SelectContent>
             </Select>
           </div>

@@ -181,14 +181,23 @@ export default function NetworksPage() {
       </div>
 
       <Card className="p-4">
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input placeholder="네트워크 이름 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+              <Input placeholder="네트워크 이름 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
+            </div>
+            <Button size="sm" variant="outline" className="ml-auto" onClick={() => toast.success("프로젝트 전용 네트워크 생성 다이얼로그 (사용자용)")}>
+              <Plus className="size-3.5" /> 프로젝트 네트워크 생성 (사용자)
+            </Button>
+            <Button size="sm" onClick={() => toast.success("공용/외부망 네트워크 생성 다이얼로그 (관리자용)")}>
+              <Plus className="size-3.5" /> 공용·외부망 생성 (관리자)
+            </Button>
           </div>
-          <span className="ml-auto text-xs text-muted-foreground">
-            네트워크 생성은 관리자만 가능하며, 자원풀 관리를 통해 제공된다.
-          </span>
+          <div className="rounded-md border border-brand-indigo-200 bg-brand-indigo-50/50 p-2.5 text-[11px] text-brand-indigo-900">
+            <strong>생성 주체 정책:</strong> 사용자는 자신의 프로젝트 안에 격리된 <strong>내부 네트워크</strong>를 자율적으로 생성 가능하다.
+            공용 네트워크 · 외부망(Floating IP 풀) 연결은 <strong>관리자 전용</strong>이며, 사용자는 관리자가 만든 네트워크를 선택해서 사용한다.
+          </div>
         </div>
       </Card>
 
