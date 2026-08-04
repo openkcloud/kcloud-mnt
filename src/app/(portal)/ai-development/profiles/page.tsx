@@ -137,7 +137,7 @@ export default function ProfilesPage() {
                 <QuotaRow label="vCPU" used={p.cpuQuota.used} limit={p.cpuQuota.limit} color="indigo" />
                 <QuotaRow label="MEM (GB)" used={p.memQuota.used} limit={p.memQuota.limit} color="mint" />
                 <QuotaRow label="가속기" used={p.accQuota.used} limit={p.accQuota.limit} color="amber" />
-                <QuotaRow label="Storage (TB)" used={p.storageQuota.used} limit={p.storageQuota.limit} color="violet" />
+                <QuotaRow label="Storage (GB)" used={p.storageQuota.used} limit={p.storageQuota.limit} color="violet" />
               </div>
 
               {/* Plugins */}
