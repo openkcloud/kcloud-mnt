@@ -15,12 +15,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { api } from "@/lib/api";
 
 /* Kubeflow Profile = namespace + RBAC + ResourceQuota + PodDefault 묶음.
- * 실제 Kubeflow CRD: kubeflow.org/v1 Profile */
+ * 실제 Kubeflow CRD: kubeflow.org/v1 Profile
+ * NEXT_PUBLIC_KF_API 설정 시 실제 Profile Controller 데이터, 미설정 시 아래 mock */
 
-const PROFILES = [
+type ProfileItem = (typeof MOCK_PROFILES)[number] & { status?: string };
+
+const MOCK_PROFILES = [
   {
     name: "ai-research",
     owner: "최현화",
@@ -66,6 +69,11 @@ const PROFILES = [
 ];
 
 export default function ProfilesPage() {
+  const { data } = api.kubeflow.profiles() as {
+    data: { items: ProfileItem[] } | undefined;
+  };
+  const profiles: ProfileItem[] =
+    process.env.NEXT_PUBLIC_KF_API && data ? data.items : MOCK_PROFILES;
   return (
     <div className="space-y-6">
       <PageHeader
@@ -97,7 +105,7 @@ export default function ProfilesPage() {
       </Card>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {PROFILES.map((p) => (
+        {profiles.map((p) => (
           <Card key={p.name} className="overflow-hidden">
             <CardContent className="space-y-4 p-5">
               <div className="flex items-start justify-between">

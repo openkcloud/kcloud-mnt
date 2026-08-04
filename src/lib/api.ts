@@ -67,6 +67,14 @@ export const api = {
           ),
         refetchInterval: process.env.NEXT_PUBLIC_KF_API ? 5000 : false,
       }),
+    // 실백엔드 전용 (mock 핸들러 없음) — KF_API 미설정 시 페이지 자체 fallback 사용
+    profiles: () =>
+      useQuery({
+        queryKey: ["kf", "profiles"],
+        queryFn: () => get(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/profiles`),
+        enabled: !!process.env.NEXT_PUBLIC_KF_API,
+        refetchInterval: 5000,
+      }),
     pipelines: () => useQuery({ queryKey: ["kf", "pipelines"], queryFn: () => get("/api/kubeflow/pipelines") }),
     experiments: () => useQuery({ queryKey: ["kf", "experiments"], queryFn: () => get("/api/kubeflow/experiments") }),
     serving: () => useQuery({ queryKey: ["kf", "serving"], queryFn: () => get("/api/kubeflow/serving") }),
