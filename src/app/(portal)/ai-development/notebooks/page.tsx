@@ -56,11 +56,18 @@ import type { KFNotebook } from "@/lib/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { notebookAction } from "@/lib/notebook-api";
+import { NotebookCreateDialog, type NotebookPreset } from "@/components/notebook-create-dialog";
 
 export default function NotebooksPage() {
   const [q, setQ] = React.useState("");
   const [ns, setNs] = React.useState("all");
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [preset, setPreset] = React.useState<NotebookPreset | undefined>();
   const qc = useQueryClient();
+  const { data: profileData } = api.kubeflow.profiles() as {
+    data: { items: { name: string }[] } | undefined;
+  };
+  const profileNamespaces = profileData?.items.map((p) => p.name) ?? ["ai-research"];
   const { data, isLoading } = api.kubeflow.notebooks() as {
     data: { items: KFNotebook[] } | undefined;
     isLoading: boolean;
@@ -92,6 +99,12 @@ export default function NotebooksPage() {
 
   return (
     <div className="space-y-4">
+      <NotebookCreateDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        namespaces={profileNamespaces}
+        preset={preset}
+      />
       {/* Quick stats — Kubeflow style */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatChip label="실행 중" value={counts.running} accent="mint" hint="활성 서버" />
@@ -260,9 +273,17 @@ export default function NotebooksPage() {
             {IMAGE_CATALOG.map((tpl) => (
               <button
                 key={tpl.name}
+                disabled={!tpl.preset}
+                onClick={() => {
+                  if (!tpl.preset) return;
+                  setPreset(tpl.preset);
+                  setCreateOpen(true);
+                }}
                 className={cn(
                   "group flex items-start gap-3 rounded-xl border border-border bg-card p-4 text-left transition-colors",
-                  "hover:border-primary/40 hover:bg-secondary/30",
+                  tpl.preset
+                    ? "hover:border-primary/40 hover:bg-secondary/30"
+                    : "cursor-not-allowed opacity-55",
                 )}
               >
                 <div
@@ -278,6 +299,9 @@ export default function NotebooksPage() {
                     <div className="font-semibold leading-tight">{tpl.name}</div>
                     {tpl.recommended && (
                       <Badge variant="success" className="text-[10px]">권장</Badge>
+                    )}
+                    {!tpl.preset && (
+                      <Badge variant="secondary" className="text-[10px]">이미지 준비 중</Badge>
                     )}
                   </div>
                   <div className="text-xs text-muted-foreground">{tpl.description}</div>
@@ -361,6 +385,8 @@ const IMAGE_CATALOG: {
   icon: React.ComponentType<{ className?: string }>;
   color: string;
   recommended?: boolean;
+  /** 실제 생성 가능한 템플릿 프리셋 — 없으면 이미지 준비 중 (NPU/PIM 등) */
+  preset?: NotebookPreset;
 }[] = [
   {
     name: "Kubeflow Code Server (Python)",
@@ -369,6 +395,7 @@ const IMAGE_CATALOG: {
     icon: Code2,
     color: "bg-sky-100 text-sky-700",
     recommended: true,
+    preset: { template: "codeserver", cpu: "2", memoryGi: 4, gpu: 0, storageGb: 10 },
   },
   {
     name: "Kubeflow Notebook (NB)",
@@ -376,6 +403,7 @@ const IMAGE_CATALOG: {
     tags: ["Python 3.11", "Notebook", "interactive"],
     icon: BookOpen,
     color: "bg-brand-indigo-100 text-brand-indigo-700",
+    preset: { template: "jupyter", cpu: "2", memoryGi: 4, gpu: 0, storageGb: 10 },
   },
   {
     name: "RBLN ATOM SDK",
@@ -397,6 +425,7 @@ const IMAGE_CATALOG: {
     tags: ["CUDA 12.4", "DeepSpeed", "PyTorch 2.5"],
     icon: Cpu,
     color: "bg-brand-indigo-100 text-brand-indigo-700",
+    preset: { template: "cuda", cpu: "4", memoryGi: 8, gpu: 1, storageGb: 50 },
   },
   {
     name: "PIM 실험 환경",

@@ -44,27 +44,40 @@ export const NOTEBOOK_TEMPLATES = [
   },
 ] as const;
 
+export interface NotebookPreset {
+  template: string;
+  cpu?: string;
+  memoryGi?: number;
+  gpu?: number;
+  storageGb?: number;
+}
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   namespaces: string[];
-  /** IMAGE_CATALOG 카드에서 선택한 프리셋 템플릿 key */
-  presetTemplate?: string;
+  /** IMAGE_CATALOG 카드에서 선택한 프리셋 (템플릿 + 권장 자원) */
+  preset?: NotebookPreset;
 }
 
-export function NotebookCreateDialog({ open, onOpenChange, namespaces, presetTemplate }: Props) {
+export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }: Props) {
   const qc = useQueryClient();
   const [name, setName] = React.useState("");
   const [namespace, setNamespace] = React.useState(namespaces[0] ?? "ai-research");
-  const [template, setTemplate] = React.useState<string>(presetTemplate ?? "codeserver");
+  const [template, setTemplate] = React.useState<string>(preset?.template ?? "codeserver");
   const [cpu, setCpu] = React.useState("1");
   const [memoryGi, setMemoryGi] = React.useState("2");
   const [gpu, setGpu] = React.useState("0");
   const [storageGb, setStorageGb] = React.useState("0");
 
   React.useEffect(() => {
-    if (presetTemplate) setTemplate(presetTemplate);
-  }, [presetTemplate]);
+    if (!preset) return;
+    setTemplate(preset.template);
+    if (preset.cpu) setCpu(preset.cpu);
+    if (preset.memoryGi) setMemoryGi(String(preset.memoryGi));
+    if (preset.gpu !== undefined) setGpu(String(preset.gpu));
+    if (preset.storageGb !== undefined) setStorageGb(String(preset.storageGb));
+  }, [preset]);
 
   const create = useMutation({
     mutationFn: createNotebook,
