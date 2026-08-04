@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { uploadPipeline } from "@/lib/notebook-api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +57,16 @@ const PIPELINE_DAG: Record<string, { id: string; name: string; type: "data" | "c
   ],
 };
 
+const KF_API = process.env.NEXT_PUBLIC_KF_API;
+
+interface KFRun {
+  id: string;
+  name: string;
+  state: string;
+  createdAt: string;
+  finishedAt: string;
+}
+
 export default function PipelinesPage() {
   const { data, isLoading } = api.kubeflow.pipelines() as {
     data: { items: KFPipeline[] } | undefined;
@@ -64,8 +74,43 @@ export default function PipelinesPage() {
   };
   const [selected, setSelected] = React.useState<string | undefined>();
   const [uploadOpen, setUploadOpen] = React.useState(false);
+  const qc = useQueryClient();
+  const active = selected
+    ? data?.items.find((p) => p.id === selected)
+    : data?.items[0];
+
+  const { data: runsData } = useQuery({
+    queryKey: ["kf", "runs", active?.id],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/pipelines/${active!.id}/runs`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: KFRun[] }>;
+    },
+    enabled: !!KF_API && !!active,
+    refetchInterval: 5000,
+  });
+
+  async function startRun() {
+    if (!KF_API || !active) {
+      toast.info("mock 모드 — 실행은 실백엔드 연동 시 동작합니다");
+      return;
+    }
+    try {
+      const res = await fetch(`${KF_API}/api/v1/pipelines/${active.id}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: `${active.name}-run-${Date.now() % 10000}` }),
+      });
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      toast.success("Run 생성 완료 — 워크플로우 실행 중");
+      qc.invalidateQueries({ queryKey: ["kf", "runs", active.id] });
+      qc.invalidateQueries({ queryKey: ["kf", "pipelines"] });
+    } catch (e) {
+      toast.error(`실행 실패: ${(e as Error).message}`);
+    }
+  }
+
   if (isLoading || !data) return <Skeleton className="h-96" />;
-  const active = selected ? data.items.find((p) => p.id === selected) : data.items[0];
 
   return (
     <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
@@ -102,7 +147,7 @@ export default function PipelinesPage() {
                     <GitBranch className="size-4 mt-0.5 text-violet-600" />
                     <div>
                       <div className="text-sm font-semibold">{p.name}</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">{p.description}</div>
+                      <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{p.description}</div>
                     </div>
                   </div>
                   {p.acceleratorKind && (
@@ -133,23 +178,29 @@ export default function PipelinesPage() {
               </div>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm">YAML 다운로드</Button>
-                <Button size="sm">
+                <Button size="sm" onClick={startRun}>
                   <Play className="size-3.5" /> 새 실행
                 </Button>
               </div>
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
-                <div className="flex min-w-max items-center gap-2">
-                  {(PIPELINE_DAG[active.id] ?? []).map((step, i, arr) => (
-                    <React.Fragment key={step.id}>
-                      <PipelineStep step={step} />
-                      {i < arr.length - 1 && (
-                        <div className="flex h-px w-12 items-center justify-center bg-border" />
-                      )}
-                    </React.Fragment>
-                  ))}
-                </div>
+                {(PIPELINE_DAG[active.id] ?? []).length > 0 ? (
+                  <div className="flex min-w-max items-center gap-2">
+                    {(PIPELINE_DAG[active.id] ?? []).map((step, i, arr) => (
+                      <React.Fragment key={step.id}>
+                        <PipelineStep step={step} />
+                        {i < arr.length - 1 && (
+                          <div className="flex h-px w-12 items-center justify-center bg-border" />
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
+                    DAG 시각화 준비 중 — 업로드된 YAML의 단계 구조는 실행 이력에서 확인할 수 있습니다
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -163,32 +214,65 @@ export default function PipelinesPage() {
             <TabsContent value="runs">
               <Card>
                 <CardContent className="p-0">
-                  <div className="divide-y divide-border">
-                    {Array.from({ length: 6 }).map((_, i) => (
-                      <div key={i} className="flex items-center gap-3 px-5 py-3">
-                        <div className={cn(
-                          "flex size-7 items-center justify-center rounded-full",
-                          i === 0 ? "bg-brand-mint-100 text-brand-mint-700" :
-                            i === 4 ? "bg-rose-100 text-rose-700" : "bg-brand-indigo-100 text-brand-indigo-700",
-                        )}>
-                          {i === 4 ? <XCircle className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
+                  {KF_API ? (
+                    <div className="divide-y divide-border">
+                      {(runsData?.items ?? []).length === 0 && (
+                        <div className="px-5 py-6 text-center text-xs text-muted-foreground">
+                          실행 이력이 없습니다 — 상단 &quot;새 실행&quot;으로 시작하세요
                         </div>
-                        <div className="flex-1">
-                          <div className="font-mono text-sm">{active.name}-run-{(active.runs - i).toString().padStart(3, "0")}</div>
-                          <div className="text-xs text-muted-foreground">
-                            <span className="font-mono">{active.steps} steps</span>
-                            <span className="mx-1">·</span>
-                            <span>실행 시간 {Math.floor(Math.random() * 60) + 5}분</span>
-                            <span className="mx-1">·</span>
-                            <span>{relativeTime(new Date(Date.now() - i * 12 * 3600000))}</span>
+                      )}
+                      {(runsData?.items ?? []).map((r) => (
+                        <div key={r.id} className="flex items-center gap-3 px-5 py-3">
+                          <div className={cn(
+                            "flex size-7 items-center justify-center rounded-full",
+                            r.state === "SUCCEEDED" ? "bg-brand-mint-100 text-brand-mint-700" :
+                              r.state === "FAILED" ? "bg-rose-100 text-rose-700" : "bg-brand-indigo-100 text-brand-indigo-700",
+                          )}>
+                            {r.state === "FAILED" ? <XCircle className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
                           </div>
+                          <div className="flex-1">
+                            <div className="font-mono text-sm">{r.name}</div>
+                            <div className="text-xs text-muted-foreground">
+                              <span>{relativeTime(new Date(r.createdAt))}</span>
+                              <span className="mx-1">·</span>
+                              <span className="font-mono text-[10px]">{r.id.slice(0, 8)}</span>
+                            </div>
+                          </div>
+                          <Badge variant={
+                            r.state === "SUCCEEDED" ? "success" :
+                              r.state === "FAILED" ? "destructive" : "warning"
+                          }>
+                            {r.state === "SUCCEEDED" ? "Succeeded" : r.state === "FAILED" ? "Failed" : "Running"}
+                          </Badge>
                         </div>
-                        <Badge variant={i === 4 ? "destructive" : i === 0 ? "warning" : "success"}>
-                          {i === 4 ? "Failed" : i === 0 ? "Running" : "Succeeded"}
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-border">
+                      {Array.from({ length: 6 }).map((_, i) => (
+                        <div key={i} className="flex items-center gap-3 px-5 py-3">
+                          <div className={cn(
+                            "flex size-7 items-center justify-center rounded-full",
+                            i === 0 ? "bg-brand-mint-100 text-brand-mint-700" :
+                              i === 4 ? "bg-rose-100 text-rose-700" : "bg-brand-indigo-100 text-brand-indigo-700",
+                          )}>
+                            {i === 4 ? <XCircle className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
+                          </div>
+                          <div className="flex-1">
+                            <div className="font-mono text-sm">{active.name}-run-{(active.runs - i).toString().padStart(3, "0")}</div>
+                            <div className="text-xs text-muted-foreground">
+                              <span className="font-mono">{active.steps} steps</span>
+                              <span className="mx-1">·</span>
+                              <span>{relativeTime(new Date(Date.now() - i * 12 * 3600000))}</span>
+                            </div>
+                          </div>
+                          <Badge variant={i === 4 ? "destructive" : i === 0 ? "warning" : "success"}>
+                            {i === 4 ? "Failed" : i === 0 ? "Running" : "Succeeded"}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
