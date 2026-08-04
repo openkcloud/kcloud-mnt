@@ -69,6 +69,21 @@ export async function createNotebook(body: {
   return res.json();
 }
 
+/** Pipeline YAML 업로드 (POST /api/v1/pipelines/upload) */
+export async function uploadPipeline(body: {
+  name: string;
+  description?: string;
+  yaml: string;
+}): Promise<{ pipeline_id?: string }> {
+  const res = await fetch(`${KF_API}/api/v1/pipelines/upload`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
 /** Profile 생성 (POST /api/v1/profiles) */
 export async function createProfile(body: {
   name: string;

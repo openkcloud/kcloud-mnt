@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { uploadPipeline } from "@/lib/notebook-api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -277,20 +279,38 @@ function UploadPipelineDialog({ open, onClose }: { open: boolean; onClose: () =>
   const [name, setName] = React.useState("");
   const [ns, setNs] = React.useState("ai-research");
   const [fileName, setFileName] = React.useState<string | null>(null);
+  const [fileYaml, setFileYaml] = React.useState("");
   const [pastedYaml, setPastedYaml] = React.useState("");
   const [mode, setMode] = React.useState<"file" | "paste">("file");
+  const [busy, setBusy] = React.useState(false);
+  const qc = useQueryClient();
 
-  const submit = () => {
+  const submit = async () => {
     if (!name.trim()) return;
-    if (mode === "file" && !fileName) return;
-    if (mode === "pastedYaml" && !pastedYaml.trim()) return;
-    toast.success(`Pipeline '${name}' 업로드 완료`, {
-      description: `${ns} 네임스페이스 · ${mode === "file" ? fileName : "붙여넣은 YAML"} · 검증 진행 중`,
-    });
-    setName("");
-    setFileName(null);
-    setPastedYaml("");
-    onClose();
+    const yaml = mode === "file" ? fileYaml : pastedYaml;
+    if (!yaml.trim()) return;
+    if (!process.env.NEXT_PUBLIC_KF_API) {
+      toast.success(`Pipeline '${name}' 업로드 완료 (mock)`, {
+        description: `${ns} 네임스페이스 · ${mode === "file" ? fileName : "붙여넣은 YAML"}`,
+      });
+      onClose();
+      return;
+    }
+    setBusy(true);
+    try {
+      await uploadPipeline({ name, yaml });
+      toast.success(`Pipeline '${name}' 업로드 완료 — KFP 카탈로그 등록됨`);
+      qc.invalidateQueries({ queryKey: ["kf", "pipelines"] });
+      setName("");
+      setFileName(null);
+      setFileYaml("");
+      setPastedYaml("");
+      onClose();
+    } catch (e) {
+      toast.error(`업로드 실패: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -347,7 +367,11 @@ function UploadPipelineDialog({ open, onClose }: { open: boolean; onClose: () =>
                 type="file"
                 accept=".yaml,.yml"
                 className="hidden"
-                onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  setFileName(f?.name ?? null);
+                  setFileYaml(f ? await f.text() : "");
+                }}
               />
               <Upload className="mx-auto mb-2 size-6 text-muted-foreground" />
               <div className="text-sm font-medium">
@@ -376,8 +400,8 @@ function UploadPipelineDialog({ open, onClose }: { open: boolean; onClose: () =>
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button onClick={submit}>
-            <Upload className="size-3.5" /> 업로드 · 등록
+          <Button onClick={submit} disabled={busy}>
+            <Upload className="size-3.5" /> {busy ? "업로드 중…" : "업로드 · 등록"}
           </Button>
         </DialogFooter>
       </DialogContent>
