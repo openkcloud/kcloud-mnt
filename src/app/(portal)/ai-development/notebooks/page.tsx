@@ -53,14 +53,28 @@ import {
 import { MoreHorizontal } from "lucide-react";
 import { cn, relativeTime } from "@/lib/utils";
 import type { KFNotebook } from "@/lib/types";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { notebookAction } from "@/lib/notebook-api";
 
 export default function NotebooksPage() {
   const [q, setQ] = React.useState("");
   const [ns, setNs] = React.useState("all");
+  const qc = useQueryClient();
   const { data, isLoading } = api.kubeflow.notebooks() as {
     data: { items: KFNotebook[] } | undefined;
     isLoading: boolean;
   };
+
+  async function act(nb: KFNotebook, action: "start" | "stop" | "delete") {
+    try {
+      await notebookAction(nb.id, action);
+      toast.success(`"${nb.name}" ${action === "start" ? "시작" : action === "stop" ? "정지" : "삭제"} 요청 완료`);
+      qc.invalidateQueries({ queryKey: ["kf", "notebooks"] });
+    } catch (e) {
+      toast.error(`요청 실패: ${(e as Error).message}`);
+    }
+  }
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const items = data.items.filter(
@@ -197,7 +211,7 @@ export default function NotebooksPage() {
                         </Button>
                       </>
                     ) : nb.status === "Stopped" ? (
-                      <Button size="sm" variant="outline">
+                      <Button size="sm" variant="outline" onClick={() => act(nb, "start")}>
                         <Play className="size-3" /> 시작
                       </Button>
                     ) : (
@@ -212,13 +226,13 @@ export default function NotebooksPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => act(nb, "stop")}>
                           <Square className="size-4" /> 정지
                         </DropdownMenuItem>
                         <DropdownMenuItem>볼륨 스냅샷</DropdownMenuItem>
                         <DropdownMenuItem>리소스 변경</DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-rose-600">
+                        <DropdownMenuItem className="text-rose-600" onClick={() => act(nb, "delete")}>
                           <Trash2 className="size-4" /> 삭제
                         </DropdownMenuItem>
                       </DropdownMenuContent>

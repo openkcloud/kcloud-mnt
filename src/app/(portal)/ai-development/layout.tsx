@@ -1,6 +1,9 @@
 "use client";
+import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { api } from "@/lib/api";
+import { NotebookCreateDialog } from "@/components/notebook-create-dialog";
 import { BrainCircuit, Plus, ExternalLink } from "lucide-react";
 import { GithubIcon } from "@/components/icons";
 import { PageHeader } from "@/components/page-header";
@@ -20,6 +23,11 @@ const TABS = [
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const { data: profileData } = api.kubeflow.profiles() as {
+    data: { items: { name: string }[] } | undefined;
+  };
+  const namespaces = profileData?.items.map((p) => p.name) ?? ["ai-research"];
   return (
     <div className="space-y-6">
       <PageHeader
@@ -42,9 +50,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 <GithubIcon className="size-3.5" /> GitHub
               </a>
             </Button>
-            <Button size="sm">
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" /> 새 노트북
             </Button>
+            <NotebookCreateDialog
+              open={createOpen}
+              onOpenChange={setCreateOpen}
+              namespaces={namespaces}
+            />
           </>
         }
       />

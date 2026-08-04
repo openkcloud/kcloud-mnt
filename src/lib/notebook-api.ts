@@ -47,7 +47,45 @@ export interface NotebookResource {
 }
 
 /** CMP 백엔드 주소 — 미설정 시 mock 모드로 동작 */
-const KF_API = process.env.NEXT_PUBLIC_KF_API;
+export const KF_API = process.env.NEXT_PUBLIC_KF_API;
+
+/** 노트북 생성 (POST /api/v1/notebooks) */
+export async function createNotebook(body: {
+  name: string;
+  namespace: string;
+  image: string;
+  cpu: string;
+  memoryGi: number;
+  acceleratorKind?: string;
+  acceleratorCount: number;
+  storageGb: number;
+}): Promise<{ id: string }> {
+  const res = await fetch(`${KF_API}/api/v1/notebooks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+/** Profile 생성 (POST /api/v1/profiles) */
+export async function createProfile(body: {
+  name: string;
+  ownerEmail: string;
+  cpu: number;
+  memoryGi: number;
+  acceleratorCount: number;
+  storageGi: number;
+}): Promise<{ name: string }> {
+  const res = await fetch(`${KF_API}/api/v1/profiles`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
 
 /** 노트북 상세 조회 + Code Server 연결 URL 발급 */
 async function fetchNotebookConnect(id: string): Promise<NotebookResource> {

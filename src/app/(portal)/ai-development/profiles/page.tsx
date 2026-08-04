@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { api } from "@/lib/api";
+import { ProfileCreateDialog } from "@/components/profile-create-dialog";
 
 /* Kubeflow Profile = namespace + RBAC + ResourceQuota + PodDefault 묶음.
  * 실제 Kubeflow CRD: kubeflow.org/v1 Profile
@@ -74,15 +75,19 @@ export default function ProfilesPage() {
   };
   const profiles: ProfileItem[] =
     process.env.NEXT_PUBLIC_KF_API && data ? data.items : MOCK_PROFILES;
+  const [createOpen, setCreateOpen] = React.useState(false);
   return (
     <div className="space-y-6">
       <PageHeader
         title="Kubeflow Profiles"
         description="Profile = K8s 네임스페이스 + RBAC + ResourceQuota + PodDefault — 사용자 격리·할당 단위"
         actions={
-          <Button>
-            <Plus className="size-4" /> 새 Profile
-          </Button>
+          <>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" /> 새 Profile
+            </Button>
+            <ProfileCreateDialog open={createOpen} onOpenChange={setCreateOpen} />
+          </>
         }
       />
 
