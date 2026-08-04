@@ -55,7 +55,18 @@ export const api = {
     services: () => useQuery({ queryKey: ["paas", "services"], queryFn: () => get("/api/paas/services") }),
   },
   kubeflow: {
-    notebooks: () => useQuery({ queryKey: ["kf", "notebooks"], queryFn: () => get("/api/kubeflow/notebooks") }),
+    // NEXT_PUBLIC_KF_API가 설정되면 실제 CMP 백엔드, 아니면 MSW mock
+    notebooks: () =>
+      useQuery({
+        queryKey: ["kf", "notebooks"],
+        queryFn: () =>
+          get(
+            process.env.NEXT_PUBLIC_KF_API
+              ? `${process.env.NEXT_PUBLIC_KF_API}/api/v1/notebooks`
+              : "/api/kubeflow/notebooks",
+          ),
+        refetchInterval: process.env.NEXT_PUBLIC_KF_API ? 5000 : false,
+      }),
     pipelines: () => useQuery({ queryKey: ["kf", "pipelines"], queryFn: () => get("/api/kubeflow/pipelines") }),
     experiments: () => useQuery({ queryKey: ["kf", "experiments"], queryFn: () => get("/api/kubeflow/experiments") }),
     serving: () => useQuery({ queryKey: ["kf", "serving"], queryFn: () => get("/api/kubeflow/serving") }),

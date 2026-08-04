@@ -46,19 +46,21 @@ export interface NotebookResource {
   jwtExpiresAt?: string;
 }
 
+/** CMP 백엔드 주소 — 미설정 시 mock 모드로 동작 */
+const KF_API = process.env.NEXT_PUBLIC_KF_API;
+
 /** 노트북 상세 조회 + Code Server 연결 URL 발급 */
 async function fetchNotebookConnect(id: string): Promise<NotebookResource> {
-  // ──────────────────────────────────────────────────────────────
-  // 🔧 실제 구현 시 이 fetch 한 줄만 살리고 mock 블록을 삭제하세요.
-  // ──────────────────────────────────────────────────────────────
-  // const res = await fetch(`/api/v1/notebooks/${id}/connect`, {
-  //   credentials: "include",  // OAuth2 Proxy 쿠키 포함
-  // });
-  // if (!res.ok) throw new Error(`Notebook connect failed: ${res.status}`);
-  // return res.json();
+  if (KF_API) {
+    const res = await fetch(`${KF_API}/api/v1/notebooks/${id}/connect`, {
+      credentials: "include", // OAuth2 Proxy 쿠키 포함
+    });
+    if (!res.ok) throw new Error(`Notebook connect failed: ${res.status}`);
+    return res.json();
+  }
 
   // ──────────────────────────────────────────────────────────────
-  // 📦 Mock 응답
+  // 📦 Mock 응답 (NEXT_PUBLIC_KF_API 미설정 시)
   // ──────────────────────────────────────────────────────────────
   await new Promise((r) => setTimeout(r, 300));
   return MOCK_NOTEBOOKS[id] ?? MOCK_NOTEBOOKS["nb-1"];
@@ -78,8 +80,16 @@ export async function notebookAction(
   id: string,
   action: "start" | "stop" | "restart" | "delete",
 ): Promise<void> {
-  // 실제 구현:
-  // await fetch(`/api/v1/notebooks/${id}/${action}`, { method: "POST" });
+  if (KF_API) {
+    const method = action === "delete" ? "DELETE" : "POST";
+    const path =
+      action === "delete"
+        ? `${KF_API}/api/v1/notebooks/${id}`
+        : `${KF_API}/api/v1/notebooks/${id}/${action}`;
+    const res = await fetch(path, { method });
+    if (!res.ok) throw new Error(`Notebook ${action} failed: ${res.status}`);
+    return;
+  }
   await new Promise((r) => setTimeout(r, 500));
 }
 
