@@ -17,6 +17,7 @@ import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { api } from "@/lib/api";
 import { ProfileCreateDialog } from "@/components/profile-create-dialog";
+import { ProfileEditDialog, type EditableProfile } from "@/components/profile-edit-dialog";
 import { KF_ENABLED } from "@/lib/kf";
 
 /* Kubeflow Profile = namespace + RBAC + ResourceQuota + PodDefault 묶음.
@@ -77,6 +78,8 @@ export default function ProfilesPage() {
   const profiles: ProfileItem[] =
     KF_ENABLED && data ? data.items : MOCK_PROFILES;
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [editOpen, setEditOpen] = React.useState(false);
+  const [editTarget, setEditTarget] = React.useState<EditableProfile | null>(null);
   return (
     <div className="space-y-6">
       <PageHeader
@@ -88,6 +91,7 @@ export default function ProfilesPage() {
               <Plus className="size-4" /> 새 Profile
             </Button>
             <ProfileCreateDialog open={createOpen} onOpenChange={setCreateOpen} />
+            <ProfileEditDialog profile={editTarget} open={editOpen} onOpenChange={setEditOpen} />
           </>
         }
       />
@@ -165,7 +169,8 @@ export default function ProfilesPage() {
                   <Users className="size-3" />
                   <strong>{p.members}</strong>명
                 </span>
-                <Button variant="ghost" size="sm">
+                <Button variant="ghost" size="sm"
+                        onClick={() => { setEditTarget(p); setEditOpen(true); }}>
                   <Settings className="size-3" /> 편집
                 </Button>
               </div>
