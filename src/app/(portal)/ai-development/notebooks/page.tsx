@@ -207,6 +207,11 @@ export default function NotebooksPage() {
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={nb.status} />
+                  {(nb as KFNotebook & { statusReason?: string }).statusReason && (
+                    <div className="mt-1 max-w-52 text-[10px] leading-snug text-amber-700">
+                      {(nb as KFNotebook & { statusReason?: string }).statusReason}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-1">
