@@ -81,11 +81,32 @@ export const useAuth = create<AuthState>()(
         if (!entry || entry.password !== password) {
           throw new Error("아이디 또는 비밀번호가 올바르지 않습니다.");
         }
+        // 실백엔드 모드: CMP 백엔드 세션 쿠키도 발급 (IDE 프록시 인증용)
+        if (process.env.NEXT_PUBLIC_KF_API) {
+          try {
+            await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/auth/login`, {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ username, password }),
+            });
+          } catch {
+            /* 백엔드 미가동 시 포털 로그인은 유지 (IDE 접속만 제한됨) */
+          }
+        }
         const token = mockJwt(entry.user);
         set({ user: entry.user, token });
         return entry.user;
       },
-      logout: () => set({ user: null, token: null }),
+      logout: () => {
+        if (process.env.NEXT_PUBLIC_KF_API) {
+          fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/auth/logout`, {
+            method: "POST",
+            credentials: "include",
+          }).catch(() => {});
+        }
+        set({ user: null, token: null });
+      },
     }),
     { name: "openkcloud-auth" },
   ),
