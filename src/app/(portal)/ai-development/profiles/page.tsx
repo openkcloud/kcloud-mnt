@@ -17,6 +17,7 @@ import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { api } from "@/lib/api";
 import { ProfileCreateDialog } from "@/components/profile-create-dialog";
+import { KF_ENABLED } from "@/lib/kf";
 
 /* Kubeflow Profile = namespace + RBAC + ResourceQuota + PodDefault 묶음.
  * 실제 Kubeflow CRD: kubeflow.org/v1 Profile
@@ -74,7 +75,7 @@ export default function ProfilesPage() {
     data: { items: ProfileItem[] } | undefined;
   };
   const profiles: ProfileItem[] =
-    process.env.NEXT_PUBLIC_KF_API && data ? data.items : MOCK_PROFILES;
+    KF_ENABLED && data ? data.items : MOCK_PROFILES;
   const [createOpen, setCreateOpen] = React.useState(false);
   return (
     <div className="space-y-6">

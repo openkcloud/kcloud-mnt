@@ -10,6 +10,9 @@ const nextConfig: NextConfig = {
   images: { unoptimized: true },
   // 정적 호스팅에서 디렉터리 라우팅 안전
   trailingSlash: true,
+  // 개발 서버를 사내망 다른 PC에서 접속할 수 있도록 허용
+  // (Next.js 15+ 는 dev 에셋을 동일 origin 외에는 차단)
+  allowedDevOrigins: ["192.168.0.41", "192.168.0.6", "localhost", "127.0.0.1"],
   // shadcn chart.tsx vs Recharts 3.x — upstream type drift (payload/label
   // are runtime-injected and dropped from props in Recharts 3.x). Runtime works
   // fine; only the type-check chokes.

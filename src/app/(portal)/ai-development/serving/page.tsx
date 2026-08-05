@@ -8,6 +8,7 @@ import { formatNumber } from "@/lib/utils";
 import type { KFInferenceService } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { KF_ENABLED } from "@/lib/kf";
 
 /** 데모 호출 — sklearn iris 입력 형식 (KServe v1 protocol) */
 async function testCall(s: KFInferenceService) {
@@ -78,7 +79,7 @@ export default function ServingPage() {
               {s.endpoint}
             </div>
 
-            {process.env.NEXT_PUBLIC_KF_API && s.status === "Ready" && (
+            {KF_ENABLED && s.status === "Ready" && (
               <Button size="sm" variant="outline" className="w-full" onClick={() => testCall(s)}>
                 <Send className="size-3" /> API 호출 테스트
               </Button>

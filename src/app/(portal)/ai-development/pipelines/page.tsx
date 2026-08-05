@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn, relativeTime } from "@/lib/utils";
 import type { KFPipeline } from "@/lib/types";
+import { KF_ENABLED } from "@/lib/kf";
 
 const PIPELINE_DAG: Record<string, { id: string; name: string; type: "data" | "compute" | "ml" | "deploy"; status: "ok" | "running" | "failed" | "pending" }[]> = {
   "pl-1": [
@@ -57,7 +58,7 @@ const PIPELINE_DAG: Record<string, { id: string; name: string; type: "data" | "c
   ],
 };
 
-const KF_API = process.env.NEXT_PUBLIC_KF_API;
+const KF_API = KF_BASE || undefined;
 
 interface KFRun {
   id: string;
@@ -373,7 +374,7 @@ function UploadPipelineDialog({ open, onClose }: { open: boolean; onClose: () =>
     if (!name.trim()) return;
     const yaml = mode === "file" ? fileYaml : pastedYaml;
     if (!yaml.trim()) return;
-    if (!process.env.NEXT_PUBLIC_KF_API) {
+    if (!KF_ENABLED) {
       toast.success(`Pipeline '${name}' 업로드 완료 (mock)`, {
         description: `${ns} 네임스페이스 · ${mode === "file" ? fileName : "붙여넣은 YAML"}`,
       });

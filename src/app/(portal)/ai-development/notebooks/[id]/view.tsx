@@ -36,8 +36,9 @@ import type { KFNotebook } from "@/lib/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { notebookAction } from "@/lib/notebook-api";
+import { KF_BASE } from "@/lib/kf";
 
-const KF_API = process.env.NEXT_PUBLIC_KF_API;
+const KF_API = KF_BASE || undefined;
 
 const MOCK_FILES = [
   { name: "train.py", size: "12.4 KB", modified: "2026-05-31T14:22" },

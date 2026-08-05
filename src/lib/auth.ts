@@ -2,6 +2,7 @@
  * kcloud-mnt 설계서 SFR.MNT.006 (RBAC), SFR.MNT.007 (세션·MFA) 시연용. */
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { KF_BASE, KF_ENABLED } from "@/lib/kf";
 
 export type Role = "admin" | "user";
 
@@ -82,9 +83,9 @@ export const useAuth = create<AuthState>()(
           throw new Error("아이디 또는 비밀번호가 올바르지 않습니다.");
         }
         // 실백엔드 모드: CMP 백엔드 세션 쿠키도 발급 (IDE 프록시 인증용)
-        if (process.env.NEXT_PUBLIC_KF_API) {
+        if (KF_ENABLED) {
           try {
-            await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/auth/login`, {
+            await fetch(`${KF_BASE}/api/v1/auth/login`, {
               method: "POST",
               credentials: "include",
               headers: { "Content-Type": "application/json" },
@@ -99,8 +100,8 @@ export const useAuth = create<AuthState>()(
         return entry.user;
       },
       logout: () => {
-        if (process.env.NEXT_PUBLIC_KF_API) {
-          fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/auth/logout`, {
+        if (KF_ENABLED) {
+          fetch(`${KF_BASE}/api/v1/auth/logout`, {
             method: "POST",
             credentials: "include",
           }).catch(() => {});

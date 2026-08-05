@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import type { KFExperiment } from "@/lib/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { KF_BASE, KF_ENABLED } from "@/lib/kf";
 
 // ─────────────────────────────────────────────────────────────
 // Benchmark 시연 데이터 — ETRI 260615 §6.C.iii 반영
@@ -254,18 +255,18 @@ function LiveHwBenchmark() {
   const { data } = useQuery({
     queryKey: ["bench", "hw"],
     queryFn: async () => {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/benchmarks`);
+      const res = await fetch(`${KF_BASE}/api/v1/benchmarks`);
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json() as Promise<{ items: HwBenchResult[] }>;
     },
-    enabled: !!process.env.NEXT_PUBLIC_KF_API,
+    enabled: KF_ENABLED,
     refetchInterval: 10000,
   });
-  if (!process.env.NEXT_PUBLIC_KF_API) return null;
+  if (!KF_ENABLED) return null;
 
   async function run() {
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/benchmarks/run`, { method: "POST" });
+      const res = await fetch(`${KF_BASE}/api/v1/benchmarks/run`, { method: "POST" });
       if (!res.ok) throw new Error(`${res.status}`);
       toast.success("벤치마크 실행 시작 — 노드별 GPU Job 생성됨 (약 1분)");
       qc.invalidateQueries({ queryKey: ["bench", "hw"] });
@@ -353,13 +354,13 @@ function LiveModelBenchmark() {
   const { data: results } = useQuery({
     queryKey: ["bench", "model"],
     queryFn: async () => {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/benchmarks/model`);
+      const res = await fetch(`${KF_BASE}/api/v1/benchmarks/model`);
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json() as Promise<{ items: ModelBenchResult[] }>;
     },
-    enabled: !!process.env.NEXT_PUBLIC_KF_API,
+    enabled: KF_ENABLED,
   });
-  if (!process.env.NEXT_PUBLIC_KF_API) return null;
+  if (!KF_ENABLED) return null;
   const ready = (servings?.items ?? []).filter((s) => s.status === "Ready");
   const byName = new Map((results?.items ?? []).map((r) => [r.name, r]));
 
@@ -367,7 +368,7 @@ function LiveModelBenchmark() {
     setRunning(name);
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_KF_API}/api/v1/benchmarks/model/${name}/run`,
+        `${KF_BASE}/api/v1/benchmarks/model/${name}/run`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -468,7 +469,7 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
 
   const submit = async () => {
     if (!name.trim()) return;
-    if (!process.env.NEXT_PUBLIC_KF_API) {
+    if (!KF_ENABLED) {
       toast.success(`HPO 실험 '${name}' 등록됨 (mock)`, {
         description: `${algorithm} · ${objective} ${metric} → ${goal} · 최대 ${maxTrials}회 시도`,
       });
@@ -481,7 +482,7 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
         bayesian: "bayesianoptimization", tpe: "tpe", random: "random",
         grid: "grid", hyperband: "hyperband",
       };
-      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/experiments`, {
+      const res = await fetch(`${KF_BASE}/api/v1/experiments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

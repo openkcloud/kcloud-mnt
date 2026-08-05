@@ -7,6 +7,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { KF_BASE } from "@/lib/kf";
 
 interface Msg {
   role: "user" | "assistant";
@@ -46,7 +47,7 @@ export function LlmChatDialog({
     setInput("");
     setBusy(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/metrics/llm/chat`, {
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: q, maxTokens: 200 }),

@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { MessageSquare } from "lucide-react";
 import { LlmChatDialog } from "@/components/llm-chat-dialog";
+import { KF_BASE, KF_ENABLED } from "@/lib/kf";
 
 // ─── Pipeline stage breakdown ───
 const PIPELINE_STAGES = [
@@ -88,14 +89,14 @@ function LiveGpuStrip() {
   const { data } = useQuery({
     queryKey: ["metrics", "gpu"],
     queryFn: async () => {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/metrics/gpu`);
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/gpu`);
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json() as Promise<{ items: GpuMetric[] }>;
     },
-    enabled: !!process.env.NEXT_PUBLIC_KF_API,
+    enabled: KF_ENABLED,
     refetchInterval: 3000,
   });
-  if (!process.env.NEXT_PUBLIC_KF_API || !data) return null;
+  if (!KF_ENABLED || !data) return null;
   return (
     <div className="grid gap-3 md:grid-cols-2">
       {data.items.map((g) => (
@@ -148,20 +149,20 @@ function LiveLlmCard() {
   const { data, refetch } = useQuery({
     queryKey: ["metrics", "llm"],
     queryFn: async () => {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/metrics/llm`);
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm`);
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json() as Promise<LlmMetrics>;
     },
-    enabled: !!process.env.NEXT_PUBLIC_KF_API,
+    enabled: KF_ENABLED,
     refetchInterval: 5000,
     retry: false,
   });
-  if (!process.env.NEXT_PUBLIC_KF_API || !data) return null;
+  if (!KF_ENABLED || !data) return null;
 
   async function fireTest() {
     setTesting(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/metrics/llm/chat`, {
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: "클라우드에서 GPU를 효율적으로 쓰는 팁을 한 문장으로.", maxTokens: 64 }),
@@ -233,15 +234,15 @@ function LivePipelineBottleneck() {
   const { data } = useQuery({
     queryKey: ["metrics", "pipeline-runs"],
     queryFn: async () => {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/metrics/pipeline-runs`);
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/pipeline-runs`);
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json() as Promise<{ items: WfRun[] }>;
     },
-    enabled: !!process.env.NEXT_PUBLIC_KF_API,
+    enabled: KF_ENABLED,
     refetchInterval: 10000,
     retry: false,
   });
-  if (!process.env.NEXT_PUBLIC_KF_API || !data?.items.length) return null;
+  if (!KF_ENABLED || !data?.items.length) return null;
   const barColors = ["bg-brand-indigo-400", "bg-brand-mint-500", "bg-violet-400",
                      "bg-amber-400", "bg-sky-400"];
   return (

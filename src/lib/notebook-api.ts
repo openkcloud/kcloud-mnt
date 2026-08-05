@@ -7,6 +7,7 @@
  * ──────────────────────────────────────────────────────────────────── */
 
 import { useQuery } from "@tanstack/react-query";
+import { KF_BASE } from "@/lib/kf";
 
 /** Kubeflow Notebook CRD에 매핑되는 응답 모델 */
 export interface NotebookResource {
@@ -47,7 +48,7 @@ export interface NotebookResource {
 }
 
 /** CMP 백엔드 주소 — 미설정 시 mock 모드로 동작 */
-export const KF_API = process.env.NEXT_PUBLIC_KF_API;
+export const KF_API = KF_BASE || undefined;
 
 /** 노트북 생성 (POST /api/v1/notebooks) */
 export async function createNotebook(body: {

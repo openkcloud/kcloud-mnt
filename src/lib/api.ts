@@ -1,5 +1,6 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
+import { KF_BASE, KF_ENABLED } from "@/lib/kf";
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
@@ -61,18 +62,18 @@ export const api = {
         queryKey: ["kf", "notebooks"],
         queryFn: () =>
           get(
-            process.env.NEXT_PUBLIC_KF_API
-              ? `${process.env.NEXT_PUBLIC_KF_API}/api/v1/notebooks`
+            KF_ENABLED
+              ? `${KF_BASE}/api/v1/notebooks`
               : "/api/kubeflow/notebooks",
           ),
-        refetchInterval: process.env.NEXT_PUBLIC_KF_API ? 5000 : false,
+        refetchInterval: KF_ENABLED ? 5000 : false,
       }),
     // 실백엔드 전용 (mock 핸들러 없음) — KF_API 미설정 시 페이지 자체 fallback 사용
     profiles: () =>
       useQuery({
         queryKey: ["kf", "profiles"],
-        queryFn: () => get(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/profiles`),
-        enabled: !!process.env.NEXT_PUBLIC_KF_API,
+        queryFn: () => get(`${KF_BASE}/api/v1/profiles`),
+        enabled: KF_ENABLED,
         refetchInterval: 5000,
       }),
     pipelines: () =>
@@ -80,33 +81,33 @@ export const api = {
         queryKey: ["kf", "pipelines"],
         queryFn: () =>
           get(
-            process.env.NEXT_PUBLIC_KF_API
-              ? `${process.env.NEXT_PUBLIC_KF_API}/api/v1/pipelines`
+            KF_ENABLED
+              ? `${KF_BASE}/api/v1/pipelines`
               : "/api/kubeflow/pipelines",
           ),
-        refetchInterval: process.env.NEXT_PUBLIC_KF_API ? 10000 : false,
+        refetchInterval: KF_ENABLED ? 10000 : false,
       }),
     experiments: () =>
       useQuery({
         queryKey: ["kf", "experiments"],
         queryFn: () =>
           get(
-            process.env.NEXT_PUBLIC_KF_API
-              ? `${process.env.NEXT_PUBLIC_KF_API}/api/v1/experiments`
+            KF_ENABLED
+              ? `${KF_BASE}/api/v1/experiments`
               : "/api/kubeflow/experiments",
           ),
-        refetchInterval: process.env.NEXT_PUBLIC_KF_API ? 5000 : false,
+        refetchInterval: KF_ENABLED ? 5000 : false,
       }),
     serving: () =>
       useQuery({
         queryKey: ["kf", "serving"],
         queryFn: () =>
           get(
-            process.env.NEXT_PUBLIC_KF_API
-              ? `${process.env.NEXT_PUBLIC_KF_API}/api/v1/serving`
+            KF_ENABLED
+              ? `${KF_BASE}/api/v1/serving`
               : "/api/kubeflow/serving",
           ),
-        refetchInterval: process.env.NEXT_PUBLIC_KF_API ? 5000 : false,
+        refetchInterval: KF_ENABLED ? 5000 : false,
       }),
   },
   resourceMap: {
