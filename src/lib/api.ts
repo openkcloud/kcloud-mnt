@@ -97,7 +97,17 @@ export const api = {
           ),
         refetchInterval: process.env.NEXT_PUBLIC_KF_API ? 5000 : false,
       }),
-    serving: () => useQuery({ queryKey: ["kf", "serving"], queryFn: () => get("/api/kubeflow/serving") }),
+    serving: () =>
+      useQuery({
+        queryKey: ["kf", "serving"],
+        queryFn: () =>
+          get(
+            process.env.NEXT_PUBLIC_KF_API
+              ? `${process.env.NEXT_PUBLIC_KF_API}/api/v1/serving`
+              : "/api/kubeflow/serving",
+          ),
+        refetchInterval: process.env.NEXT_PUBLIC_KF_API ? 5000 : false,
+      }),
   },
   resourceMap: {
     graph: () => useQuery({ queryKey: ["rm", "graph"], queryFn: () => get("/api/resource-map") }),

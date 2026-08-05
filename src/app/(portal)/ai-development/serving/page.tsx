@@ -6,6 +6,28 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatNumber } from "@/lib/utils";
 import type { KFInferenceService } from "@/lib/types";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+
+/** 데모 호출 — sklearn iris 입력 형식 (KServe v1 protocol) */
+async function testCall(s: KFInferenceService) {
+  try {
+    const t0 = performance.now();
+    const res = await fetch(s.endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instances: [[6.8, 2.8, 4.8, 1.4], [6.0, 3.4, 4.5, 1.6]] }),
+    });
+    const ms = Math.round(performance.now() - t0);
+    if (!res.ok) throw new Error(`${res.status}`);
+    const json = await res.json();
+    toast.success(`${s.name} 응답 ${ms}ms`, {
+      description: `predictions: ${JSON.stringify(json.predictions ?? json).slice(0, 80)}`,
+    });
+  } catch (e) {
+    toast.error(`호출 실패: ${(e as Error).message}`);
+  }
+}
 
 export default function ServingPage() {
   const { data, isLoading } = api.kubeflow.serving() as {
@@ -44,7 +66,7 @@ export default function ServingPage() {
 
             <div className="flex items-center justify-between text-xs">
               <Badge variant="outline" className="gap-1">
-                <Cpu className="size-3" /> {s.acceleratorKind}
+                <Cpu className="size-3" /> {s.acceleratorKind ?? "CPU"}
               </Badge>
               <div className="flex items-center gap-1 text-muted-foreground">
                 <Activity className="size-3" />
@@ -55,6 +77,12 @@ export default function ServingPage() {
             <div className="rounded-md bg-card border border-border p-2 font-mono text-[11px] text-muted-foreground">
               {s.endpoint}
             </div>
+
+            {process.env.NEXT_PUBLIC_KF_API && s.status === "Ready" && (
+              <Button size="sm" variant="outline" className="w-full" onClick={() => testCall(s)}>
+                <Send className="size-3" /> API 호출 테스트
+              </Button>
+            )}
           </CardContent>
         </Card>
       ))}
