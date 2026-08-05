@@ -57,12 +57,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { notebookAction } from "@/lib/notebook-api";
 import { NotebookCreateDialog, type NotebookPreset } from "@/components/notebook-create-dialog";
+import { SnapshotDialog, ResizeDialog } from "@/components/notebook-manage-dialogs";
 
 export default function NotebooksPage() {
   const [q, setQ] = React.useState("");
   const [ns, setNs] = React.useState("all");
   const [createOpen, setCreateOpen] = React.useState(false);
   const [preset, setPreset] = React.useState<NotebookPreset | undefined>();
+  const [snapOpen, setSnapOpen] = React.useState(false);
+  const [resizeOpen, setResizeOpen] = React.useState(false);
+  const [target, setTarget] = React.useState<KFNotebook | null>(null);
   const qc = useQueryClient();
   const { data: profileData } = api.kubeflow.profiles() as {
     data: { items: { name: string }[] } | undefined;
@@ -105,6 +109,8 @@ export default function NotebooksPage() {
         namespaces={profileNamespaces}
         preset={preset}
       />
+      <SnapshotDialog nb={target} open={snapOpen} onOpenChange={setSnapOpen} />
+      <ResizeDialog nb={target} open={resizeOpen} onOpenChange={setResizeOpen} />
       {/* Quick stats — Kubeflow style */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatChip label="실행 중" value={counts.running} accent="mint" hint="활성 서버" />
@@ -247,8 +253,12 @@ export default function NotebooksPage() {
                         <DropdownMenuItem onClick={() => act(nb, "stop")}>
                           <Square className="size-4" /> 정지
                         </DropdownMenuItem>
-                        <DropdownMenuItem>볼륨 스냅샷</DropdownMenuItem>
-                        <DropdownMenuItem>리소스 변경</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setTarget(nb); setSnapOpen(true); }}>
+                          볼륨 스냅샷
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setTarget(nb); setResizeOpen(true); }}>
+                          리소스 변경
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem className="text-rose-600" onClick={() => act(nb, "delete")}>
                           <Trash2 className="size-4" /> 삭제
