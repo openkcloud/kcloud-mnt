@@ -212,6 +212,83 @@ function LlmStat({ label, hint, value }: { label: string; hint: string; value: s
   );
 }
 
+interface WfStep { name: string; durSec: number; pct: number; phase: string }
+interface WfRun {
+  workflow: string; phase: string; startedAt: string; totalSec: number;
+  steps: WfStep[]; bottleneck: string; bottleneckPct: number;
+}
+
+/** 실측 파이프라인 병목 — Argo Workflow 단계별 실행시간 분해 */
+function LivePipelineBottleneck() {
+  const { data } = useQuery({
+    queryKey: ["metrics", "pipeline-runs"],
+    queryFn: async () => {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/metrics/pipeline-runs`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: WfRun[] }>;
+    },
+    enabled: !!process.env.NEXT_PUBLIC_KF_API,
+    refetchInterval: 10000,
+    retry: false,
+  });
+  if (!process.env.NEXT_PUBLIC_KF_API || !data?.items.length) return null;
+  const barColors = ["bg-brand-indigo-400", "bg-brand-mint-500", "bg-violet-400",
+                     "bg-amber-400", "bg-sky-400"];
+  return (
+    <Card className="border-brand-mint-200">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <GitBranch className="size-4 text-brand-mint-600" />
+          실측 파이프라인 단계 분석
+          <Badge variant="success" className="text-[10px]">LIVE</Badge>
+        </CardTitle>
+        <CardDescription>
+          최근 실행된 워크플로우의 단계별 소요시간 (Argo 실측) — 가장 오래 걸린 단계가 병목
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {data.items.map((run) => (
+          <div key={run.workflow} className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-mono text-xs">{run.workflow}</span>
+              <span className="text-xs text-muted-foreground">
+                총 {run.totalSec}초 ·{" "}
+                <span className="font-semibold text-amber-700">
+                  병목: {run.bottleneck} ({run.bottleneckPct}%)
+                </span>
+                <Badge className="ml-2 text-[10px]"
+                       variant={run.phase === "Succeeded" ? "success"
+                                : run.phase === "Failed" ? "destructive" : "warning"}>
+                  {run.phase}
+                </Badge>
+              </span>
+            </div>
+            <div className="flex h-6 w-full overflow-hidden rounded-md">
+              {run.steps.map((s, i) => (
+                <div key={s.name}
+                     className={cn("flex items-center justify-center text-[10px] font-semibold text-white",
+                                   barColors[i % barColors.length])}
+                     style={{ width: `${Math.max(s.pct, 4)}%` }}
+                     title={`${s.name}: ${s.durSec}s (${s.pct}%)`}>
+                  {s.pct >= 12 ? `${s.name} ${s.pct}%` : ""}
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+              {run.steps.map((s, i) => (
+                <span key={s.name} className="inline-flex items-center gap-1">
+                  <span className={cn("size-2 rounded-sm", barColors[i % barColors.length])} />
+                  {s.name} {s.durSec}s
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ModelInsightsPage() {
   return (
     <div className="space-y-4">
@@ -425,6 +502,11 @@ export default function ModelInsightsPage() {
 
         {/* ── Pipeline ── */}
         <TabsContent value="pipeline" className="mt-4 space-y-4">
+          <LivePipelineBottleneck />
+          <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground">
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">시뮬레이션</span>
+            아래 항목은 대규모 학습 시나리오 예시 데이터입니다
+          </div>
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
