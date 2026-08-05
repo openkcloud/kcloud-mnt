@@ -180,12 +180,13 @@ export default function ExperimentsPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="model">
+        <TabsContent value="model" className="space-y-4">
+          <LiveModelBenchmark />
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <Award className="size-4 text-brand-indigo-600" />
-                모델 성능 벤치마크
+                모델 성능 벤치마크 (참고 자료)
               </CardTitle>
               <CardDescription>
                 MMLU · HumanEval · GSM8K 등 대표 벤치마크로 모델 품질 비교
@@ -326,6 +327,123 @@ function LiveHwBenchmark() {
                 </TableCell>
               </TableRow>
             )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// 실측 모델 성능 벤치마크 — 배포된 InferenceService 부하 테스트
+// ─────────────────────────────────────────────────────────────
+interface ServingItem { id: string; name: string; status: string; modelName: string }
+interface ModelBenchResult {
+  name: string; requests: number; concurrency: number; rps: number;
+  avgMs: number; p50Ms: number; p95Ms: number; p99Ms: number;
+  errorRate: number; at: string;
+}
+
+function LiveModelBenchmark() {
+  const qc = useQueryClient();
+  const [running, setRunning] = React.useState<string | null>(null);
+  const { data: servings } = api.kubeflow.serving() as {
+    data: { items: ServingItem[] } | undefined;
+  };
+  const { data: results } = useQuery({
+    queryKey: ["bench", "model"],
+    queryFn: async () => {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/benchmarks/model`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: ModelBenchResult[] }>;
+    },
+    enabled: !!process.env.NEXT_PUBLIC_KF_API,
+  });
+  if (!process.env.NEXT_PUBLIC_KF_API) return null;
+  const ready = (servings?.items ?? []).filter((s) => s.status === "Ready");
+  const byName = new Map((results?.items ?? []).map((r) => [r.name, r]));
+
+  async function run(name: string) {
+    setRunning(name);
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_KF_API}/api/v1/benchmarks/model/${name}/run`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ requests: 100, concurrency: 10 }),
+        },
+      );
+      if (!res.ok) throw new Error(`${res.status}`);
+      const r = (await res.json()) as ModelBenchResult;
+      toast.success(`${name} 부하 테스트 완료 — ${r.rps} RPS · p95 ${r.p95Ms}ms`);
+      qc.invalidateQueries({ queryKey: ["bench", "model"] });
+    } catch (e) {
+      toast.error(`테스트 실패: ${(e as Error).message}`);
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  return (
+    <Card className="border-brand-indigo-200">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Target className="size-4 text-brand-indigo-600" />
+          배포 모델 부하 테스트
+          <Badge variant="success" className="text-[10px]">실측</Badge>
+        </CardTitle>
+        <CardDescription>
+          현재 Serving 중인 모델에 100회 동시 호출(동시성 10) — 처리량·지연 분포·오류율 실측
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>모델</TableHead>
+              <TableHead className="text-right">RPS</TableHead>
+              <TableHead className="text-right">p50</TableHead>
+              <TableHead className="text-right">p95</TableHead>
+              <TableHead className="text-right">p99</TableHead>
+              <TableHead className="text-right">오류율</TableHead>
+              <TableHead className="text-right">측정 시각</TableHead>
+              <TableHead className="w-28"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {ready.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={8} className="py-6 text-center text-xs text-muted-foreground">
+                  Ready 상태의 배포 모델이 없습니다 — Serving 탭에서 먼저 배포하세요
+                </TableCell>
+              </TableRow>
+            )}
+            {ready.map((s) => {
+              const r = byName.get(s.name);
+              return (
+                <TableRow key={s.id}>
+                  <TableCell>
+                    <span className="font-mono text-xs">{s.name}</span>
+                    <span className="ml-1 text-[10px] text-muted-foreground">({s.modelName})</span>
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">{r?.rps ?? "—"}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">{r ? `${r.p50Ms}ms` : "—"}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">{r ? `${r.p95Ms}ms` : "—"}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">{r ? `${r.p99Ms}ms` : "—"}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {r ? `${(r.errorRate * 100).toFixed(1)}%` : "—"}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">{r?.at ?? "—"}</TableCell>
+                  <TableCell className="text-right">
+                    <Button size="sm" variant="outline" disabled={running === s.name}
+                            onClick={() => run(s.name)}>
+                      {running === s.name ? "측정 중…" : "부하 테스트"}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </CardContent>
