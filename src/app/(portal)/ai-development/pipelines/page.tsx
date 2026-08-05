@@ -27,7 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn, relativeTime } from "@/lib/utils";
 import type { KFPipeline } from "@/lib/types";
-import { KF_ENABLED } from "@/lib/kf";
+import { KF_BASE, KF_ENABLED } from "@/lib/kf";
 
 const PIPELINE_DAG: Record<string, { id: string; name: string; type: "data" | "compute" | "ml" | "deploy"; status: "ok" | "running" | "failed" | "pending" }[]> = {
   "pl-1": [
