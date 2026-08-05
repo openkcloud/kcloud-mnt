@@ -132,6 +132,86 @@ function LiveStat({ label, value }: { label: string; value: string }) {
   );
 }
 
+interface LlmMetrics {
+  model: string; engine: string; node: string; requests: number;
+  ttftMs: number | null; tpotMs: number | null; e2eMs: number | null;
+  tokensPerSec: number | null; promptTokens: number; generationTokens: number;
+  kvCacheUsagePct: number; runningReqs: number;
+}
+
+/** 실측 LLM 추론 지표 — 클러스터에 배포된 vLLM의 표준 메트릭 (TTFT·TPOT·E2E) */
+function LiveLlmCard() {
+  const [testing, setTesting] = React.useState(false);
+  const { data, refetch } = useQuery({
+    queryKey: ["metrics", "llm"],
+    queryFn: async () => {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/metrics/llm`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<LlmMetrics>;
+    },
+    enabled: !!process.env.NEXT_PUBLIC_KF_API,
+    refetchInterval: 5000,
+    retry: false,
+  });
+  if (!process.env.NEXT_PUBLIC_KF_API || !data) return null;
+
+  async function fireTest() {
+    setTesting(true);
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/metrics/llm/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "클라우드에서 GPU를 효율적으로 쓰는 팁을 한 문장으로.", maxTokens: 64 }),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      await res.json();
+      refetch();
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <Card className="border-brand-mint-200">
+      <CardHeader className="flex-row items-center justify-between">
+        <div>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Zap className="size-4 text-brand-mint-600" />
+            실측 LLM 추론 지표
+            <Badge variant="success" className="text-[10px]">LIVE</Badge>
+          </CardTitle>
+          <CardDescription>
+            {data.model} · {data.engine} · {data.node} — 누적 {data.requests}건 평균
+          </CardDescription>
+        </div>
+        <Button size="sm" variant="outline" onClick={fireTest} disabled={testing}>
+          {testing ? "호출 중…" : "테스트 요청 보내기"}
+        </Button>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-3 gap-3 md:grid-cols-6">
+          <LlmStat label="TTFT" hint="첫 토큰까지" value={data.ttftMs != null ? `${data.ttftMs}ms` : "—"} />
+          <LlmStat label="TPOT" hint="토큰당 생성" value={data.tpotMs != null ? `${data.tpotMs}ms` : "—"} />
+          <LlmStat label="E2E 지연" hint="요청→완료" value={data.e2eMs != null ? `${data.e2eMs}ms` : "—"} />
+          <LlmStat label="처리량" hint="tokens/sec" value={data.tokensPerSec != null ? `${data.tokensPerSec}` : "—"} />
+          <LlmStat label="KV Cache" hint="사용률" value={`${data.kvCacheUsagePct}%`} />
+          <LlmStat label="생성 토큰" hint="누적" value={`${data.generationTokens}`} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function LlmStat({ label, hint, value }: { label: string; hint: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-secondary/40 p-3 text-center">
+      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
+      <div className="font-mono text-lg font-bold tabular-nums">{value}</div>
+      <div className="text-[10px] text-muted-foreground">{hint}</div>
+    </div>
+  );
+}
+
 export default function ModelInsightsPage() {
   return (
     <div className="space-y-4">
@@ -165,6 +245,11 @@ export default function ModelInsightsPage() {
 
         {/* ── Inference ── */}
         <TabsContent value="inference" className="mt-4 space-y-4">
+          <LiveLlmCard />
+          <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground">
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">시뮬레이션</span>
+            아래 항목은 대규모 운영 시나리오 예시 데이터입니다 (KV cache 미스 분석 등은 운영 환경 옵저버빌리티 연동 시 실측 전환)
+          </div>
           {/* Davis insight */}
           <Card className="overflow-hidden border-rose-200 bg-gradient-to-br from-rose-50 to-transparent">
             <CardContent className="p-5">
