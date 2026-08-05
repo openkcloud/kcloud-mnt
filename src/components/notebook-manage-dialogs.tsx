@@ -35,6 +35,7 @@ export function SnapshotDialog({
     enabled: !!KF_API && !!nb && open,
   });
 
+  // 스냅샷 id는 "노트북명/시각.tar.gz" 형태 — 경로로 그대로 전달
   async function call(path: string, method: string, okMsg: string) {
     setBusy(true);
     try {
