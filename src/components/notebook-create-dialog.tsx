@@ -87,7 +87,8 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
   const [cpu, setCpu] = React.useState("1");
   const [memoryGi, setMemoryGi] = React.useState("2");
   const [gpu, setGpu] = React.useState("0");
-  const [storageGb, setStorageGb] = React.useState("0");
+  // 볼륨 기본 20GB — 0이면 노트북 재시작 시 작업 파일이 모두 사라진다
+  const [storageGb, setStorageGb] = React.useState("20");
 
   React.useEffect(() => {
     if (!preset) return;
@@ -246,6 +247,19 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
               <Label htmlFor="nb-vol">볼륨 (GB)</Label>
               <Input id="nb-vol" value={storageGb} onChange={(e) => setStorageGb(e.target.value)} />
             </div>
+          </div>
+          <div className={cn(
+            "rounded-md border px-3 py-2 text-[11px]",
+            Number(storageGb) > 0
+              ? "border-brand-mint-200 bg-brand-mint-50 text-brand-mint-800"
+              : "border-rose-200 bg-rose-50 text-rose-800",
+          )}>
+            {Number(storageGb) > 0 ? (
+              <>영구 볼륨 <b>{storageGb}GB</b>가 <code>/home/jovyan</code>에 연결됩니다 — 정지·재시작·장애에도 작업 파일이 보존됩니다.</>
+            ) : (
+              <><b>⚠ 볼륨 없음 — 작업 파일이 저장되지 않습니다.</b> 노트북을 정지하거나 자원을 변경하면
+                업로드한 데이터와 작성한 코드가 모두 사라집니다. 실습·학습용이라면 20GB 이상을 권장합니다.</>
+            )}
           </div>
         </div>
         <DialogFooter>

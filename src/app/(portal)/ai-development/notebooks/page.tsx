@@ -78,8 +78,17 @@ export default function NotebooksPage() {
   };
 
   async function act(nb: KFNotebook, action: "start" | "stop" | "delete") {
+    let keepVolume = false;
+    if (action === "delete") {
+      const hasVolume = nb.storageGb > 0;
+      const msg = hasVolume
+        ? `"${nb.name}" 노트북을 삭제합니다.\n\n[확인] 데이터 볼륨(${nb.storageGb}GB)은 남겨둡니다 — 같은 이름으로 다시 만들면 작업 파일이 복구됩니다.\n[취소] 를 누르면 삭제하지 않습니다.\n\n볼륨까지 완전히 지우려면 삭제 후 관리자에게 문의하세요.`
+        : `"${nb.name}" 노트북을 삭제할까요?\n\n이 노트북에는 볼륨이 없어 저장된 작업 파일이 없습니다.`;
+      if (!window.confirm(msg)) return;
+      keepVolume = hasVolume;
+    }
     try {
-      await notebookAction(nb.id, action);
+      await notebookAction(nb.id, action, { keepVolume });
       toast.success(`"${nb.name}" ${action === "start" ? "시작" : action === "stop" ? "정지" : "삭제"} 요청 완료`);
       qc.invalidateQueries({ queryKey: ["kf", "notebooks"] });
     } catch (e) {

@@ -133,12 +133,13 @@ export function useNotebookConnect(id: string) {
 export async function notebookAction(
   id: string,
   action: "start" | "stop" | "restart" | "delete",
+  opts?: { keepVolume?: boolean },
 ): Promise<void> {
   if (KF_API) {
     const method = action === "delete" ? "DELETE" : "POST";
     const path =
       action === "delete"
-        ? `${KF_API}/api/v1/notebooks/${id}`
+        ? `${KF_API}/api/v1/notebooks/${id}?keepVolume=${opts?.keepVolume ? "true" : "false"}`
         : `${KF_API}/api/v1/notebooks/${id}/${action}`;
     const res = await fetch(path, { method });
     if (!res.ok) throw new Error(`Notebook ${action} failed: ${res.status}`);
