@@ -22,7 +22,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import type { KFExperiment } from "@/lib/types";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 // ─────────────────────────────────────────────────────────────
 // Benchmark 시연 데이터 — ETRI 260615 §6.C.iii 반영
@@ -132,12 +132,13 @@ export default function ExperimentsPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="hw">
+        <TabsContent value="hw" className="space-y-4">
+          <LiveHwBenchmark />
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <Zap className="size-4 text-amber-600" />
-                하드웨어 벤치마크 — MLPerf
+                하드웨어 벤치마크 — MLPerf (참고 자료)
               </CardTitle>
               <CardDescription>
                 이종 AI 가속기(NVIDIA A100/H100·Rebellions REBEL Quad·Furiosa RNGD)의 표준 벤치마크 결과 비교
@@ -231,6 +232,104 @@ export default function ExperimentsPage() {
 
       <CreateExperimentDialog open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// 실측 하드웨어 벤치마크 — 클러스터 GPU에서 직접 실행 (matmul·대역폭)
+// ─────────────────────────────────────────────────────────────
+interface HwBenchResult {
+  node: string;
+  status: string;
+  gpu: string;
+  fp32Tflops: number | null;
+  fp16Tflops: number | null;
+  memBwGbs: number | null;
+  vramGb: number | null;
+}
+
+function LiveHwBenchmark() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ["bench", "hw"],
+    queryFn: async () => {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/benchmarks`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: HwBenchResult[] }>;
+    },
+    enabled: !!process.env.NEXT_PUBLIC_KF_API,
+    refetchInterval: 10000,
+  });
+  if (!process.env.NEXT_PUBLIC_KF_API) return null;
+
+  async function run() {
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/benchmarks/run`, { method: "POST" });
+      if (!res.ok) throw new Error(`${res.status}`);
+      toast.success("벤치마크 실행 시작 — 노드별 GPU Job 생성됨 (약 1분)");
+      qc.invalidateQueries({ queryKey: ["bench", "hw"] });
+    } catch (e) {
+      toast.error(`실행 실패: ${(e as Error).message}`);
+    }
+  }
+
+  return (
+    <Card className="border-brand-mint-200">
+      <CardHeader className="flex-row items-center justify-between">
+        <div>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Zap className="size-4 text-brand-mint-600" />
+            클러스터 GPU 실측 벤치마크
+            <Badge variant="success" className="text-[10px]">실측</Badge>
+          </CardTitle>
+          <CardDescription>
+            현재 클러스터 가속기에서 직접 실행한 결과 — 행렬곱 연산 성능(TFLOPS)·메모리 대역폭
+          </CardDescription>
+        </div>
+        <Button size="sm" onClick={run}>
+          <Zap className="size-3.5" /> 벤치마크 실행
+        </Button>
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>GPU</TableHead>
+              <TableHead>노드</TableHead>
+              <TableHead className="text-right">FP32 (TFLOPS)</TableHead>
+              <TableHead className="text-right">FP16 (TFLOPS)</TableHead>
+              <TableHead className="text-right">메모리 대역폭</TableHead>
+              <TableHead className="text-right">VRAM</TableHead>
+              <TableHead>상태</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(data?.items ?? []).map((b) => (
+              <TableRow key={b.node}>
+                <TableCell className="font-mono text-xs">{b.gpu}</TableCell>
+                <TableCell className="font-mono text-xs">{b.node}</TableCell>
+                <TableCell className="text-right font-mono tabular-nums">{b.fp32Tflops ?? "—"}</TableCell>
+                <TableCell className="text-right font-mono tabular-nums">{b.fp16Tflops ?? "—"}</TableCell>
+                <TableCell className="text-right font-mono tabular-nums">{b.memBwGbs ? `${b.memBwGbs} GB/s` : "—"}</TableCell>
+                <TableCell className="text-right font-mono tabular-nums">{b.vramGb ? `${b.vramGb} GB` : "—"}</TableCell>
+                <TableCell>
+                  <Badge variant={b.status === "Done" ? "success" : b.status === "Failed" ? "destructive" : "warning"}>
+                    {b.status}
+                  </Badge>
+                </TableCell>
+              </TableRow>
+            ))}
+            {(data?.items ?? []).length === 0 && (
+              <TableRow>
+                <TableCell colSpan={7} className="py-6 text-center text-xs text-muted-foreground">
+                  아직 실측 결과가 없습니다 — &quot;벤치마크 실행&quot;을 눌러주세요
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 
