@@ -316,7 +316,9 @@ export default function NotebooksPage() {
                       <Badge variant="success" className="text-[10px]">권장</Badge>
                     )}
                     {!tpl.preset && (
-                      <Badge variant="secondary" className="text-[10px]">이미지 준비 중</Badge>
+                      <Badge variant="secondary" className="text-[10px]">
+                        {tpl.unavailableNote ?? "하드웨어 도입 후 제공"}
+                      </Badge>
                     )}
                   </div>
                   <div className="text-xs text-muted-foreground">{tpl.description}</div>
@@ -400,8 +402,10 @@ const IMAGE_CATALOG: {
   icon: React.ComponentType<{ className?: string }>;
   color: string;
   recommended?: boolean;
-  /** 실제 생성 가능한 템플릿 프리셋 — 없으면 이미지 준비 중 (NPU/PIM 등) */
+  /** 실제 생성 가능한 템플릿 프리셋 — 없으면 해당 가속기 하드웨어 미도입 */
   preset?: NotebookPreset;
+  /** 미제공 사유 배지 문구 */
+  unavailableNote?: string;
 }[] = [
   {
     name: "Kubeflow Code Server (Python)",
@@ -426,6 +430,7 @@ const IMAGE_CATALOG: {
     tags: ["rbln-sdk 1.4.0", "PyTorch", "ATOM"],
     icon: Cpu,
     color: "bg-brand-mint-50 text-brand-mint-700",
+    unavailableNote: "ATOM NPU 도입 후 제공",
   },
   {
     name: "RBLN REBEL Quad SDK",
@@ -433,6 +438,7 @@ const IMAGE_CATALOG: {
     tags: ["rbln-sdk 1.4.0", "vLLM", "REBEL"],
     icon: Cpu,
     color: "bg-brand-mint-50 text-brand-mint-700",
+    unavailableNote: "REBEL NPU 도입 후 제공",
   },
   {
     name: "CUDA 12.4 Training",
@@ -448,5 +454,6 @@ const IMAGE_CATALOG: {
     tags: ["pim-sdk 0.7", "beta", "GEMV"],
     icon: Cpu,
     color: "bg-rose-100 text-rose-700",
+    unavailableNote: "HBM-PIM 도입 후 제공",
   },
 ];
