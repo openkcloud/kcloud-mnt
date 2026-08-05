@@ -229,9 +229,9 @@ export default function NotebooksPage() {
                           </Link>
                         </Button>
                         <Button size="sm" asChild>
-                          <Link href={`/notebooks/${nb.id}/ide`}>
+                          <a href={`/notebooks/${nb.id}/ide`} target="_blank" rel="noopener noreferrer">
                             연결 <ExternalLink className="size-3" />
-                          </Link>
+                          </a>
                         </Button>
                       </>
                     ) : nb.status === "Stopped" ? (

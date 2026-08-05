@@ -158,9 +158,9 @@ export default function NotebookDetailPage() {
             <Square className="size-3.5" /> 정지
           </Button>
           <Button size="sm" asChild>
-            <Link href={`/notebooks/${nb.id}/ide`}>
-              <TerminalSquare className="size-3.5" /> Code Server 열기
-            </Link>
+            <a href={`/notebooks/${nb.id}/ide`} target="_blank" rel="noopener noreferrer">
+              <TerminalSquare className="size-3.5" /> 개발환경 열기
+            </a>
           </Button>
         </div>
       </div>
