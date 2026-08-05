@@ -33,6 +33,7 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
 import { cn } from "@/lib/utils";
+import { useQuery } from "@tanstack/react-query";
 
 // ─── Pipeline stage breakdown ───
 const PIPELINE_STAGES = [
@@ -70,9 +71,72 @@ const HOTSPOTS = [
   { component: "Tokenizer (BPE)", hostMs: 12, gpu: "CPU", reason: "single-thread bottleneck" },
 ];
 
+interface GpuMetric {
+  node: string;
+  gpu: string;
+  utilPct: number;
+  memUsedMb: number;
+  memTotalMb: number;
+  tempC: number;
+  powerW: number;
+}
+
+/** 실측 GPU 상태 스트립 — 클러스터 양쪽 노드의 nvidia-smi 라이브 (3s 폴링) */
+function LiveGpuStrip() {
+  const { data } = useQuery({
+    queryKey: ["metrics", "gpu"],
+    queryFn: async () => {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/metrics/gpu`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: GpuMetric[] }>;
+    },
+    enabled: !!process.env.NEXT_PUBLIC_KF_API,
+    refetchInterval: 3000,
+  });
+  if (!process.env.NEXT_PUBLIC_KF_API || !data) return null;
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      {data.items.map((g) => (
+        <Card key={g.node} className="p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="size-2 animate-pulse rounded-full bg-brand-mint-500" />
+                <span className="text-sm font-semibold">{g.gpu}</span>
+              </div>
+              <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                node/{g.node} · 실측 (nvidia-smi)
+              </div>
+            </div>
+            <Badge variant="success" className="font-mono text-[10px]">LIVE</Badge>
+          </div>
+          <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+            <LiveStat label="사용률" value={`${g.utilPct}%`} />
+            <LiveStat label="VRAM" value={`${(g.memUsedMb / 1024).toFixed(1)}/${(g.memTotalMb / 1024).toFixed(0)}GB`} />
+            <LiveStat label="온도" value={`${g.tempC}°C`} />
+            <LiveStat label="전력" value={`${Math.round(g.powerW)}W`} />
+          </div>
+          <Progress value={g.utilPct} className="mt-2 h-1.5" />
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function LiveStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
+      <div className="font-mono text-sm font-bold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
 export default function ModelInsightsPage() {
   return (
     <div className="space-y-4">
+      {/* 실측 GPU 라이브 */}
+      <LiveGpuStrip />
       {/* Intro */}
       <Card className="border-sky-200 bg-gradient-to-br from-sky-50/60 to-transparent">
         <CardContent className="flex items-start gap-3 p-4">
