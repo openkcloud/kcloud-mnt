@@ -21,6 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { createNotebook, KF_API } from "@/lib/notebook-api";
+import { useQuery } from "@tanstack/react-query";
+import { cn } from "@/lib/utils";
 
 /** 실제 pull 가능한 노트북 이미지 템플릿 (Kubeflow 공식 이미지) */
 export const NOTEBOOK_TEMPLATES = [
@@ -60,7 +62,24 @@ interface Props {
   preset?: NotebookPreset;
 }
 
+interface GpuAvailability {
+  total: number;
+  used: number;
+  available: number;
+  holders: { name: string; namespace: string; count: number }[];
+}
+
 export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }: Props) {
+  const { data: avail } = useQuery({
+    queryKey: ["gpu-availability"],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/resources/gpu-availability`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<GpuAvailability>;
+    },
+    enabled: !!KF_API && open,
+    refetchInterval: open ? 5000 : false,
+  });
   const qc = useQueryClient();
   const [name, setName] = React.useState("");
   const [namespace, setNamespace] = React.useState(namespaces[0] ?? "ai-research");
@@ -155,6 +174,25 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
             </div>
           </div>
           <p className="text-xs text-muted-foreground">{tpl.hint}</p>
+          {avail && (
+            <div className={cn(
+              "rounded-md border px-3 py-2 text-[11px]",
+              avail.available > 0
+                ? "border-brand-mint-200 bg-brand-mint-50 text-brand-mint-800"
+                : "border-amber-200 bg-amber-50 text-amber-800",
+            )}>
+              {avail.available > 0 ? (
+                <>클러스터 GPU <b>{avail.available}장 여유</b> (전체 {avail.total}장 중 {avail.used}장 사용 중)</>
+              ) : (
+                <>
+                  <b>GPU {avail.total}장 모두 사용 중</b> — 지금 GPU를 요청하면 자리가 날 때까지 대기 상태가 됩니다.
+                  {avail.holders.length > 0 && (
+                    <> 사용 중: {avail.holders.map((h) => h.name.replace(/-0$/, "")).join(", ")}</>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-4 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="nb-cpu">vCPU</Label>
@@ -165,12 +203,16 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
               <Input id="nb-mem" value={memoryGi} onChange={(e) => setMemoryGi(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>GPU</Label>
+              <Label>GPU {avail && <span className="text-[10px] font-normal text-muted-foreground">({avail.available}/{avail.total} 여유)</span>}</Label>
               <Select value={gpu} onValueChange={setGpu}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="0">없음</SelectItem>
-                  <SelectItem value="1">1장</SelectItem>
+                  <SelectItem value="0">사용 안 함</SelectItem>
+                  {Array.from({ length: avail?.total ?? 1 }, (_, i) => i + 1).map((n) => (
+                    <SelectItem key={n} value={String(n)} disabled={!!avail && n > avail.available}>
+                      {n}장 요청{avail && n > avail.available ? " (여유 없음)" : ""}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
