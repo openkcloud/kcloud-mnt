@@ -116,6 +116,17 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
 
   const tpl = NOTEBOOK_TEMPLATES.find((t) => t.key === template) ?? NOTEBOOK_TEMPLATES[0];
   const valid = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name);
+  // 이름이 왜 안 되는지 사용자에게 알려준다 (버튼만 비활성이면 원인을 알 수 없음)
+  const nameError =
+    name.trim() === ""
+      ? ""
+      : /[A-Z]/.test(name)
+        ? "대문자는 사용할 수 없습니다 — 소문자로 입력하세요"
+        : /[^a-z0-9-]/.test(name)
+          ? "영문 소문자·숫자·하이픈(-)만 사용할 수 있습니다 (한글·공백·밑줄 불가)"
+          : !valid
+            ? "이름은 영문/숫자로 시작하고 끝나야 합니다"
+            : "";
 
   function submit() {
     if (!KF_API) {
@@ -152,7 +163,15 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
               placeholder="예: my-training-nb (소문자·숫자·하이픈)"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              aria-invalid={!!nameError}
             />
+            {nameError ? (
+              <p className="text-[11px] text-rose-600">{nameError}</p>
+            ) : name.trim() === "" ? (
+              <p className="text-[11px] text-muted-foreground">
+                이름을 입력하면 생성 버튼이 활성화됩니다
+              </p>
+            ) : null}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
