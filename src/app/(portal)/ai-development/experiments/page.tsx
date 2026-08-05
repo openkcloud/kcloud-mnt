@@ -22,6 +22,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import type { KFExperiment } from "@/lib/types";
+import { useQueryClient } from "@tanstack/react-query";
 
 // ─────────────────────────────────────────────────────────────
 // Benchmark 시연 데이터 — ETRI 260615 §6.C.iii 반영
@@ -245,13 +246,48 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
   const [maxTrials, setMaxTrials] = React.useState("50");
   const [algorithm, setAlgorithm] = React.useState<"random" | "bayesian" | "grid" | "hyperband" | "tpe">("bayesian");
 
-  const submit = () => {
+  const qc = useQueryClient();
+  const [busy, setBusy] = React.useState(false);
+
+  const submit = async () => {
     if (!name.trim()) return;
-    toast.success(`HPO 실험 '${name}' 등록됨`, {
-      description: `${algorithm} · ${objective} ${metric} → ${goal} · 최대 ${maxTrials}회 시도`,
-    });
-    setName("");
-    onClose();
+    if (!process.env.NEXT_PUBLIC_KF_API) {
+      toast.success(`HPO 실험 '${name}' 등록됨 (mock)`, {
+        description: `${algorithm} · ${objective} ${metric} → ${goal} · 최대 ${maxTrials}회 시도`,
+      });
+      onClose();
+      return;
+    }
+    setBusy(true);
+    try {
+      const algoMap: Record<string, string> = {
+        bayesian: "bayesianoptimization", tpe: "tpe", random: "random",
+        grid: "grid", hyperband: "hyperband",
+      };
+      const res = await fetch(`${process.env.NEXT_PUBLIC_KF_API}/api/v1/experiments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          namespace: "ai-research",
+          metric,
+          objectiveType: objective,
+          goal: Number(goal),
+          algorithm: algoMap[algorithm],
+          maxTrials: Number(maxTrials),
+          parallelTrials: 2,
+        }),
+      });
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      toast.success(`HPO 실험 '${name}' 시작 — Trial 실행 중`);
+      qc.invalidateQueries({ queryKey: ["kf", "experiments"] });
+      setName("");
+      onClose();
+    } catch (e) {
+      toast.error(`실험 등록 실패: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -327,7 +363,7 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button onClick={submit}>실험 등록</Button>
+          <Button onClick={submit} disabled={busy}>{busy ? "등록 중…" : "실험 등록"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

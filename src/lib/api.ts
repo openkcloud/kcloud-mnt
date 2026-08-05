@@ -86,7 +86,17 @@ export const api = {
           ),
         refetchInterval: process.env.NEXT_PUBLIC_KF_API ? 10000 : false,
       }),
-    experiments: () => useQuery({ queryKey: ["kf", "experiments"], queryFn: () => get("/api/kubeflow/experiments") }),
+    experiments: () =>
+      useQuery({
+        queryKey: ["kf", "experiments"],
+        queryFn: () =>
+          get(
+            process.env.NEXT_PUBLIC_KF_API
+              ? `${process.env.NEXT_PUBLIC_KF_API}/api/v1/experiments`
+              : "/api/kubeflow/experiments",
+          ),
+        refetchInterval: process.env.NEXT_PUBLIC_KF_API ? 5000 : false,
+      }),
     serving: () => useQuery({ queryKey: ["kf", "serving"], queryFn: () => get("/api/kubeflow/serving") }),
   },
   resourceMap: {
