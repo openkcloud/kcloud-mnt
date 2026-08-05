@@ -34,6 +34,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
+import { MessageSquare } from "lucide-react";
+import { LlmChatDialog } from "@/components/llm-chat-dialog";
 
 // ─── Pipeline stage breakdown ───
 const PIPELINE_STAGES = [
@@ -142,6 +144,7 @@ interface LlmMetrics {
 /** 실측 LLM 추론 지표 — 클러스터에 배포된 vLLM의 표준 메트릭 (TTFT·TPOT·E2E) */
 function LiveLlmCard() {
   const [testing, setTesting] = React.useState(false);
+  const [chatOpen, setChatOpen] = React.useState(false);
   const { data, refetch } = useQuery({
     queryKey: ["metrics", "llm"],
     queryFn: async () => {
@@ -184,9 +187,16 @@ function LiveLlmCard() {
             {data.model} · {data.engine} · {data.node} — 누적 {data.requests}건 평균
           </CardDescription>
         </div>
-        <Button size="sm" variant="outline" onClick={fireTest} disabled={testing}>
-          {testing ? "호출 중…" : "테스트 요청 보내기"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={fireTest} disabled={testing}>
+            {testing ? "호출 중…" : "테스트 요청 보내기"}
+          </Button>
+          <Button size="sm" onClick={() => setChatOpen(true)}>
+            <MessageSquare className="size-3.5" /> AI와 대화하기
+          </Button>
+        </div>
+        <LlmChatDialog open={chatOpen} onOpenChange={(o) => { setChatOpen(o); if (!o) refetch(); }}
+                       model={data.model} node={data.node} />
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-3 gap-3 md:grid-cols-6">
