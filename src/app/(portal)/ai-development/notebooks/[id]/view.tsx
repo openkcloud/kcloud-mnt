@@ -33,8 +33,13 @@ import {
 import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
 import { relativeTime } from "@/lib/utils";
 import type { KFNotebook } from "@/lib/types";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { notebookAction } from "@/lib/notebook-api";
 
-const FILES = [
+const KF_API = process.env.NEXT_PUBLIC_KF_API;
+
+const MOCK_FILES = [
   { name: "train.py", size: "12.4 KB", modified: "2026-05-31T14:22" },
   { name: "data_loader.py", size: "4.8 KB", modified: "2026-05-30T19:15" },
   { name: "config.yaml", size: "1.2 KB", modified: "2026-05-29T11:42" },
@@ -43,21 +48,78 @@ const FILES = [
   { name: "logs/", size: "—", modified: "2026-05-31T14:31" },
 ];
 
+interface WsFile { name: string; size: string; modified: string }
+
+/** 실측 파일 목록 (KF_API 모드) — 숨김 파일 제외 */
+function useWorkspaceFiles(id: string) {
+  return useQuery({
+    queryKey: ["nb-files", id],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/notebooks/${id}/files`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      const json = (await res.json()) as { items: WsFile[] };
+      return json.items.filter((f) => !f.name.startsWith("."));
+    },
+    enabled: !!KF_API,
+    refetchInterval: 15000,
+  });
+}
+
+/** 실측 리소스 샘플러 — 3초마다 CPU(mCore)·MEM(MiB) 수집, 최근 30개 유지 */
+function useLiveStats(id: string) {
+  const [samples, setSamples] = React.useState<{ t: string; cpu: number; mem: number }[]>([]);
+  const { data } = useQuery({
+    queryKey: ["nb-stats", id],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/notebooks/${id}/stats`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ cpuMilli: number; memMi: number }>;
+    },
+    enabled: !!KF_API,
+    refetchInterval: 3000,
+  });
+  React.useEffect(() => {
+    if (!data) return;
+    const t = new Date().toLocaleTimeString("ko-KR", { hour12: false, minute: "2-digit", second: "2-digit" });
+    setSamples((prev) => [...prev.slice(-29), { t, cpu: data.cpuMilli, mem: data.memMi }]);
+  }, [data]);
+  return samples;
+}
+
 export default function NotebookDetailPage() {
   const params = useParams<{ id: string }>();
   const { data, isLoading } = api.kubeflow.notebooks() as {
     data: { items: KFNotebook[] } | undefined;
     isLoading: boolean;
   };
+  const liveSeries = useLiveStats(params.id);
+  const { data: filesData } = useWorkspaceFiles(params.id);
+  const qc = useQueryClient();
+
+  async function act(action: "stop" | "restart") {
+    try {
+      await notebookAction(params.id, action);
+      toast.success(`${action === "stop" ? "정지" : "재시작"} 요청 완료`);
+      qc.invalidateQueries({ queryKey: ["kf", "notebooks"] });
+    } catch (e) {
+      toast.error(`요청 실패: ${(e as Error).message}`);
+    }
+  }
+
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const nb = data.items.find((n) => n.id === params.id);
   if (!nb) return <div>찾을 수 없습니다.</div>;
 
-  const series = Array.from({ length: 30 }, (_, i) => ({
+  const mockSeries = Array.from({ length: 30 }, (_, i) => ({
     t: `${(14 - Math.floor(i / 6)).toString().padStart(2, "0")}:${(((30 - i) * 2) % 60).toString().padStart(2, "0")}`,
     gpu: 35 + Math.round(Math.sin(i / 3) * 25 + (i % 4) * 5),
     mem: 40 + Math.round(Math.cos(i / 4) * 18 + (i % 5) * 3),
   }));
+  const live = !!KF_API;
+  const series = live
+    ? liveSeries.map((s) => ({ t: s.t, gpu: s.cpu, mem: s.mem }))
+    : mockSeries;
+  const files = live ? (filesData ?? []) : MOCK_FILES;
 
   return (
     <div className="space-y-4">
@@ -89,10 +151,10 @@ export default function NotebookDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => act("restart")}>
             <RefreshCw className="size-3.5" /> 재시작
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => act("stop")}>
             <Square className="size-3.5" /> 정지
           </Button>
           <Button size="sm" asChild>
@@ -107,16 +169,16 @@ export default function NotebookDetailPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>리소스 사용량 (실시간)</CardTitle>
+            <CardTitle>리소스 사용량 {live && <Badge variant="success" className="ml-1 text-[10px]">실측</Badge>}</CardTitle>
             <CardDescription>
-              마지막 60분간 가속기·메모리 사용률
+              {live ? "metrics-server 실측 — CPU(mCore)·메모리(MiB), 3초 주기" : "마지막 60분간 가속기·메모리 사용률"}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <ChartContainer
               config={{
-                gpu: { label: nb.acceleratorKind ?? "Accelerator", color: "var(--brand-mint-500)" },
-                mem: { label: "Memory", color: "var(--brand-indigo-500)" },
+                gpu: { label: live ? "CPU (mCore)" : nb.acceleratorKind ?? "Accelerator", color: "var(--brand-mint-500)" },
+                mem: { label: live ? "MEM (MiB)" : "Memory", color: "var(--brand-indigo-500)" },
               }}
               className="h-[200px] w-full"
             >
@@ -133,7 +195,7 @@ export default function NotebookDetailPage() {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="t" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => (live ? `${v}` : `${v}%`)} />
                 <Tooltip content={<ChartTooltipContent indicator="line" />} />
                 <Area type="monotone" dataKey="gpu" stroke="var(--brand-mint-500)" strokeWidth={2} fill="url(#g1)" />
                 <Area type="monotone" dataKey="mem" stroke="var(--brand-indigo-500)" strokeWidth={2} fill="url(#g2)" />
@@ -188,13 +250,20 @@ export default function NotebookDetailPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <HardDrive className="size-4" />
-                /home/kubeflow
+                /home/jovyan
               </CardTitle>
-              <CardDescription>PVC 마운트 — {nb.storageGb} GiB</CardDescription>
+              <CardDescription>
+                {live ? "작업공간 실측 파일 목록 (15초 갱신)" : `PVC 마운트 — ${nb.storageGb} GiB`}
+              </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               <div className="divide-y divide-border">
-                {FILES.map((f) => (
+                {files.length === 0 && (
+                  <div className="px-5 py-6 text-center text-xs text-muted-foreground">
+                    작업공간이 비어있습니다
+                  </div>
+                )}
+                {files.map((f) => (
                   <div key={f.name} className="flex items-center gap-3 px-5 py-2.5 hover:bg-secondary/30">
                     {f.name.endsWith("/") ? (
                       <Folder className="size-4 text-brand-indigo-600" />
