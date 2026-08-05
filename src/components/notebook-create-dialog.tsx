@@ -98,6 +98,11 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
     if (preset.storageGb !== undefined) setStorageGb(String(preset.storageGb));
   }, [preset]);
 
+  // 여유 GPU보다 많이 선택돼 있으면 자동으로 낮춘다 (프리셋이 GPU 1장인데 여유 0인 경우 등)
+  React.useEffect(() => {
+    if (avail && Number(gpu) > avail.available) setGpu(String(avail.available));
+  }, [avail, gpu]);
+
   const create = useMutation({
     mutationFn: createNotebook,
     onSuccess: () => {
@@ -185,10 +190,12 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
                 <>클러스터 GPU <b>{avail.available}장 여유</b> (전체 {avail.total}장 중 {avail.used}장 사용 중)</>
               ) : (
                 <>
-                  <b>GPU {avail.total}장 모두 사용 중</b> — 지금 GPU를 요청하면 자리가 날 때까지 대기 상태가 됩니다.
+                  <b>GPU {avail.total}장 모두 사용 중</b>
                   {avail.holders.length > 0 && (
-                    <> 사용 중: {avail.holders.map((h) => h.name.replace(/-0$/, "")).join(", ")}</>
+                    <> ({avail.holders.map((h) => h.name.replace(/-0$/, "")).join(", ")} 사용)</>
                   )}
+                  {" — "}<b>GPU 없이(CPU) 바로 생성됩니다.</b> GPU가 필요하면 다른 노트북을 정지한 뒤
+                  이 노트북의 &quot;리소스 변경&quot;으로 나중에 추가할 수 있습니다.
                 </>
               )}
             </div>
