@@ -66,7 +66,11 @@ interface GpuAvailability {
   total: number;
   used: number;
   available: number;
-  holders: { name: string; namespace: string; count: number }[];
+  /** 한 워크로드가 요청할 수 있는 최대 장수 — 노드 한 대의 여유가 상한이다 */
+  maxPerPod: number;
+  maxPerNode: number;
+  perNode: { node: string; total: number; used: number; free: number }[];
+  holders: { name: string; namespace: string; node?: string; count: number }[];
 }
 
 interface Quota { used: number; limit: number }
@@ -121,7 +125,7 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
 
   // 여유 GPU보다 많이 선택돼 있으면 자동으로 낮춘다 (프리셋이 GPU 1장인데 여유 0인 경우 등)
   React.useEffect(() => {
-    if (avail && Number(gpu) > avail.available) setGpu(String(avail.available));
+    if (avail && Number(gpu) > avail.maxPerPod) setGpu(String(avail.maxPerPod));
   }, [avail, gpu]);
 
   const create = useMutation({
@@ -144,7 +148,9 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
     storage: prof.storageQuota.limit - prof.storageQuota.used,
   };
   // GPU는 워크스페이스 몫과 클러스터 여유 중 작은 쪽까지만 가능하다
-  const gpuMax = Math.min(avail?.available ?? 0, left ? Math.floor(left.gpu) : 0);
+  // 노드 한 대가 감당할 수 있는 만큼만 고를 수 있다.
+  // (클러스터에 2장이 남아도 서로 다른 장비에 있으면 2장짜리는 못 뜬다)
+  const gpuMax = Math.min(avail?.maxPerPod ?? 0, left ? Math.floor(left.gpu) : 0);
 
   const overs: string[] = [];
   if (left) {
@@ -257,7 +263,16 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
                 : "border-amber-200 bg-amber-50 text-amber-800",
             )}>
               {avail.available > 0 ? (
-                <>클러스터 GPU <b>{avail.available}장 여유</b> (전체 {avail.total}장 중 {avail.used}장 사용 중)</>
+                <>
+                  클러스터 GPU <b>{avail.available}장 여유</b> (전체 {avail.total}장 중 {avail.used}장 사용 중)
+                  {avail.perNode.length > 1 && (
+                    <div className="mt-0.5">
+                      {avail.perNode.map((n) => `${n.node} ${n.free}/${n.total}장`).join(" · ")}
+                      {" — "}한 노트북은 장비 한 대 안에서만 돌기 때문에
+                      <b> 최대 {avail.maxPerPod}장</b>까지 지정할 수 있습니다.
+                    </div>
+                  )}
+                </>
               ) : (
                 <>
                   <b>GPU {avail.total}장 모두 사용 중</b>
@@ -285,7 +300,7 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="0">사용 안 함</SelectItem>
-                  {Array.from({ length: avail?.total ?? 1 }, (_, i) => i + 1).map((n) => (
+                  {Array.from({ length: avail?.maxPerNode ?? 1 }, (_, i) => i + 1).map((n) => (
                     <SelectItem key={n} value={String(n)} disabled={!!avail && n > gpuMax}>
                       {n}장 요청
                       {avail && n > gpuMax

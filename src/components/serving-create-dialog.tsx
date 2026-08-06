@@ -66,13 +66,15 @@ export function ServingCreateDialog({
     queryFn: async () => {
       const res = await fetch(`${KF_BASE}/api/v1/resources/gpu-availability`);
       if (!res.ok) throw new Error(`${res.status}`);
-      return res.json() as Promise<{ total: number; used: number; available: number }>;
+      return res.json() as Promise<{ total: number; used: number; available: number;
+                                     maxPerPod: number; maxPerNode: number }>;
     },
     enabled: KF_ENABLED && open,
     refetchInterval: 10000,
     retry: false,
   });
-  const freeGpu = gpuInfo?.available ?? null;
+  // 한 서비스는 장비 한 대 안에서 돌기 때문에 노드 여유가 상한이다
+  const freeGpu = gpuInfo?.maxPerPod ?? null;
 
   const { data: models } = useQuery({
     queryKey: ["kf", "models"],
@@ -281,8 +283,10 @@ export function ServingCreateDialog({
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="0">사용 안 함</SelectItem>
-                  <SelectItem value="1">1장</SelectItem>
-                  <SelectItem value="2">2장</SelectItem>
+                  {Array.from({ length: gpuInfo?.maxPerNode ?? 1 }, (_, i) => i + 1)
+                    .map((n) => (
+                      <SelectItem key={n} value={String(n)}>{n}장</SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>

@@ -44,7 +44,8 @@ function ResourceForm({
     queryFn: async () => {
       const res = await fetch(`${KF_BASE}/api/v1/resources/gpu-availability`);
       if (!res.ok) throw new Error(`${res.status}`);
-      return res.json() as Promise<{ total: number; used: number; available: number }>;
+      return res.json() as Promise<{ total: number; used: number; available: number;
+                                     maxPerPod: number; maxPerNode: number }>;
     },
     enabled: KF_ENABLED,
     refetchInterval: 10000,
@@ -53,7 +54,7 @@ function ResourceForm({
 
   const current = service.gpu ?? 0;
   // 이미 이 서비스가 쓰고 있는 GPU는 여유분에 더해서 계산한다
-  const freeGpu = gpuInfo ? gpuInfo.available + current : null;
+  const freeGpu = gpuInfo ? gpuInfo.maxPerPod + current : null;
   const changed =
     cpu !== (service.cpu || "1") || memoryGi !== (service.memoryGi || 1)
     || gpu !== current;
@@ -114,8 +115,10 @@ function ResourceForm({
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="0">사용 안 함</SelectItem>
-                  <SelectItem value="1">1장</SelectItem>
-                  <SelectItem value="2">2장</SelectItem>
+                  {Array.from({ length: gpuInfo?.maxPerNode ?? 1 }, (_, i) => i + 1)
+                    .map((n) => (
+                      <SelectItem key={n} value={String(n)}>{n}장</SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
