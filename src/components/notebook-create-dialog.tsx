@@ -69,6 +69,15 @@ interface GpuAvailability {
   holders: { name: string; namespace: string; count: number }[];
 }
 
+interface Quota { used: number; limit: number }
+interface ProfileQuota {
+  name: string;
+  cpuQuota: Quota;
+  memQuota: Quota;
+  accQuota: Quota;
+  storageQuota: Quota;
+}
+
 export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }: Props) {
   const { data: avail } = useQuery({
     queryKey: ["gpu-availability"],
@@ -79,6 +88,17 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
     },
     enabled: !!KF_API && open,
     refetchInterval: open ? 5000 : false,
+  });
+  // 워크스페이스(Profile)에 배정된 한도 — 초과하면 만들어져도 파드가 뜨지 않는다
+  const { data: profiles } = useQuery({
+    queryKey: ["kf", "profiles", "quota"],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/profiles`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: ProfileQuota[] }>;
+    },
+    enabled: !!KF_API && open,
+    refetchInterval: open ? 10000 : false,
   });
   const qc = useQueryClient();
   const [name, setName] = React.useState("");
@@ -114,6 +134,26 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
     },
     onError: (e: Error) => toast.error(`생성 실패: ${e.message}`),
   });
+
+  // 고른 워크스페이스의 남은 몫 — 이 범위를 넘으면 파드가 뜨지 못한다
+  const prof = profiles?.items.find((p) => p.name === namespace);
+  const left = prof && {
+    cpu: prof.cpuQuota.limit - prof.cpuQuota.used,
+    mem: prof.memQuota.limit - prof.memQuota.used,
+    gpu: prof.accQuota.limit - prof.accQuota.used,
+    storage: prof.storageQuota.limit - prof.storageQuota.used,
+  };
+  // GPU는 워크스페이스 몫과 클러스터 여유 중 작은 쪽까지만 가능하다
+  const gpuMax = Math.min(avail?.available ?? 0, left ? Math.floor(left.gpu) : 0);
+
+  const overs: string[] = [];
+  if (left) {
+    if (Number(cpu) > left.cpu) overs.push(`vCPU ${cpu}개 (남은 몫 ${left.cpu}개)`);
+    if (Number(memoryGi) > left.mem) overs.push(`메모리 ${memoryGi}GB (남은 몫 ${left.mem}GB)`);
+    if (Number(storageGb) > left.storage) overs.push(`볼륨 ${storageGb}GB (남은 몫 ${left.storage}GB)`);
+    if (Number(gpu) > left.gpu) overs.push(`GPU ${gpu}장 (남은 몫 ${left.gpu}장)`);
+  }
+  const quotaError = overs.length > 0;
 
   const tpl = NOTEBOOK_TEMPLATES.find((t) => t.key === template) ?? NOTEBOOK_TEMPLATES[0];
   const valid = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name);
@@ -199,6 +239,16 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
             </div>
           </div>
           <p className="text-xs text-muted-foreground">{tpl.hint}</p>
+          {left && (
+            <div className="rounded-md border border-border bg-secondary/40 px-3 py-2 text-[11px]">
+              <b>{namespace}</b> 워크스페이스에 남은 몫 —
+              vCPU <b>{left.cpu}</b>개 · 메모리 <b>{left.mem}</b>GB ·
+              GPU <b>{left.gpu}</b>장 · 볼륨 <b>{left.storage}</b>GB
+              <div className="mt-0.5 text-muted-foreground">
+                이 범위를 넘으면 노트북이 만들어져도 실행되지 않습니다.
+              </div>
+            </div>
+          )}
           {avail && (
             <div className={cn(
               "rounded-md border px-3 py-2 text-[11px]",
@@ -236,8 +286,11 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
                 <SelectContent>
                   <SelectItem value="0">사용 안 함</SelectItem>
                   {Array.from({ length: avail?.total ?? 1 }, (_, i) => i + 1).map((n) => (
-                    <SelectItem key={n} value={String(n)} disabled={!!avail && n > avail.available}>
-                      {n}장 요청{avail && n > avail.available ? " (여유 없음)" : ""}
+                    <SelectItem key={n} value={String(n)} disabled={!!avail && n > gpuMax}>
+                      {n}장 요청
+                      {avail && n > gpuMax
+                        ? (left && n > left.gpu ? " (워크스페이스 몫 초과)" : " (여유 없음)")
+                        : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -261,10 +314,18 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
                 업로드한 데이터와 작성한 코드가 모두 사라집니다. 실습·학습용이라면 20GB 이상을 권장합니다.</>
             )}
           </div>
+          {quotaError && (
+            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-800">
+              <b>워크스페이스에 배정된 몫을 넘습니다</b> — {overs.join(", ")}.
+              <div className="mt-0.5">
+                값을 줄이거나, Profiles 화면에서 <b>{namespace}</b>의 한도를 늘린 뒤 다시 시도하세요.
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>취소</Button>
-          <Button onClick={submit} disabled={!valid || create.isPending}>
+          <Button onClick={submit} disabled={!valid || quotaError || create.isPending}>
             {create.isPending ? "생성 중…" : "생성"}
           </Button>
         </DialogFooter>

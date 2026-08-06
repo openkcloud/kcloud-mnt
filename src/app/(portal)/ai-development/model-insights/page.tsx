@@ -25,11 +25,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
 import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare } from "lucide-react";
-import { LlmChatDialog } from "@/components/llm-chat-dialog";
 import { KF_BASE, KF_ENABLED } from "@/lib/kf";
 
 // ─── Pipeline stage breakdown ───
@@ -96,13 +97,6 @@ function LiveStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-interface LlmMetrics {
-  model: string; engine: string; node: string; requests: number;
-  ttftMs: number | null; tpotMs: number | null; e2eMs: number | null;
-  tokensPerSec: number | null; promptTokens: number; generationTokens: number;
-  kvCacheUsagePct: number; runningReqs: number;
-}
-
 interface LlmDetail {
   model: string;
   requests: number;
@@ -120,10 +114,11 @@ interface LlmDetail {
 }
 
 function useLlmDetail() {
+  const svc = useLlm();
   return useQuery({
-    queryKey: ["metrics", "llm-detail"],
+    queryKey: ["metrics", "llm-detail", svc],
     queryFn: async () => {
-      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/detail`);
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/detail${svcQ(svc)}`);
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json() as Promise<LlmDetail>;
     },
@@ -334,10 +329,11 @@ function LiveServingMetrics() {
 
 /** 실측 병목 소견 — 살아있는 지표에 규칙을 적용해 자동 생성 (임의 수치 없음) */
 function LiveInsights() {
+  const svc = useLlm();
   const { data } = useQuery({
-    queryKey: ["metrics", "llm-insights"],
+    queryKey: ["metrics", "llm-insights", svc],
     queryFn: async () => {
-      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/insights`);
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/insights${svcQ(svc)}`);
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json() as Promise<{
         sloP99Ms: number; model: string; at: string; items: InsightItem[];
@@ -422,11 +418,12 @@ function LiveInsights() {
 
 /** 실측 핫스팟 — vLLM 내장 torch profiler를 필요할 때만 켜서 연산별 시간 측정 */
 function LiveHotspots() {
+  const svc = useLlm();
   const qc = useQueryClient();
   const { data: st } = useQuery({
-    queryKey: ["metrics", "llm-profile"],
+    queryKey: ["metrics", "llm-profile", svc],
     queryFn: async () => {
-      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/profile`);
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/profile${svcQ(svc)}`);
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json() as Promise<ProfileState>;
     },
@@ -436,7 +433,8 @@ function LiveHotspots() {
   const run = useMutation({
     mutationFn: async () => {
       const res = await fetch(
-        `${KF_BASE}/api/v1/metrics/llm/profile?samples=3&max_tokens=48`,
+        `${KF_BASE}/api/v1/metrics/llm/profile?samples=3&max_tokens=48`
+        + (svc ? `&service=${encodeURIComponent(svc)}` : ""),
         { method: "POST" },
       );
       if (!res.ok) throw new Error((await res.json()).detail ?? `${res.status}`);
@@ -541,17 +539,29 @@ function LiveLatencySection() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/* 아래 그래프의 선과 같은 색을 찍어 범례를 겸한다 */}
           <div className="mb-3 grid grid-cols-3 gap-2 text-center">
-            {([["P50", d.latency.p50Ms], ["P95", d.latency.p95Ms],
-               ["P99", d.latency.p99Ms]] as const).map(([k, v]) => (
+            {([
+              ["P50", d.latency.p50Ms, "var(--brand-mint-500)", "절반은 이 시간 안에"],
+              ["P95", d.latency.p95Ms, "var(--brand-indigo-500)", "100명 중 95명은 이 안에"],
+              ["P99", d.latency.p99Ms, "#e11d48", "가장 느린 경우까지"],
+            ] as const).map(([k, v, color, hint]) => (
               <div key={k} className="rounded-lg bg-secondary/40 p-2">
-                <div className="text-[10px] uppercase text-muted-foreground">{k}</div>
+                <div className="flex items-center justify-center gap-1.5">
+                  <span className="size-2 rounded-full" style={{ background: color }} />
+                  <span className="text-[10px] uppercase text-muted-foreground">{k}</span>
+                </div>
                 <div className="font-mono text-lg font-bold tabular-nums">
                   {v != null ? `${v}ms` : "—"}
                 </div>
+                <div className="text-[10px] leading-tight text-muted-foreground">{hint}</div>
               </div>
             ))}
           </div>
+          <p className="mb-2 text-[11px] leading-snug text-muted-foreground">
+            응답 시간을 느린 순으로 줄 세운 값입니다. 평균은 아주 느린 몇 건을 숨기기 때문에,
+            <b> 가장 느린 쪽까지</b> 확인하는 방식을 씁니다.
+          </p>
           {d.series.length > 1 ? (
             <ChartContainer
               config={{
@@ -733,72 +743,152 @@ function LiveRunHistory() {
   );
 }
 
-/** 실측 LLM 추론 지표 — 클러스터에 배포된 vLLM의 표준 메트릭 (TTFT·TPOT·E2E) */
-function LiveLlmCard() {
-  const [testing, setTesting] = React.useState(false);
-  const [chatOpen, setChatOpen] = React.useState(false);
-  const { data, refetch } = useQuery({
-    queryKey: ["metrics", "llm"],
+/** 추론 탭의 LLM 영역 — 모델을 하나 고르면 아래 카드들이 모두 그 모델을 본다 */
+function InferenceLlmSection() {
+  const [picked, setPicked] = React.useState<string | undefined>();
+  const { data } = useQuery({
+    queryKey: ["metrics", "llms"],
     queryFn: async () => {
-      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm`);
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llms`);
       if (!res.ok) throw new Error(`${res.status}`);
-      return res.json() as Promise<LlmMetrics>;
+      return res.json() as Promise<{ items: LlmEntry[] }>;
+    },
+    enabled: KF_ENABLED,
+    refetchInterval: 10000,
+    retry: false,
+  });
+  const items = data?.items ?? [];
+  if (!KF_ENABLED || !items.length) return null;
+
+  // 아직 안 골랐으면 첫 번째(준비된 것 우선)를 본다
+  const current = picked ?? (items.find((m) => m.ready) ?? items[0]).name;
+
+  return (
+    <LlmCtx.Provider value={current}>
+      <Card className="border-brand-mint-200">
+        <CardContent className="flex flex-wrap items-center gap-3 p-4">
+          <span className="text-sm font-medium">보고 있는 AI</span>
+          <Select value={current} onValueChange={setPicked}>
+            <SelectTrigger className="w-[280px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {items.map((m) => (
+                <SelectItem key={m.name} value={m.name}>
+                  {m.name} · {m.modelId}{m.ready ? "" : " (준비 중)"}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="text-[11px] text-muted-foreground">
+            아래 지표는 모두 <b>{current}</b> 하나를 측정한 값입니다.
+            AI가 {items.length}개 배포돼 있어 골라서 볼 수 있습니다.
+          </span>
+        </CardContent>
+      </Card>
+
+      <LiveLlmCard only={current} />
+      <LiveLatencySection />
+      <LiveCacheQueueSection />
+      <LiveInsights />
+      <LiveHotspots />
+    </LlmCtx.Provider>
+  );
+}
+
+/** 지금 보고 있는 LLM — 추론 탭의 카드들이 같은 모델을 보도록 공유한다 */
+const LlmCtx = React.createContext<string | undefined>(undefined);
+const useLlm = () => React.useContext(LlmCtx);
+/** 쿼리 문자열로 붙일 대상 지정 */
+const svcQ = (s?: string) => (s ? `?service=${encodeURIComponent(s)}` : "");
+
+interface LlmEntry {
+  name: string; namespace: string; modelId: string; ready: boolean;
+  requests: number; ttftMs: number | null; tpotMs: number | null;
+  e2eMs: number | null; tokensPerSec: number | null;
+  kvCacheUsagePct: number; runningReqs: number;
+}
+
+/** 실측 LLM 추론 지표 — 배포된 LLM 전부를 각각 보여준다 */
+function LiveLlmCard({ only }: { only?: string }) {
+  const [testing, setTesting] = React.useState<string | null>(null);
+  const { data, refetch } = useQuery({
+    queryKey: ["metrics", "llms"],
+    queryFn: async () => {
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llms`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: LlmEntry[] }>;
     },
     enabled: KF_ENABLED,
     refetchInterval: 5000,
     retry: false,
   });
-  if (!KF_ENABLED || !data) return null;
+  // 선택된 모델만 본다 (지정이 없으면 전부)
+  const shown = (data?.items ?? []).filter((m) => !only || m.name === only);
+  if (!KF_ENABLED || !shown.length) return null;
 
-  async function fireTest() {
-    setTesting(true);
+  async function fireTest(name: string) {
+    setTesting(name);
     try {
-      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: "클라우드에서 GPU를 효율적으로 쓰는 팁을 한 문장으로.", maxTokens: 64 }),
-      });
+      const res = await fetch(
+        `${KF_BASE}/api/v1/metrics/llm/chat?service=${encodeURIComponent(name)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: "클라우드에서 GPU를 효율적으로 쓰는 팁을 한 문장으로.",
+            maxTokens: 64,
+          }),
+        });
       if (!res.ok) throw new Error(`${res.status}`);
       await res.json();
       refetch();
     } finally {
-      setTesting(false);
+      setTesting(null);
     }
   }
 
   return (
     <Card className="border-brand-mint-200">
-      <CardHeader className="flex-row items-center justify-between">
-        <div>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Zap className="size-4 text-brand-mint-600" />
-            실측 LLM 추론 지표
-            <Badge variant="success" className="text-[10px]">LIVE</Badge>
-          </CardTitle>
-          <CardDescription>
-            {data.model} · {data.engine} · {data.node} — 누적 {data.requests}건 평균
-          </CardDescription>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={fireTest} disabled={testing}>
-            {testing ? "호출 중…" : "테스트 요청 보내기"}
-          </Button>
-          <Button size="sm" onClick={() => setChatOpen(true)}>
-            <MessageSquare className="size-3.5" /> AI와 대화하기
-          </Button>
-        </div>
-        <LlmChatDialog open={chatOpen} onOpenChange={(o) => { setChatOpen(o); if (!o) refetch(); }}
-                       model={data.model} node={data.node} />
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Zap className="size-4 text-brand-mint-600" />
+          실측 LLM 추론 지표
+          <Badge variant="success" className="text-[10px]">LIVE</Badge>
+        </CardTitle>
+        <CardDescription>
+          {shown[0].modelId} · vLLM — 누적 {shown[0].requests}건 기준
+        </CardDescription>
       </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-3 gap-3 md:grid-cols-6">
-          <LlmStat label="TTFT" hint="첫 토큰까지" value={data.ttftMs != null ? `${data.ttftMs}ms` : "—"} />
-          <LlmStat label="TPOT" hint="토큰당 생성" value={data.tpotMs != null ? `${data.tpotMs}ms` : "—"} />
-          <LlmStat label="E2E 지연" hint="요청→완료" value={data.e2eMs != null ? `${data.e2eMs}ms` : "—"} />
-          <LlmStat label="처리량" hint="tokens/sec" value={data.tokensPerSec != null ? `${data.tokensPerSec}` : "—"} />
-          <LlmStat label="KV Cache" hint="사용률" value={`${data.kvCacheUsagePct}%`} />
-          <LlmStat label="생성 토큰" hint="누적" value={`${data.generationTokens}`} />
-        </div>
+      <CardContent className="space-y-5">
+        {shown.map((m) => (
+          <div key={`${m.namespace}/${m.name}`} className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm">
+                <span className="font-semibold">{m.name}</span>
+                <span className="ml-2 font-mono text-[11px] text-muted-foreground">
+                  {m.modelId}
+                </span>
+                {!m.ready && (
+                  <Badge variant="warning" className="ml-2 text-[10px]">준비 중</Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                누적 {m.requests}건
+                <Button size="sm" variant="outline" disabled={!m.ready || testing === m.name}
+                        onClick={() => fireTest(m.name)}>
+                  {testing === m.name ? "호출 중…" : "테스트 요청 보내기"}
+                </Button>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3 md:grid-cols-6">
+              <LlmStat label="TTFT" hint="첫 토큰까지" value={m.ttftMs != null ? `${m.ttftMs}ms` : "—"} />
+              <LlmStat label="TPOT" hint="토큰당 생성" value={m.tpotMs != null ? `${m.tpotMs}ms` : "—"} />
+              <LlmStat label="E2E 지연" hint="요청→완료" value={m.e2eMs != null ? `${m.e2eMs}ms` : "—"} />
+              <LlmStat label="처리량" hint="tokens/sec" value={m.tokensPerSec != null ? `${m.tokensPerSec}` : "—"} />
+              <LlmStat label="KV Cache" hint="사용률" value={`${m.kvCacheUsagePct}%`} />
+              <LlmStat label="처리 중" hint="동시 요청" value={`${m.runningReqs}건`} />
+            </div>
+          </div>
+        ))}
       </CardContent>
     </Card>
   );
@@ -925,13 +1015,7 @@ export default function ModelInsightsPage() {
         {/* ── Inference ── */}
         <TabsContent value="inference" className="mt-4 space-y-4">
           <LiveServingMetrics />
-          <LiveLlmCard />
-          <LiveLatencySection />
-          <LiveCacheQueueSection />
-          <LiveInsights />
-
-          <LiveHotspots />
-
+          <InferenceLlmSection />
         </TabsContent>
 
         {/* ── Pipeline ── */}

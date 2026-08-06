@@ -32,6 +32,15 @@ const FORMATS = [
 // 쿠버네티스 이름 규칙 (RFC1123) — 소문자·숫자·하이픈만
 const NAME_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 
+/** 우리 장비(8~16GB VRAM)에서 실제로 도는 소형 LLM들 */
+const LLM_PRESETS = [
+  { id: "Qwen/Qwen2.5-0.5B-Instruct", label: "Qwen2.5 0.5B", vram: "약 2GB", util: 0.35, note: "가장 가벼움" },
+  { id: "Qwen/Qwen2.5-1.5B-Instruct", label: "Qwen2.5 1.5B", vram: "약 4GB", util: 0.7, note: "품질·속도 균형" },
+  { id: "meta-llama/Llama-3.2-1B-Instruct", label: "Llama 3.2 1B", vram: "약 3GB", util: 0.55, note: "" },
+  { id: "meta-llama/Llama-3.2-3B-Instruct", label: "Llama 3.2 3B", vram: "약 7GB", util: 0.85, note: "16GB 카드 권장" },
+  { id: "google/gemma-2-2b-it", label: "Gemma 2 2B", vram: "약 5GB", util: 0.8, note: "" },
+];
+
 export function ServingCreateDialog({
   open, onClose,
 }: {
@@ -46,6 +55,10 @@ export function ServingCreateDialog({
   const [memoryGi, setMemoryGi] = React.useState(2);
   const [gpu, setGpu] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
+  // 배포 유형 — 저장된 모델 파일 vs 대화형 LLM(모델 ID로 불러옴)
+  const [kind, setKind] = React.useState<"file" | "llm">("file");
+  const [modelId, setModelId] = React.useState(LLM_PRESETS[0].id);
+  const [maxModelLen, setMaxModelLen] = React.useState(2048);
 
   // 가속기 여유 — 없으면 배포는 되지만 대기 상태가 된다
   const { data: gpuInfo } = useQuery({
@@ -72,8 +85,11 @@ export function ServingCreateDialog({
     retry: false,
   });
 
+  const isLlm = kind === "llm";
+  // 모델이 클수록 GPU 메모리를 더 잡아야 뜬다. 목록에 없는 모델은 넉넉히.
+  const llmUtil = LLM_PRESETS.find((m) => m.id === modelId)?.util ?? 0.85;
   const nameOk = name === "" || NAME_RE.test(name);
-  const canSubmit = !!name && nameOk && !!uri && !busy;
+  const canSubmit = !!name && nameOk && !busy && (isLlm ? !!modelId : !!uri);
 
   async function submit() {
     if (!KF_ENABLED) {
@@ -85,9 +101,12 @@ export function ServingCreateDialog({
       const res = await fetch(`${KF_BASE}/api/v1/serving`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name, modelFormat: format, storageUri: uri, cpu, memoryGi, gpu,
-        }),
+        body: JSON.stringify(
+          isLlm
+            ? { name, modelFormat: "vllm", modelId, maxModelLen,
+                gpuMemoryUtilization: llmUtil, cpu, memoryGi, gpu }
+            : { name, modelFormat: format, storageUri: uri, cpu, memoryGi, gpu },
+        ),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -119,6 +138,31 @@ export function ServingCreateDialog({
 
         <div className="space-y-4">
           <div className="space-y-1.5">
+            <Label>무엇을 배포하나요</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                ["file", "학습한 모델", "우리가 만든 판정·예측 모델"],
+                ["llm", "대화형 LLM", "질문에 답하는 언어 모델"],
+              ] as const).map(([k, title, desc]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setKind(k)}
+                  className={cn(
+                    "rounded-lg border p-2.5 text-left transition-colors",
+                    kind === k
+                      ? "border-brand-indigo-400 bg-brand-indigo-50"
+                      : "border-border hover:bg-secondary/50",
+                  )}
+                >
+                  <div className="text-[13px] font-semibold">{title}</div>
+                  <div className="text-[11px] text-muted-foreground">{desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
             <Label>서비스 이름</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)}
                    placeholder="dm-classifier-v2" />
@@ -129,6 +173,45 @@ export function ServingCreateDialog({
             )}
           </div>
 
+          {isLlm && (
+            <>
+              <div className="space-y-1.5">
+                <Label>모델 고르기</Label>
+                <Select value={modelId} onValueChange={setModelId}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {LLM_PRESETS.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        {m.label} · VRAM {m.vram}{m.note ? ` · ${m.note}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input value={modelId} onChange={(e) => setModelId(e.target.value)}
+                       className="font-mono text-[11px]" />
+                <p className="text-[11px] text-muted-foreground">
+                  HuggingFace 모델 ID입니다. 목록에 없는 모델도 직접 입력할 수 있습니다.
+                  모델은 배포할 때 자동으로 내려받습니다(처음 한 번, 수 분 소요).
+                  GPU 메모리는 모델에 맞춰 <b>{Math.round(llmUtil * 100)}%</b>를 배정합니다.
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label>최대 문맥 길이 (토큰)</Label>
+                <Input type="number" min={512} max={32768} step={512}
+                       value={maxModelLen}
+                       onChange={(e) => setMaxModelLen(Number(e.target.value) || 2048)} />
+                <p className="text-[11px] text-muted-foreground">
+                  한 번에 다룰 수 있는 글의 길이입니다. 길수록 메모리를 많이 씁니다.
+                </p>
+              </div>
+              <div className="rounded-md border border-sky-200 bg-sky-50/70 p-2.5 text-[11px] leading-snug text-sky-900">
+                <b>LLM은 가속기(GPU)가 필요합니다.</b> 아래에서 1장 이상 지정하세요.
+                CPU만으로는 실행되지 않습니다.
+              </div>
+            </>
+          )}
+
+          {!isLlm && (
           <div className="space-y-1.5">
             <Label>배포할 모델</Label>
             <Select
@@ -160,15 +243,10 @@ export function ServingCreateDialog({
               바로 배포할 수 있는 모델만 나옵니다
               {models?.bucket ? ` (s3://${models.bucket})` : ""}
             </p>
-            {(models?.items ?? []).some((m) => !m.servable) && (
-              <p className="text-[11px] text-amber-700">
-                {(models?.items ?? []).filter((m) => !m.servable)
-                  .map((m) => m.name).join(", ")} 은(는) 서빙용으로 포장되지 않아
-                목록에서 제외했습니다 — 학습 파이프라인을 돌리면 자동으로 포장됩니다.
-              </p>
-            )}
           </div>
+          )}
 
+          {!isLlm && (
           <div className="space-y-1.5">
             <Label>모델 형식</Label>
             <Select value={format} onValueChange={setFormat}>
@@ -185,6 +263,7 @@ export function ServingCreateDialog({
               필요한 파일 구조: {FORMATS.find((f) => f.value === format)?.hint}
             </p>
           </div>
+          )}
 
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">

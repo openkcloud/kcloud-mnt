@@ -9,6 +9,20 @@ import { getNavByRole, type NavItem } from "@/lib/nav";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 
+/** 경로 끝의 / 를 떼고 비교한다 (next.config의 trailingSlash 대응) */
+function norm(path: string) {
+  return path.length > 1 ? path.replace(/\/+$/, "") : path;
+}
+
+/** 현재 위치인지 판단 — 하위 화면에서도 상위 메뉴가 켜지도록 한다 */
+function isPathActive(pathname: string, href: string) {
+  const here = norm(pathname);
+  const target = norm(href);
+  if (target === "/") return here === "/";
+  // 경로 구분자까지 확인해야 /monitoring 이 /monitoring-x 를 켜지 않는다
+  return here === target || here.startsWith(`${target}/`);
+}
+
 export function AppSidebar() {
   const user = useAuth((s) => s.user);
   const pathname = usePathname();
@@ -64,13 +78,13 @@ function SidebarItem({
   pathname: string;
   depth?: number;
 }) {
-  const isActive =
-    pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+  // next.config의 trailingSlash 때문에 실제 경로 끝에 /가 붙는다.
+  // 정규화하지 않으면 어떤 메뉴도 현재 위치로 표시되지 않는다.
+  const isActive = isPathActive(pathname, item.href);
   const hasChildren = !!item.children?.length;
-  const [open, setOpen] = React.useState(isActive);
-  React.useEffect(() => {
-    if (isActive) setOpen(true);
-  }, [isActive]);
+  // 현재 위치면 자동으로 펼치고, 사용자가 직접 접었으면 그 선택을 따른다
+  const [manualOpen, setManualOpen] = React.useState<boolean | null>(null);
+  const open = manualOpen ?? isActive;
 
   const Icon = item.icon;
 
@@ -79,7 +93,7 @@ function SidebarItem({
       <div>
         <button
           type="button"
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => setManualOpen(!open)}
           className={cn(
             "group flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors",
             "text-sidebar-foreground hover:bg-sidebar-accent hover:text-white",
@@ -110,11 +124,12 @@ function SidebarItem({
               <Link
                 key={child.href}
                 href={child.href}
+                aria-current={isPathActive(pathname, child.href) ? "page" : undefined}
                 className={cn(
                   "flex items-center gap-2.5 rounded-md py-1.5 pl-10 pr-3 text-[12.5px] transition-colors",
                   "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-white",
-                  pathname === child.href &&
-                    "bg-sidebar-accent text-white before:absolute relative before:left-6 before:top-1/2 before:h-1 before:w-1 before:-translate-y-1/2 before:rounded-full before:bg-sidebar-primary",
+                  isPathActive(pathname, child.href) &&
+                    "relative bg-sidebar-accent font-semibold text-white before:absolute before:left-6 before:top-1/2 before:h-1.5 before:w-1.5 before:-translate-y-1/2 before:rounded-full before:bg-brand-mint-400",
                 )}
               >
                 {child.label}
@@ -130,10 +145,12 @@ function SidebarItem({
     <Link
       href={item.href}
       className={cn(
-        "group flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors",
+        "group relative flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors",
         "text-sidebar-foreground hover:bg-sidebar-accent hover:text-white",
-        isActive && "bg-sidebar-accent text-white",
+        isActive &&
+          "bg-sidebar-accent font-semibold text-white before:absolute before:left-0 before:top-1/2 before:h-5 before:w-1 before:-translate-y-1/2 before:rounded-r before:bg-brand-mint-400",
       )}
+      aria-current={isActive ? "page" : undefined}
     >
       <Icon className="size-4 shrink-0" />
       <span className="flex-1">{item.label}</span>

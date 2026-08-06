@@ -400,6 +400,7 @@ export interface KFExperiment {
 }
 export interface KFInferenceServiceResources {
   /** 실백엔드에서만 내려온다 (mock 데이터에는 없음) */
+  namespace?: string;
   storageUri?: string;
   cpu?: string;
   memoryGi?: number;

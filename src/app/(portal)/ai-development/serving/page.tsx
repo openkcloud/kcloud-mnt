@@ -1,6 +1,8 @@
 "use client";
 import * as React from "react";
-import { Send, Activity, Cpu, Plus, Trash2, Settings2 } from "lucide-react";
+import { Send, Activity, Cpu, Plus, Trash2, Settings2, MessageSquare, Code2 } from "lucide-react";
+import { LlmChatDialog } from "@/components/llm-chat-dialog";
+import { ServingCodeDialog } from "@/components/serving-code-dialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { ServingCreateDialog } from "@/components/serving-create-dialog";
@@ -45,6 +47,8 @@ export default function ServingPage() {
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<KFInferenceService | null>(null);
+  const [chatting, setChatting] = React.useState<KFInferenceService | null>(null);
+  const [coding, setCoding] = React.useState<KFInferenceService | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
 
   async function removeServing(s: KFInferenceService) {
@@ -76,6 +80,14 @@ export default function ServingPage() {
     <div className="space-y-4">
       <ServingCreateDialog open={createOpen} onClose={() => setCreateOpen(false)} />
       <ServingResourceDialog service={editing} onClose={() => setEditing(null)} />
+      <LlmChatDialog
+        open={!!chatting}
+        onOpenChange={(o) => !o && setChatting(null)}
+        model={chatting?.name ?? ""}
+        node={chatting?.namespace ?? ""}
+        service={chatting?.name}
+      />
+      <ServingCodeDialog service={coding} onClose={() => setCoding(null)} />
       <PageHeader
         title="Serving — 모델 API 서비스"
         description="학습된 모델을 HTTP API로 배포합니다 (KServe)"
@@ -150,10 +162,22 @@ export default function ServingPage() {
 
             <div className="flex items-center gap-2">
               {KF_ENABLED && s.status === "Ready" && (
-                <Button size="sm" variant="outline" className="flex-1" onClick={() => testCall(s)}>
-                  <Send className="size-3" /> API 호출 테스트
-                </Button>
+                s.modelName === "vllm" ? (
+                  // 대화형 LLM은 예측 API가 아니라 채팅으로 확인하는 게 자연스럽다
+                  <Button size="sm" variant="outline" className="flex-1"
+                          onClick={() => setChatting(s)}>
+                    <MessageSquare className="size-3" /> AI와 대화하기
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" className="flex-1" onClick={() => testCall(s)}>
+                    <Send className="size-3" /> API 호출 테스트
+                  </Button>
+                )
               )}
+              <Button size="sm" variant="outline" onClick={() => setCoding(s)}
+                      title="예제 코드 보기">
+                <Code2 className="size-3.5" /> 예제 코드
+              </Button>
               <Button size="sm" variant="ghost" disabled={busy === s.name}
                       className="text-rose-600 hover:bg-rose-50"
                       onClick={() => removeServing(s)}>

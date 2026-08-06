@@ -24,12 +24,14 @@ const SAMPLES = [
 
 /** 클러스터에 배포된 LLM과 직접 대화 — 응답 시간·토큰 수 함께 표시 */
 export function LlmChatDialog({
-  open, onOpenChange, model, node,
+  open, onOpenChange, model, node, service,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   model?: string;
   node?: string;
+  /** 대화할 서비스 이름 — 없으면 기본 LLM에 연결한다 (LLM이 여러 개일 수 있다) */
+  service?: string;
 }) {
   const [msgs, setMsgs] = React.useState<Msg[]>([]);
   const [input, setInput] = React.useState("");
@@ -47,7 +49,10 @@ export function LlmChatDialog({
     setInput("");
     setBusy(true);
     try {
-      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/chat`, {
+      const url = service
+        ? `${KF_BASE}/api/v1/metrics/llm/chat?service=${encodeURIComponent(service)}`
+        : `${KF_BASE}/api/v1/metrics/llm/chat`;
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: q, maxTokens: 200 }),
