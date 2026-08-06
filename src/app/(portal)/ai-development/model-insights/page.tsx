@@ -275,8 +275,8 @@ function LiveServingMetrics() {
           <Badge variant="success" className="text-[10px]">실측</Badge>
         </CardTitle>
         <CardDescription>
-          우리가 학습시켜 배포한 모델들 — 요청 1건이 전처리·추론·후처리에
-          각각 얼마나 쓰는지 보여줍니다
+          우리가 학습시켜 배포한 판정·예측 모델 — 요청 1건이 전처리·추론·후처리에
+          각각 얼마나 쓰는지 보여줍니다 (대화형 AI는 아래 카드에서 따로 봅니다)
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
