@@ -3,17 +3,11 @@ import * as React from "react";
 import Link from "next/link";
 import {
   Sparkles,
-  AlertTriangle,
-  TrendingDown,
-  TrendingUp,
-  Cpu,
   Database,
   Zap,
   ChevronRight,
   Lightbulb,
-  Activity,
   GitBranch,
-  Clock,
 } from "lucide-react";
 import {
   Bar,
@@ -33,46 +27,13 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
 import { cn } from "@/lib/utils";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { MessageSquare } from "lucide-react";
 import { LlmChatDialog } from "@/components/llm-chat-dialog";
 import { KF_BASE, KF_ENABLED } from "@/lib/kf";
 
 // ─── Pipeline stage breakdown ───
-const PIPELINE_STAGES = [
-  { stage: "load-dataset", durSec: 320, pct: 9, status: "ok" as const, type: "data" },
-  { stage: "tokenize", durSec: 184, pct: 5, status: "ok" as const, type: "data" },
-  { stage: "LoRA finetune", durSec: 2140, pct: 60, status: "warning" as const, type: "ml" },
-  { stage: "eval", durSec: 412, pct: 12, status: "ok" as const, type: "compute" },
-  { stage: "register-model", durSec: 38, pct: 1, status: "ok" as const, type: "deploy" },
-  { stage: "deploy-kserve", durSec: 460, pct: 13, status: "ok" as const, type: "deploy" },
-];
-
 // ─── Inference latency breakdown ───
-const LATENCY_BREAKDOWN = [
-  { stage: "Tokenize", ms: 12, pct: 1, color: "var(--brand-indigo-300)" },
-  { stage: "Embedding", ms: 28, pct: 2, color: "var(--brand-indigo-400)" },
-  { stage: "Attention (Layer 0-15)", ms: 184, pct: 19, color: "var(--brand-indigo-500)" },
-  { stage: "Attention (Layer 16-31)", ms: 322, pct: 33, color: "#e11d48" },
-  { stage: "FFN", ms: 218, pct: 22, color: "var(--brand-indigo-600)" },
-  { stage: "Sampling", ms: 84, pct: 9, color: "var(--brand-mint-500)" },
-  { stage: "Detokenize", ms: 32, pct: 3, color: "var(--brand-mint-400)" },
-  { stage: "기타 (overhead)", ms: 100, pct: 10, color: "#94a3b8" },
-];
-
-const LATENCY_TREND = Array.from({ length: 60 }, (_, i) => ({
-  t: `${(60 - i)}m`,
-  p50: 220 + Math.sin(i / 5) * 30 + Math.random() * 20,
-  p95: 620 + Math.sin(i / 4) * 80 + Math.random() * 40,
-  p99: 820 + Math.sin(i / 6) * 120 + (i > 45 ? 200 : 0) + Math.random() * 60,
-})).reverse();
-
-const HOTSPOTS = [
-  { component: "Attention Layer 22 (GQA)", hostMs: 84, gpu: "acc-a100-1-3", reason: "KV cache 미스율 41%" },
-  { component: "Attention Layer 28 (GQA)", hostMs: 76, gpu: "acc-a100-1-3", reason: "KV cache 미스율 38%" },
-  { component: "FFN Layer 24 (SwiGLU)", hostMs: 58, gpu: "acc-a100-1-3", reason: "memory bandwidth 89%" },
-  { component: "Tokenizer (BPE)", hostMs: 12, gpu: "CPU", reason: "single-thread bottleneck" },
-];
 
 interface GpuMetric {
   node: string;
@@ -140,6 +101,548 @@ interface LlmMetrics {
   ttftMs: number | null; tpotMs: number | null; e2eMs: number | null;
   tokensPerSec: number | null; promptTokens: number; generationTokens: number;
   kvCacheUsagePct: number; runningReqs: number;
+}
+
+interface LlmDetail {
+  model: string;
+  requests: number;
+  latency: {
+    ttftMs: number | null; tpotMs: number | null; e2eMs: number | null;
+    p50Ms: number | null; p95Ms: number | null; p99Ms: number | null;
+    ttftP95Ms: number | null; tpotP95Ms: number | null;
+  };
+  breakdown: { stage: string; ms: number; key: string }[];
+  cache: { gpuUsagePct: number; prefixHitPct: number | null; cpuUsagePct: number };
+  queue: { running: number; waiting: number; swapped: number; preemptions: number };
+  throughput: { genTokPerSec: number; promptTokPerSec: number;
+                avgOutputTokens: number; p95OutputTokens: number | null };
+  series: { t: string; p50: number; p95: number; p99: number }[];
+}
+
+function useLlmDetail() {
+  return useQuery({
+    queryKey: ["metrics", "llm-detail"],
+    queryFn: async () => {
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/detail`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<LlmDetail>;
+    },
+    enabled: KF_ENABLED,
+    refetchInterval: 10000,
+    retry: false,
+  });
+}
+
+interface ProfileHotspot {
+  component: string; ms: number; pct: number; calls: number;
+  reason: string; ops: string[];
+}
+interface ProfileResult {
+  samples: number; maxTokens: number; totalMs: number; events: number;
+  hotspots: ProfileHotspot[];
+}
+interface ProfileState {
+  running: boolean; at: string | null; error: string | null;
+  result: ProfileResult | null; kernelLevel: boolean; kernelNote: string;
+}
+
+interface InsightItem {
+  severity: "critical" | "warning" | "info" | "ok";
+  title: string;
+  detail: string;
+  evidence: { label: string; value: string; detail?: string }[];
+  actions: string[];
+}
+
+const SEV: Record<InsightItem["severity"], {
+  badge: "destructive" | "warning" | "outline" | "success";
+  label: string; card: string; icon: string;
+}> = {
+  critical: { badge: "destructive", label: "심각", card: "border-rose-200 bg-gradient-to-br from-rose-50 to-transparent", icon: "bg-rose-100 text-rose-700" },
+  warning: { badge: "warning", label: "주의", card: "border-amber-200 bg-gradient-to-br from-amber-50 to-transparent", icon: "bg-amber-100 text-amber-700" },
+  info: { badge: "outline", label: "참고", card: "border-sky-200 bg-gradient-to-br from-sky-50 to-transparent", icon: "bg-sky-100 text-sky-700" },
+  ok: { badge: "success", label: "정상", card: "border-brand-mint-200 bg-gradient-to-br from-brand-mint-50 to-transparent", icon: "bg-brand-mint-100 text-brand-mint-700" },
+};
+
+/** 실측 파이프라인 소견 — Argo 실행 기록에서 직접 도출 (임의 수치 없음) */
+function LivePipelineInsight() {
+  const { data } = useQuery({
+    queryKey: ["metrics", "pipeline-runs"],
+    queryFn: async () => {
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/pipeline-runs`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: WfRun[] }>;
+    },
+    enabled: KF_ENABLED,
+    refetchInterval: 15000,
+    retry: false,
+  });
+  const runs = data?.items ?? [];
+  if (!KF_ENABLED || !runs.length) return null;
+
+  const failed = runs.filter((r) => r.phase === "Failed");
+  const worst = [...runs].sort((a, b) => b.bottleneckPct - a.bottleneckPct)[0];
+  const avgSec = Math.round(runs.reduce((a, r) => a + r.totalSec, 0) / runs.length);
+  const critical = failed.length > 0;
+
+  return (
+    <Card className={cn(
+      "overflow-hidden",
+      critical ? "border-rose-200 bg-gradient-to-br from-rose-50 to-transparent"
+               : "border-amber-200 bg-gradient-to-br from-amber-50 to-transparent",
+    )}>
+      <CardContent className="p-5">
+        <div className="flex items-start gap-4">
+          <div className={cn(
+            "flex size-10 shrink-0 items-center justify-center rounded-full",
+            critical ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700",
+          )}>
+            <Sparkles className="size-5" />
+          </div>
+          <div className="flex-1 space-y-3">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={critical ? "destructive" : "warning"}>
+                  {critical ? "심각" : "주의"}
+                </Badge>
+                <Badge variant="success" className="text-[10px]">실측 기반 자동 진단</Badge>
+              </div>
+              <h2 className="mt-1 text-lg font-bold leading-tight">
+                {critical
+                  ? `최근 실행 ${runs.length}건 중 ${failed.length}건이 실패했습니다`
+                  : `학습 시간의 ${worst.bottleneckPct}%가 '${worst.bottleneck}' 단계에 몰려 있습니다`}
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {critical
+                  ? `실패한 워크플로우: ${failed.map((r) => r.workflow).join(", ")} — 해당 단계 로그를 먼저 확인하세요.`
+                  : `${worst.workflow} 기준 총 ${worst.totalSec}초 중 ${worst.bottleneck} 단계가 가장 오래 걸렸습니다. 이 단계를 줄이는 것이 전체 시간 단축에 가장 효과가 큽니다.`}
+              </p>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-3">
+              <Evidence label="병목 단계" value={worst.bottleneck}
+                        detail={`전체의 ${worst.bottleneckPct}%`} color="amber" />
+              <Evidence label="평균 실행 시간" value={`${avgSec}초`}
+                        detail={`최근 ${runs.length}회 기준`} color="indigo" />
+              <Evidence label="성공 / 실패"
+                        value={`${runs.length - failed.length} / ${failed.length}`}
+                        detail="최근 실행" color={critical ? "rose" : "indigo"} />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" asChild>
+                <Link href="/ai-development/pipelines">파이프라인 편집</Link>
+              </Button>
+              <Button size="sm" variant="outline" asChild>
+                <Link href="/monitoring/logs">실행 로그 보기</Link>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 실측 병목 소견 — 살아있는 지표에 규칙을 적용해 자동 생성 (임의 수치 없음) */
+function LiveInsights() {
+  const { data } = useQuery({
+    queryKey: ["metrics", "llm-insights"],
+    queryFn: async () => {
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/insights`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{
+        sloP99Ms: number; model: string; at: string; items: InsightItem[];
+      }>;
+    },
+    enabled: KF_ENABLED,
+    refetchInterval: 15000,
+    retry: false,
+  });
+  if (!KF_ENABLED || !data?.items?.length) return null;
+
+  return (
+    <div className="space-y-3">
+      {data.items.map((it, i) => {
+        const sv = SEV[it.severity];
+        return (
+          <Card key={i} className={cn("overflow-hidden", sv.card)}>
+            <CardContent className="p-5">
+              <div className="flex items-start gap-4">
+                <div className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", sv.icon)}>
+                  <Sparkles className="size-5" />
+                </div>
+                <div className="flex-1 space-y-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={sv.badge}>{sv.label}</Badge>
+                      <Badge variant="success" className="text-[10px]">실측 기반 자동 진단</Badge>
+                      <span className="text-xs text-muted-foreground">{data.at} 기준</span>
+                    </div>
+                    <h2 className="mt-1 text-lg font-bold leading-tight">{it.title}</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">{it.detail}</p>
+                  </div>
+
+                  {it.evidence.length > 0 && (
+                    <div className="grid gap-2 md:grid-cols-3">
+                      {it.evidence.map((e) => (
+                        <div key={e.label} className="rounded-lg border border-border bg-card p-2.5">
+                          <div className="text-[10px] uppercase text-muted-foreground">{e.label}</div>
+                          <div className="font-mono text-base font-bold tabular-nums">{e.value}</div>
+                          {e.detail && <div className="text-[11px] text-muted-foreground">{e.detail}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {it.actions.length > 0 && (
+                    <div className="space-y-2 rounded-lg border border-border bg-card p-3">
+                      <div className="flex items-center gap-1.5 text-xs font-medium">
+                        <Lightbulb className="size-3.5 text-amber-600" />
+                        권장 조치
+                      </div>
+                      <ul className="space-y-1 text-xs text-muted-foreground">
+                        {it.actions.map((a) => (
+                          <li key={a} className="flex items-start gap-1.5">
+                            <ChevronRight className="mt-0.5 size-3 shrink-0 text-brand-indigo-500" />
+                            {a}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {i === 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button variant="outline" size="sm" asChild>
+                        <Link href="/ai-development/serving">서빙 상태 보기</Link>
+                      </Button>
+                      <Button variant="outline" size="sm" asChild>
+                        <Link href="/monitoring/traces">트레이스 보기</Link>
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 실측 핫스팟 — vLLM 내장 torch profiler를 필요할 때만 켜서 연산별 시간 측정 */
+function LiveHotspots() {
+  const qc = useQueryClient();
+  const { data: st } = useQuery({
+    queryKey: ["metrics", "llm-profile"],
+    queryFn: async () => {
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/llm/profile`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<ProfileState>;
+    },
+    enabled: KF_ENABLED,
+    retry: false,
+  });
+  const run = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(
+        `${KF_BASE}/api/v1/metrics/llm/profile?samples=3&max_tokens=48`,
+        { method: "POST" },
+      );
+      if (!res.ok) throw new Error((await res.json()).detail ?? `${res.status}`);
+      return res.json() as Promise<ProfileResult>;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["metrics", "llm-profile"] }),
+  });
+
+  if (!KF_ENABLED) return null;
+  const r = run.data ?? st?.result ?? null;
+  const max = r?.hotspots?.[0]?.ms || 1;
+
+  return (
+    <Card className="border-brand-mint-200">
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              핫스팟 — 연산별 소요 시간
+              <Badge variant="success" className="text-[10px]">실측</Badge>
+            </CardTitle>
+            <CardDescription>
+              추론을 실제로 3회 실행하면서 어떤 연산이 시간을 쓰는지 측정합니다.
+              프로파일러는 추론을 느리게 만들기 때문에 <b>누를 때만</b> 동작합니다.
+            </CardDescription>
+          </div>
+          <Button size="sm" onClick={() => run.mutate()} disabled={run.isPending}>
+            {run.isPending ? "측정 중… (약 40초)" : r ? "다시 측정" : "프로파일링 실행"}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {run.isError && (
+          <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+            측정 실패: {(run.error as Error).message}
+          </div>
+        )}
+        {!r && !run.isPending && (
+          <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
+            아직 측정 기록이 없습니다 — 위 버튼을 누르면 실제 추론을 추적해 결과를 보여줍니다.
+          </div>
+        )}
+        {r && (
+          <>
+            <div className="pb-1 text-[11px] text-muted-foreground">
+              샘플 {r.samples}회 · 최대 {r.maxTokens}토큰 · 추적 이벤트 {r.events.toLocaleString()}건 ·
+              합계 {r.totalMs}ms{st?.at ? ` · 측정 시각 ${st.at}` : ""}
+            </div>
+            {r.hotspots.map((h, i) => (
+              <div key={h.component} className="flex items-center gap-3 rounded-lg border border-border p-3">
+                <Badge variant="ghost" className="font-mono">#{i + 1}</Badge>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium">{h.component}</div>
+                  <div className="truncate font-mono text-[11px] text-muted-foreground">
+                    {h.reason} · {h.calls.toLocaleString()}회 호출 · {h.ops.join(", ")}
+                  </div>
+                </div>
+                <div className="w-36">
+                  <div className="text-right font-mono text-sm font-semibold tabular-nums">
+                    {h.ms} ms <span className="text-muted-foreground">({h.pct}%)</span>
+                  </div>
+                  <Progress
+                    value={(h.ms / max) * 100}
+                    indicatorClassName={i === 0 ? "bg-rose-500" : i < 3 ? "bg-amber-500" : "bg-brand-mint-500"}
+                  />
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+        {st && !st.kernelLevel && (
+          <p className="rounded-md border border-sky-200 bg-sky-50/70 p-2 text-[11px] leading-snug text-sky-900">
+            <b>측정 범위 안내:</b> {st.kernelNote}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 실측 응답 시간 분포 — vLLM 히스토그램에서 계산한 분위수 */
+function LiveLatencySection() {
+  const { data: d } = useLlmDetail();
+  if (!KF_ENABLED || !d) return null;
+  const BR_COLORS: Record<string, string> = {
+    ttft: "var(--brand-indigo-500)",
+    decode: "var(--brand-mint-500)",
+    other: "#94a3b8",
+  };
+  const total = d.breakdown.reduce((a, b) => a + b.ms, 0) || 1;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <Card className="border-brand-mint-200">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            응답 시간 분포
+            <Badge variant="success" className="text-[10px]">실측</Badge>
+          </CardTitle>
+          <CardDescription>
+            누적 {d.requests}건의 실제 요청 · P50/P95/P99 (백엔드 수집 시계열)
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="mb-3 grid grid-cols-3 gap-2 text-center">
+            {([["P50", d.latency.p50Ms], ["P95", d.latency.p95Ms],
+               ["P99", d.latency.p99Ms]] as const).map(([k, v]) => (
+              <div key={k} className="rounded-lg bg-secondary/40 p-2">
+                <div className="text-[10px] uppercase text-muted-foreground">{k}</div>
+                <div className="font-mono text-lg font-bold tabular-nums">
+                  {v != null ? `${v}ms` : "—"}
+                </div>
+              </div>
+            ))}
+          </div>
+          {d.series.length > 1 ? (
+            <ChartContainer
+              config={{
+                p50: { label: "P50", color: "var(--brand-mint-500)" },
+                p95: { label: "P95", color: "var(--brand-indigo-500)" },
+                p99: { label: "P99", color: "#e11d48" },
+              }}
+              className="h-[200px] w-full"
+            >
+              <LineChart data={d.series}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="t" tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
+                       tickFormatter={(v) => `${v}ms`} />
+                <RTooltip content={<ChartTooltipContent indicator="line" />} />
+                <ReferenceLine
+                  y={1000}
+                  stroke="#e11d48"
+                  strokeDasharray="4 4"
+                  label={{ value: "목표 1s", fill: "#e11d48", fontSize: 10, position: "right" }}
+                />
+                <Line type="monotone" dataKey="p50" stroke="var(--brand-mint-500)" strokeWidth={1.5} dot={false} />
+                <Line type="monotone" dataKey="p95" stroke="var(--brand-indigo-500)" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="p99" stroke="#e11d48" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ChartContainer>
+          ) : (
+            <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
+              시계열을 모으는 중입니다 — 잠시 후 그래프가 그려집니다
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-brand-mint-200">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            응답 지연 구간 분해
+            <Badge variant="success" className="text-[10px]">실측</Badge>
+          </CardTitle>
+          <CardDescription>
+            평균 {d.latency.e2eMs ?? "—"}ms가 어디서 소요되는지 —
+            TTFT {d.latency.ttftMs ?? "—"}ms · TPOT {d.latency.tpotMs ?? "—"}ms
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-3 gap-2 rounded-md border border-border bg-secondary/30 p-2 text-[11px]">
+            <div>
+              <div className="font-mono font-semibold">TTFT</div>
+              <div className="text-muted-foreground">Time To First Token — 첫 토큰까지 (프롬프트 처리 포함)</div>
+              <div className="mt-0.5 font-mono">{d.latency.ttftMs ?? "—"}ms</div>
+            </div>
+            <div>
+              <div className="font-mono font-semibold">TPOT</div>
+              <div className="text-muted-foreground">Time Per Output Token — 토큰 1개 생성 평균</div>
+              <div className="mt-0.5 font-mono">{d.latency.tpotMs ?? "—"}ms</div>
+            </div>
+            <div>
+              <div className="font-mono font-semibold">E2E</div>
+              <div className="text-muted-foreground">요청 전체 완료 시간 (TTFT + TPOT × 출력 토큰)</div>
+              <div className="mt-0.5 font-mono">
+                {d.latency.e2eMs ?? "—"}ms / {d.throughput.avgOutputTokens} tok
+              </div>
+            </div>
+          </div>
+          <div className="flex h-7 w-full overflow-hidden rounded-md">
+            {d.breakdown.map((b) => (
+              <div key={b.key}
+                   style={{ width: `${Math.max((b.ms / total) * 100, 2)}%`,
+                            background: BR_COLORS[b.key] }}
+                   className="flex items-center justify-center text-[10px] font-semibold text-white"
+                   title={`${b.stage}: ${b.ms}ms`}>
+                {(b.ms / total) * 100 >= 15 ? `${Math.round((b.ms / total) * 100)}%` : ""}
+              </div>
+            ))}
+          </div>
+          {d.breakdown.map((b) => (
+            <div key={b.key} className="flex items-center gap-2 text-xs">
+              <span className="size-2.5 rounded-sm" style={{ background: BR_COLORS[b.key] }} />
+              <span className="flex-1">{b.stage}</span>
+              <span className="font-mono tabular-nums">{b.ms}ms</span>
+              <span className="w-10 text-right font-mono text-muted-foreground tabular-nums">
+                {Math.round((b.ms / total) * 100)}%
+              </span>
+            </div>
+          ))}
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            첫 토큰까지가 길면 대기·프롬프트 처리가 병목이고, 디코드가 길면 생성 속도가 병목입니다.
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/** KV cache·대기열·처리량 실측 — ETRI 검토의견(KV cache 지표 검증) 대응 */
+function LiveCacheQueueSection() {
+  const { data: d } = useLlmDetail();
+  if (!KF_ENABLED || !d) return null;
+  const cells: { label: string; value: string; hint: string }[] = [
+    { label: "KV Cache 사용률", value: `${d.cache.gpuUsagePct}%`, hint: "GPU 캐시 점유" },
+    { label: "Prefix 적중률",
+      value: d.cache.prefixHitPct == null ? "측정 대기" : `${d.cache.prefixHitPct}%`,
+      hint: "반복 프롬프트 재사용" },
+    { label: "처리 중", value: `${d.queue.running}건`, hint: "동시 처리 요청" },
+    { label: "대기열", value: `${d.queue.waiting}건`, hint: "순서 기다리는 요청" },
+    { label: "선점 발생", value: `${d.queue.preemptions}회`, hint: "메모리 부족 중단" },
+    { label: "생성 처리량", value: `${d.throughput.genTokPerSec} tok/s`, hint: "초당 토큰 생성" },
+  ];
+  return (
+    <Card className="border-brand-mint-200">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Database className="size-4 text-brand-mint-600" />
+          KV Cache · 대기열 · 처리량
+          <Badge variant="success" className="text-[10px]">실측</Badge>
+        </CardTitle>
+        <CardDescription>
+          vLLM이 제공하는 표준 지표입니다 — 요청당 평균 출력 {d.throughput.avgOutputTokens} 토큰
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+          {cells.map((c) => (
+            <div key={c.label} className="rounded-lg bg-secondary/40 p-3 text-center">
+              <div className="text-[10px] uppercase text-muted-foreground">{c.label}</div>
+              <div className="mt-0.5 font-mono text-base font-bold tabular-nums">{c.value}</div>
+              <div className="text-[10px] text-muted-foreground">{c.hint}</div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 파이프라인 실행 시간 추이 — KFP 실행 기록 실측 */
+function LiveRunHistory() {
+  const { data } = useQuery({
+    queryKey: ["metrics", "run-history"],
+    queryFn: async () => {
+      const list = await fetch(`${KF_BASE}/api/v1/pipelines`).then((r) => r.json());
+      const withRuns = (list.items ?? []).filter((p: { runs: number }) => p.runs > 0);
+      if (!withRuns.length) return { name: "", items: [] };
+      const target = withRuns[withRuns.length - 1];
+      const res = await fetch(`${KF_BASE}/api/v1/pipelines/${target.id}/run-history`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      const d = await res.json();
+      return { name: target.name as string, items: d.items };
+    },
+    enabled: KF_ENABLED,
+    refetchInterval: 30000,
+    retry: false,
+  });
+  if (!KF_ENABLED || !data?.items?.length) return null;
+  return (
+    <Card className="border-brand-mint-200">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          실행 시간 추이
+          <Badge variant="success" className="text-[10px]">실측</Badge>
+        </CardTitle>
+        <CardDescription>{data.name} · 최근 {data.items.length}회 실행의 총 소요시간</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ChartContainer config={{ durSec: { label: "소요(초)", color: "var(--brand-indigo-500)" } }}
+                        className="h-[200px] w-full">
+          <BarChart data={data.items}>
+            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey="at" tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false}
+                   tickFormatter={(v) => `${v}s`} />
+            <RTooltip content={<ChartTooltipContent />} />
+            <Bar dataKey="durSec" fill="var(--brand-indigo-500)" radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ChartContainer>
+      </CardContent>
+    </Card>
+  );
 }
 
 /** 실측 LLM 추론 지표 — 클러스터에 배포된 vLLM의 표준 메트릭 (TTFT·TPOT·E2E) */
@@ -334,308 +837,19 @@ export default function ModelInsightsPage() {
         {/* ── Inference ── */}
         <TabsContent value="inference" className="mt-4 space-y-4">
           <LiveLlmCard />
-          <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground">
-            <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">시뮬레이션</span>
-            아래 항목은 대규모 운영 시나리오 예시 데이터입니다 (KV cache 미스 분석 등은 운영 환경 옵저버빌리티 연동 시 실측 전환)
-          </div>
-          {/* Davis insight */}
-          <Card className="overflow-hidden border-rose-200 bg-gradient-to-br from-rose-50 to-transparent">
-            <CardContent className="p-5">
-              <div className="flex items-start gap-4">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700">
-                  <Sparkles className="size-5" />
-                </div>
-                <div className="flex-1 space-y-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="destructive">Critical</Badge>
-                      <Badge variant="outline" className="font-mono text-[10px]">AI Davis Insight</Badge>
-                      <span className="text-xs text-muted-foreground">12분 전 자동 감지</span>
-                    </div>
-                    <h2 className="mt-1 text-lg font-bold leading-tight">
-                      vllm-solar-10b 추론 지연 P99이 SLO를 18% 초과하고 있습니다.
-                    </h2>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      트레이스 1,240건과 호스트 메트릭 시리즈 32종을 상관 분석한 결과,
-                      <strong className="text-foreground"> Attention Layer 22/28에서 KV cache 미스가 폭증</strong>한 것이 주 원인입니다.
-                    </p>
-                  </div>
+          <LiveLatencySection />
+          <LiveCacheQueueSection />
+          <LiveInsights />
 
-                  <div className="grid gap-2 md:grid-cols-3">
-                    <Evidence label="근본 원인" value="KV Cache 미스율" detail="38-41% (정상: 8%)" color="rose" />
-                    <Evidence label="영향받는 요청" value="2,184 req / 1h" detail="전체 18.4%" color="amber" />
-                    <Evidence label="비즈니스 영향" value="SLO 위반" detail="P99 < 1s 미달" color="rose" />
-                  </div>
+          <LiveHotspots />
 
-                  <div className="space-y-2 rounded-lg border border-rose-200 bg-card p-3">
-                    <div className="flex items-center gap-1.5 text-xs font-medium">
-                      <Lightbulb className="size-3.5 text-amber-600" />
-                      권장 조치
-                    </div>
-                    <ul className="space-y-1 text-xs text-muted-foreground">
-                      <li className="flex items-start gap-1.5">
-                        <ChevronRight className="size-3 mt-0.5 shrink-0 text-brand-indigo-500" />
-                        KV cache 크기를 <strong className="text-foreground">32GB → 48GB</strong>로 확장 (acc-a100-1-3 유휴 메모리 16GB 활용)
-                      </li>
-                      <li className="flex items-start gap-1.5">
-                        <ChevronRight className="size-3 mt-0.5 shrink-0 text-brand-indigo-500" />
-                        vLLM <strong className="text-foreground">PagedAttention</strong> block size를 16 → 32로 조정
-                      </li>
-                      <li className="flex items-start gap-1.5">
-                        <ChevronRight className="size-3 mt-0.5 shrink-0 text-brand-indigo-500" />
-                        <strong className="text-foreground">Rebellions REBEL Quad</strong>로 한 레플리카 이전 (전성비 +22%)
-                      </li>
-                    </ul>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" disabled title="시뮬레이션 데이터 — 실제 적용 대상이 없습니다">
-                      권장 조치 자동 적용 (시뮬레이션)
-                    </Button>
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href="/monitoring/traces">트레이스 보기</Link>
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Latency breakdown + trend */}
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>응답 시간 트렌드</CardTitle>
-                <CardDescription>지난 60분 · P50 / P95 / P99 · 1초 SLO 라인</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ChartContainer
-                  config={{
-                    p50: { label: "P50", color: "var(--brand-mint-500)" },
-                    p95: { label: "P95", color: "var(--brand-indigo-500)" },
-                    p99: { label: "P99", color: "#e11d48" },
-                  }}
-                  className="h-[240px] w-full"
-                >
-                  <LineChart data={LATENCY_TREND}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="t" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}ms`} />
-                    <RTooltip content={<ChartTooltipContent indicator="line" />} />
-                    <ReferenceLine y={1000} stroke="#e11d48" strokeDasharray="4 4" label={{ value: "SLO 1s", fill: "#e11d48", fontSize: 10, position: "right" }} />
-                    <Line type="monotone" dataKey="p50" stroke="var(--brand-mint-500)" strokeWidth={1.5} dot={false} />
-                    <Line type="monotone" dataKey="p95" stroke="var(--brand-indigo-500)" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="p99" stroke="#e11d48" strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ChartContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>1 token 지연 분해 (TPOT)</CardTitle>
-                <CardDescription>
-                  vllm-solar-10b · <strong className="text-foreground">TPOT (Time Per Output Token)</strong> = 980ms 평균 · 단계별 기여도
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-3 grid grid-cols-3 gap-2 rounded-md border border-border bg-secondary/30 p-2 text-[11px]">
-                  <div>
-                    <div className="font-mono font-semibold">TTFT</div>
-                    <div className="text-muted-foreground">Time To First Token — 첫 토큰까지 지연 (prompt 처리 포함)</div>
-                    <div className="mt-0.5 font-mono">142ms</div>
-                  </div>
-                  <div>
-                    <div className="font-mono font-semibold">TPOT</div>
-                    <div className="text-muted-foreground">Time Per Output Token — 토큰 1개 생성 평균 시간</div>
-                    <div className="mt-0.5 font-mono">980ms</div>
-                  </div>
-                  <div>
-                    <div className="font-mono font-semibold">E2E Latency</div>
-                    <div className="text-muted-foreground">요청 전체 완료 시간 (TTFT + TPOT × 출력 토큰 수)</div>
-                    <div className="mt-0.5 font-mono">3.4s / 512 tok</div>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  {LATENCY_BREAKDOWN.map((s) => (
-                    <div key={s.stage} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="flex items-center gap-1.5">
-                          <span className="size-1.5 rounded-full" style={{ background: s.color }} />
-                          {s.stage}
-                        </span>
-                        <span className="font-mono tabular-nums">
-                          <strong>{s.ms}ms</strong>
-                          <span className="ml-1 text-muted-foreground">({s.pct}%)</span>
-                        </span>
-                      </div>
-                      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-secondary">
-                        <div className="h-full rounded-full" style={{ width: `${s.pct}%`, background: s.color }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50/60 p-2 text-[11px] text-amber-900">
-                  <strong>KV Cache 미스율 산출 방식:</strong> vLLM 표준 메트릭 <code className="font-mono text-[10px] bg-white/50 px-1 rounded">gpu_cache_usage_perc</code> +
-                  <code className="font-mono text-[10px] bg-white/50 px-1 rounded ml-1">num_preemptions_total</code>을 조합해 계산한다.
-                  Attention Layer 프로파일링은 <strong>1분 주기 샘플링</strong> (실시간 아님) — 추론 오버헤드 최소화.
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Hot spots */}
-          <Card>
-            <CardHeader>
-              <CardTitle>핫스팟 — 모델 그래프 노드별 GPU 시간</CardTitle>
-              <CardDescription>Method Hotspots — 가장 느린 컴포넌트 순위</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {HOTSPOTS.map((h, i) => (
-                <div key={i} className="flex items-center gap-3 rounded-lg border border-border p-3">
-                  <Badge variant="ghost" className="font-mono">#{i + 1}</Badge>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">{h.component}</div>
-                    <div className="font-mono text-[11px] text-muted-foreground">
-                      {h.gpu} · {h.reason}
-                    </div>
-                  </div>
-                  <div className="w-32">
-                    <div className="text-right font-mono text-sm font-semibold tabular-nums">{h.hostMs} ms</div>
-                    <Progress
-                      value={(h.hostMs / 84) * 100}
-                      indicatorClassName={i < 2 ? "bg-rose-500" : i < 3 ? "bg-amber-500" : "bg-brand-mint-500"}
-                    />
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
         </TabsContent>
 
         {/* ── Pipeline ── */}
         <TabsContent value="pipeline" className="mt-4 space-y-4">
           <LivePipelineBottleneck />
-          <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground">
-            <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">시뮬레이션</span>
-            아래 항목은 대규모 학습 시나리오 예시 데이터입니다
-          </div>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <GitBranch className="size-4" />
-                llama-3-finetune-pipeline · 실행 #014
-              </CardTitle>
-              <CardDescription>총 60분 18초 — 각 단계 시간 비중</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {PIPELINE_STAGES.map((s) => (
-                  <div key={s.stage} className="space-y-1">
-                    <div className="flex items-center justify-between text-sm">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={cn(
-                            "rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
-                            s.type === "data" && "bg-sky-100 text-sky-800",
-                            s.type === "ml" && "bg-brand-mint-50 text-brand-mint-700",
-                            s.type === "compute" && "bg-violet-100 text-violet-800",
-                            s.type === "deploy" && "bg-rose-100 text-rose-800",
-                          )}
-                        >
-                          {s.type}
-                        </span>
-                        <span className="font-mono">{s.stage}</span>
-                        {s.status === "warning" && (
-                          <Badge variant="warning" className="gap-1 text-[10px]">
-                            <AlertTriangle className="size-3" /> 병목
-                          </Badge>
-                        )}
-                      </div>
-                      <span className="font-mono tabular-nums text-foreground">
-                        <strong>{Math.floor(s.durSec / 60)}분 {s.durSec % 60}초</strong>
-                        <span className="ml-1 text-xs text-muted-foreground">({s.pct}%)</span>
-                      </span>
-                    </div>
-                    <div className="relative h-2 w-full overflow-hidden rounded-full bg-secondary">
-                      <div
-                        className={cn(
-                          "h-full rounded-full",
-                          s.status === "warning" ? "bg-amber-500" : "bg-brand-indigo-500",
-                        )}
-                        style={{ width: `${s.pct}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Pipeline-specific Davis insight */}
-          <Card className="overflow-hidden border-amber-200 bg-gradient-to-br from-amber-50 to-transparent">
-            <CardContent className="p-5">
-              <div className="flex items-start gap-4">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
-                  <Sparkles className="size-5" />
-                </div>
-                <div className="flex-1 space-y-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="warning">Warning</Badge>
-                      <Badge variant="outline" className="font-mono text-[10px]">Pipeline Insight</Badge>
-                    </div>
-                    <h2 className="mt-1 text-lg font-bold leading-tight">
-                      LoRA finetune 단계가 전체 시간의 60%를 차지합니다.
-                    </h2>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      <strong className="text-foreground">acc-a100-1-3</strong>의 GPU 활용률이 평균 62%로,
-                      파이프라인 동안 약 <strong className="text-foreground">810초의 유휴 시간</strong>이 발생했습니다.
-                      배치 크기를 키우거나, REBEL Quad로 분산 학습 시 전체 시간을 25-30% 단축할 수 있습니다.
-                    </p>
-                  </div>
-
-                  <div className="grid gap-2 md:grid-cols-3">
-                    <Evidence label="GPU 평균 활용률" value="62%" detail="이상치 비교 ↓18%" color="amber" />
-                    <Evidence label="유휴 시간" value="810초" detail="전체 22.7%" color="amber" />
-                    <Evidence label="개선 잠재" value="~25-30%" detail="배치 키우기 + 분산" color="indigo" />
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" variant="outline" asChild>
-                      <Link href="/ai-development/pipelines">파이프라인 편집</Link>
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>실행 시간 추이 (최근 10회)</CardTitle>
-              <CardDescription>같은 파이프라인의 run별 총 소요시간</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ChartContainer
-                config={{ secs: { label: "초", color: "var(--brand-indigo-500)" } }}
-                className="h-[200px] w-full"
-              >
-                <BarChart
-                  data={Array.from({ length: 10 }, (_, i) => ({
-                    run: `#${(14 - 9 + i).toString().padStart(3, "0")}`,
-                    secs: 3000 + Math.sin(i / 2) * 400 + (i === 9 ? 600 : 0) + Math.random() * 200,
-                  }))}
-                >
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="run" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Math.round(v / 60)}m`} />
-                  <RTooltip content={<ChartTooltipContent />} />
-                  <Bar dataKey="secs" radius={[4, 4, 0, 0]} fill="var(--brand-indigo-500)" />
-                </BarChart>
-              </ChartContainer>
-            </CardContent>
-          </Card>
+          <LiveRunHistory />
+          <LivePipelineInsight />
         </TabsContent>
       </Tabs>
     </div>
