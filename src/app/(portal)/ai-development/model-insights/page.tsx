@@ -389,7 +389,9 @@ export default function ModelInsightsPage() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <Button size="sm">권장 조치 자동 적용</Button>
+                    <Button size="sm" disabled title="시뮬레이션 데이터 — 실제 적용 대상이 없습니다">
+                      권장 조치 자동 적용 (시뮬레이션)
+                    </Button>
                     <Button variant="outline" size="sm" asChild>
                       <Link href="/monitoring/traces">트레이스 보기</Link>
                     </Button>

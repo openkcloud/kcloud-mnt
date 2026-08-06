@@ -457,7 +457,11 @@ function LiveModelBenchmark() {
 // ─────────────────────────────────────────────────────────────
 function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = React.useState("");
-  const [pipeline, setPipeline] = React.useState("pl-1");
+  const [workspace, setWorkspace] = React.useState("ai-research");
+  const { data: wsData } = api.kubeflow.profiles() as {
+    data: { items: { name: string }[] } | undefined;
+  };
+  const workspaces = wsData?.items.map((w) => w.name) ?? ["ai-research"];
   const [objective, setObjective] = React.useState<"maximize" | "minimize">("maximize");
   const [metric, setMetric] = React.useState("accuracy");
   const [goal, setGoal] = React.useState("0.95");
@@ -487,7 +491,7 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
-          namespace: "ai-research",
+          namespace: workspace,
           metric,
           objectiveType: objective,
           goal: Number(goal),
@@ -524,16 +528,18 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="lora-lr-tuning-v3" />
           </div>
           <div>
-            <Label>대상 파이프라인</Label>
-            <Select value={pipeline} onValueChange={setPipeline}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+            <Label>실행 워크스페이스</Label>
+            <Select value={workspace} onValueChange={setWorkspace}>
+              <SelectTrigger><SelectValue placeholder="워크스페이스 선택" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="pl-1">pl-1 · LoRA 파인튜닝</SelectItem>
-                <SelectItem value="pl-2">pl-2 · Whisper 양자화·엣지 배포</SelectItem>
-                <SelectItem value="pl-3">pl-3 · vLLM 부하 테스트</SelectItem>
-                <SelectItem value="pl-4">pl-4 · PIM 커널 벤치</SelectItem>
+                {workspaces.map((w) => (
+                  <SelectItem key={w} value={w}>{w}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              선택한 워크스페이스의 자원으로 Trial이 실행됩니다
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>

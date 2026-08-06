@@ -80,6 +80,20 @@ export default function PipelinesPage() {
     ? data?.items.find((p) => p.id === selected)
     : data?.items[0];
 
+  const { data: artifacts } = useQuery({
+    queryKey: ["kf", "artifacts", active?.id],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/pipelines/${active!.id}/artifacts`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{
+        items: { name: string; step?: string; run?: string; path: string;
+                 sizeMb: number; updatedAt: string }[];
+      }>;
+    },
+    enabled: !!KF_API && !!active,
+    refetchInterval: 15000,
+  });
+
   const { data: runsData } = useQuery({
     queryKey: ["kf", "runs", active?.id],
     queryFn: async () => {
@@ -90,6 +104,44 @@ export default function PipelinesPage() {
     enabled: !!KF_API && !!active,
     refetchInterval: 5000,
   });
+
+  async function downloadArtifact(path: string, name: string) {
+    try {
+      const res = await fetch(
+        `${KF_API}/api/v1/artifacts/download?path=${encodeURIComponent(path)}`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error(`다운로드 실패: ${(e as Error).message}`);
+    }
+  }
+
+  async function downloadYaml() {
+    if (!KF_API || !active) {
+      toast.info("mock 모드 — 실백엔드 연동 시 내려받을 수 있습니다");
+      return;
+    }
+    try {
+      const res = await fetch(`${KF_API}/api/v1/pipelines/${active.id}/yaml`);
+      if (!res.ok) throw new Error((await res.json()).detail ?? `${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${active.name.replace(/\s+/g, "_")}.yaml`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("YAML 파일을 내려받았습니다");
+    } catch (e) {
+      toast.error(`다운로드 실패: ${(e as Error).message}`);
+    }
+  }
 
   async function startRun() {
     if (!KF_API || !active) {
@@ -178,7 +230,7 @@ export default function PipelinesPage() {
                 <CardDescription>{active.description}</CardDescription>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm">YAML 다운로드</Button>
+                <Button variant="outline" size="sm" onClick={downloadYaml}>YAML 다운로드</Button>
                 <Button size="sm" onClick={startRun}>
                   <Play className="size-3.5" /> 새 실행
                 </Button>
@@ -298,21 +350,48 @@ export default function PipelinesPage() {
             <TabsContent value="artifacts">
               <Card>
                 <CardContent className="p-0">
-                  <div className="divide-y divide-border">
-                    {[
-                      { name: "model.safetensors", size: "14.2 GB", type: "model" },
-                      { name: "config.json", size: "2.1 KB", type: "config" },
-                      { name: "tokenizer.json", size: "1.8 MB", type: "tokenizer" },
-                      { name: "metrics.json", size: "12 KB", type: "metrics" },
-                    ].map((a) => (
-                      <div key={a.name} className="flex items-center gap-3 px-5 py-2.5">
-                        <Database className="size-4 text-brand-indigo-600" />
-                        <span className="flex-1 font-mono text-sm">{a.name}</span>
-                        <span className="font-mono text-xs text-muted-foreground tabular-nums">{a.size}</span>
-                        <Button variant="ghost" size="sm">다운로드</Button>
-                      </div>
-                    ))}
-                  </div>
+                  {KF_API ? (
+                    <div className="divide-y divide-border">
+                      {(artifacts?.items ?? []).length === 0 && (
+                        <div className="px-5 py-6 text-center text-xs text-muted-foreground">
+                          이 파이프라인의 실행 결과물이 아직 없습니다 —
+                          실행이 완료되면 생성된 파일이 여기에 표시됩니다
+                        </div>
+                      )}
+                      {(artifacts?.items ?? []).map((a) => (
+                        <div key={a.path} className="flex items-center gap-3 px-5 py-2.5">
+                          <Database className="size-4 text-brand-indigo-600" />
+                          <div className="flex-1">
+                            <div className="font-mono text-sm">{a.name}</div>
+                            <div className="text-[10px] text-muted-foreground">
+                              {a.step ? `${a.step} · ` : ""}{a.updatedAt}
+                            </div>
+                          </div>
+                          <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                            {a.sizeMb < 0.01 ? "< 0.01" : a.sizeMb} MB
+                          </span>
+                          <Button variant="ghost" size="sm"
+                                  onClick={() => downloadArtifact(a.path, a.name)}>
+                            다운로드
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-border">
+                      {[
+                        { name: "model.safetensors", size: "14.2 GB" },
+                        { name: "config.json", size: "2.1 KB" },
+                        { name: "metrics.json", size: "12 KB" },
+                      ].map((a) => (
+                        <div key={a.name} className="flex items-center gap-3 px-5 py-2.5">
+                          <Database className="size-4 text-brand-indigo-600" />
+                          <span className="flex-1 font-mono text-sm">{a.name}</span>
+                          <span className="font-mono text-xs text-muted-foreground tabular-nums">{a.size}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -362,7 +441,7 @@ function PipelineStep({
 
 function UploadPipelineDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = React.useState("");
-  const [ns, setNs] = React.useState("ai-research");
+  const [desc, setDesc] = React.useState("");
   const [fileName, setFileName] = React.useState<string | null>(null);
   const [fileYaml, setFileYaml] = React.useState("");
   const [pastedYaml, setPastedYaml] = React.useState("");
@@ -376,14 +455,14 @@ function UploadPipelineDialog({ open, onClose }: { open: boolean; onClose: () =>
     if (!yaml.trim()) return;
     if (!KF_ENABLED) {
       toast.success(`Pipeline '${name}' 업로드 완료 (mock)`, {
-        description: `${ns} 네임스페이스 · ${mode === "file" ? fileName : "붙여넣은 YAML"}`,
+        description: `${mode === "file" ? fileName : "붙여넣은 YAML"}`,
       });
       onClose();
       return;
     }
     setBusy(true);
     try {
-      await uploadPipeline({ name, yaml });
+      await uploadPipeline({ name, description: desc, yaml });
       toast.success(`Pipeline '${name}' 업로드 완료 — KFP 카탈로그 등록됨`);
       qc.invalidateQueries({ queryKey: ["kf", "pipelines"] });
       setName("");
@@ -418,10 +497,13 @@ function UploadPipelineDialog({ open, onClose }: { open: boolean; onClose: () =>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-training-pipeline" />
             </div>
             <div>
-              <Label>네임스페이스</Label>
-              <Input value={ns} onChange={(e) => setNs(e.target.value)} placeholder="ai-research" />
+              <Label>설명 (선택)</Label>
+              <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="학습·평가 파이프라인" />
             </div>
           </div>
+          <p className="text-[11px] text-muted-foreground">
+            파이프라인은 전체 워크스페이스가 공유합니다. 실행할 자원은 실행 시점에 결정됩니다.
+          </p>
 
           <div className="flex gap-1 rounded-md border border-border p-0.5">
             <button
