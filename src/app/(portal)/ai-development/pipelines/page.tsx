@@ -11,6 +11,7 @@ import {
   Sparkles,
   Upload,
   FileCode,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -190,6 +191,50 @@ export default function PipelinesPage() {
     }
   }
 
+  async function deletePipeline() {
+    if (!KF_API || !active) {
+      toast.info("mock 모드 — 삭제는 실백엔드 연동 시 동작합니다");
+      return;
+    }
+    if (!window.confirm(`"${active.name}" 파이프라인을 삭제할까요?`)) return;
+    try {
+      let res = await fetch(`${KF_API}/api/v1/pipelines/${active.id}`,
+                            { method: "DELETE" });
+
+      // 실행 기록·예약이 남아 있으면 함께 지울지 한 번 더 확인
+      if (res.status === 409) {
+        const d = (await res.json()).detail as {
+          runs: number; schedules: number;
+        };
+        const parts = [
+          d.runs ? `실행 기록 ${d.runs}건` : "",
+          d.schedules ? `예약 ${d.schedules}건` : "",
+        ].filter(Boolean).join("과 ");
+        if (!window.confirm(
+          `"${active.name}"에는 ${parts}이 남아 있습니다.\n` +
+          `함께 삭제할까요? (되돌릴 수 없습니다)`)) return;
+        res = await fetch(`${KF_API}/api/v1/pipelines/${active.id}?force=true`,
+                          { method: "DELETE" });
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(
+          typeof body.detail === "string" ? body.detail : `${res.status}`);
+      }
+      const done = await res.json();
+      const rm = done.removed ?? {};
+      const extra = [
+        rm.runs ? `실행 기록 ${rm.runs}건` : "",
+        rm.schedules ? `예약 ${rm.schedules}건` : "",
+      ].filter(Boolean).join(", ");
+      toast.success(`"${done.name}" 삭제 완료${extra ? ` (${extra} 포함)` : ""}`);
+      setSelected(undefined);
+      qc.invalidateQueries({ queryKey: ["kf", "pipelines"] });
+    } catch (e) {
+      toast.error(`삭제 실패: ${(e as Error).message}`);
+    }
+  }
+
   if (isLoading || !data) return <Skeleton className="h-96" />;
 
   return (
@@ -260,6 +305,10 @@ export default function PipelinesPage() {
                 <Button variant="outline" size="sm" onClick={downloadYaml}>YAML 다운로드</Button>
                 <Button size="sm" onClick={startRun}>
                   <Play className="size-3.5" /> 새 실행
+                </Button>
+                <Button variant="ghost" size="sm" onClick={deletePipeline}
+                        className="text-rose-600 hover:bg-rose-50">
+                  <Trash2 className="size-3.5" /> 삭제
                 </Button>
               </div>
             </CardHeader>
