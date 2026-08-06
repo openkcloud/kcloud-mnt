@@ -1,5 +1,11 @@
 "use client";
-import { Send, Activity, Cpu } from "lucide-react";
+import * as React from "react";
+import { Send, Activity, Cpu, Plus, Trash2, Settings2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { PageHeader } from "@/components/page-header";
+import { ServingCreateDialog } from "@/components/serving-create-dialog";
+import { ServingResourceDialog } from "@/components/serving-resource-dialog";
+import { KF_BASE } from "@/lib/kf";
 import { api } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -35,9 +41,59 @@ export default function ServingPage() {
     data: { items: KFInferenceService[] } | undefined;
     isLoading: boolean;
   };
+  const qc = useQueryClient();
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [editing, setEditing] = React.useState<KFInferenceService | null>(null);
+  const [busy, setBusy] = React.useState<string | null>(null);
+
+  async function removeServing(s: KFInferenceService) {
+    if (!KF_ENABLED) {
+      toast.info("mock 모드 — 삭제는 실백엔드 연동 시 동작합니다");
+      return;
+    }
+    if (!window.confirm(
+      `"${s.name}" 서비스를 내릴까요?\n호출 중인 프로그램이 있으면 즉시 실패하게 됩니다.`))
+      return;
+    setBusy(s.name);
+    try {
+      const res = await fetch(`${KF_BASE}/api/v1/serving/${s.name}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(typeof body.detail === "string" ? body.detail : `${res.status}`);
+      }
+      toast.success(`"${s.name}" 서비스를 내렸습니다`);
+      qc.invalidateQueries({ queryKey: ["kf", "serving"] });
+    } catch (e) {
+      toast.error(`삭제 실패: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (isLoading || !data) return <Skeleton className="h-96" />;
   return (
-    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+    <div className="space-y-4">
+      <ServingCreateDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+      <ServingResourceDialog service={editing} onClose={() => setEditing(null)} />
+      <PageHeader
+        title="Serving — 모델 API 서비스"
+        description="학습된 모델을 HTTP API로 배포합니다 (KServe)"
+        actions={
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" /> 서비스 배포
+          </Button>
+        }
+      />
+
+      {data.items.length === 0 && (
+        <Card>
+          <CardContent className="p-10 text-center text-sm text-muted-foreground">
+            배포된 서비스가 없습니다 — 오른쪽 위 &quot;서비스 배포&quot;로 시작하세요
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
       {data.items.map((s) => (
         <Card key={s.id}>
           <CardContent className="space-y-4 p-5">
@@ -66,9 +122,21 @@ export default function ServingPage() {
             </div>
 
             <div className="flex items-center justify-between text-xs">
-              <Badge variant="outline" className="gap-1">
-                <Cpu className="size-3" /> {s.acceleratorKind ?? "CPU"}
-              </Badge>
+              <button
+                type="button"
+                onClick={() => setEditing(s)}
+                className="group inline-flex items-center gap-1 rounded-md border border-border px-2 py-1
+                           transition-colors hover:border-brand-indigo-300 hover:bg-secondary/60"
+                title="자원 변경"
+              >
+                <Cpu className="size-3" />
+                <span className="font-mono">
+                  {s.gpu ? `GPU ${s.gpu}장` : "CPU"}
+                  {s.cpu ? ` · ${s.cpu} vCPU` : ""}
+                  {s.memoryGi ? ` · ${s.memoryGi}GB` : ""}
+                </span>
+                <Settings2 className="size-3 text-muted-foreground group-hover:text-brand-indigo-600" />
+              </button>
               <div className="flex items-center gap-1 text-muted-foreground">
                 <Activity className="size-3" />
                 실시간
@@ -79,14 +147,22 @@ export default function ServingPage() {
               {s.endpoint}
             </div>
 
-            {KF_ENABLED && s.status === "Ready" && (
-              <Button size="sm" variant="outline" className="w-full" onClick={() => testCall(s)}>
-                <Send className="size-3" /> API 호출 테스트
+            <div className="flex items-center gap-2">
+              {KF_ENABLED && s.status === "Ready" && (
+                <Button size="sm" variant="outline" className="flex-1" onClick={() => testCall(s)}>
+                  <Send className="size-3" /> API 호출 테스트
+                </Button>
+              )}
+              <Button size="sm" variant="ghost" disabled={busy === s.name}
+                      className="text-rose-600 hover:bg-rose-50"
+                      onClick={() => removeServing(s)}>
+                <Trash2 className="size-3.5" />
               </Button>
-            )}
+            </div>
           </CardContent>
         </Card>
       ))}
+      </div>
     </div>
   );
 }

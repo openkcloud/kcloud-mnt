@@ -1,6 +1,6 @@
 "use client";
 import * as React from "react";
-import { FlaskConical, Target, Plus, Zap, Award, Cpu } from "lucide-react";
+import { FlaskConical, Target, Plus, Zap, Award, Cpu, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -52,6 +52,33 @@ export default function ExperimentsPage() {
     isLoading: boolean;
   };
   const [createOpen, setCreateOpen] = React.useState(false);
+  const qc = useQueryClient();
+  const [busy, setBusy] = React.useState<string | null>(null);
+
+  async function removeExperiment(name: string, namespace: string) {
+    if (!KF_ENABLED) {
+      toast.info("mock 모드 — 삭제는 실백엔드 연동 시 동작합니다");
+      return;
+    }
+    if (!window.confirm(`"${name}" 실험을 삭제할까요?\n실행된 시도(Trial) 기록도 함께 사라집니다.`))
+      return;
+    setBusy(name);
+    try {
+      const res = await fetch(
+        `${KF_BASE}/api/v1/experiments/${name}?namespace=${encodeURIComponent(namespace)}`,
+        { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(typeof body.detail === "string" ? body.detail : `${res.status}`);
+      }
+      toast.success(`"${name}" 실험을 삭제했습니다`);
+      qc.invalidateQueries({ queryKey: ["kf", "experiments"] });
+    } catch (e) {
+      toast.error(`삭제 실패: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
 
@@ -86,6 +113,7 @@ export default function ExperimentsPage() {
                   <TableHead>진척률</TableHead>
                   <TableHead>시도</TableHead>
                   <TableHead>상태</TableHead>
+                  <TableHead className="w-16 text-right">관리</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -124,6 +152,17 @@ export default function ExperimentsPage() {
                         >
                           {e.status}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy === e.name}
+                          className="text-rose-600 hover:bg-rose-50"
+                          onClick={() => removeExperiment(e.name, e.namespace ?? "")}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );

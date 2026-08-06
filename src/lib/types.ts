@@ -395,8 +395,17 @@ export interface KFExperiment {
   trials: number;
   status: "Running" | "Succeeded" | "Failed";
   createdAt: string;
+  /** 실백엔드에서만 내려온다 (mock 데이터에는 없음) */
+  namespace?: string;
 }
-export interface KFInferenceService {
+export interface KFInferenceServiceResources {
+  /** 실백엔드에서만 내려온다 (mock 데이터에는 없음) */
+  storageUri?: string;
+  cpu?: string;
+  memoryGi?: number;
+  gpu?: number;
+}
+export interface KFInferenceService extends KFInferenceServiceResources {
   id: string;
   name: string;
   modelName: string;
