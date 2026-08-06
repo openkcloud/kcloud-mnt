@@ -244,6 +244,94 @@ function LivePipelineInsight() {
   );
 }
 
+interface ServingMetric {
+  name: string; namespace: string; format: string; accelerator: string;
+  requests: number; totalMs: number; p95Ms: number | null;
+  breakdown: { stage: string; ms: number; key: string }[];
+}
+
+/** 배포된 모델 서비스의 추론 지표 — KServe 래퍼 실측 */
+function LiveServingMetrics() {
+  const { data } = useQuery({
+    queryKey: ["metrics", "serving"],
+    queryFn: async () => {
+      const res = await fetch(`${KF_BASE}/api/v1/metrics/serving`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: ServingMetric[] }>;
+    },
+    enabled: KF_ENABLED,
+    refetchInterval: 10000,
+    retry: false,
+  });
+  if (!KF_ENABLED || !data?.items?.length) return null;
+
+  const COLORS: Record<string, string> = {
+    pre: "#94a3b8",
+    infer: "var(--brand-indigo-500)",
+    post: "var(--brand-mint-500)",
+  };
+
+  return (
+    <Card className="border-brand-mint-200">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Database className="size-4 text-brand-mint-600" />
+          배포 모델 추론 성능
+          <Badge variant="success" className="text-[10px]">실측</Badge>
+        </CardTitle>
+        <CardDescription>
+          우리가 학습시켜 배포한 모델들 — 요청 1건이 전처리·추론·후처리에
+          각각 얼마나 쓰는지 보여줍니다
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {data.items.map((m) => {
+          const total = m.breakdown.reduce((a, b) => a + b.ms, 0) || 1;
+          return (
+            <div key={`${m.namespace}/${m.name}`} className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-medium">{m.name}</span>
+                <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Badge variant="outline" className="text-[10px]">{m.format}</Badge>
+                  <Badge variant="outline" className="text-[10px]">{m.accelerator}</Badge>
+                  누적 {m.requests}건 · 평균{" "}
+                  <span className="font-mono font-semibold text-foreground">
+                    {m.totalMs}ms
+                  </span>
+                  {m.p95Ms != null && <>· P95 {m.p95Ms}ms</>}
+                </span>
+              </div>
+              <div className="flex h-6 w-full overflow-hidden rounded-md">
+                {m.breakdown.map((b) => (
+                  <div key={b.key}
+                       style={{ width: `${Math.max((b.ms / total) * 100, 1)}%`,
+                                background: COLORS[b.key] }}
+                       className="flex items-center justify-center text-[10px] font-semibold text-white"
+                       title={`${b.stage}: ${b.ms}ms`}>
+                    {(b.ms / total) * 100 >= 15 ? `${Math.round((b.ms / total) * 100)}%` : ""}
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+                {m.breakdown.map((b) => (
+                  <span key={b.key} className="inline-flex items-center gap-1">
+                    <span className="size-2 rounded-sm" style={{ background: COLORS[b.key] }} />
+                    {b.stage} {b.ms}ms
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          추론 구간이 대부분이면 모델이나 가속기가 병목이고, 전처리가 길면
+          입력 데이터 처리(이미지 변환 등)가 병목입니다.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 /** 실측 병목 소견 — 살아있는 지표에 규칙을 적용해 자동 생성 (임의 수치 없음) */
 function LiveInsights() {
   const { data } = useQuery({
@@ -820,7 +908,7 @@ export default function ModelInsightsPage() {
               <Badge variant="ghost" className="font-mono text-[10px]">Davis AI</Badge>
             </div>
             <p className="text-xs text-muted-foreground">
-              <strong className="text-foreground">학습 파이프라인 각 단계</strong>와 <strong className="text-foreground">추론 단계별 지연</strong>을
+              <strong className="text-foreground">모델을 만들어 배포하기까지의 각 단계</strong>와 <strong className="text-foreground">배포된 모델의 응답 지연</strong>을
               상관 분석해서 자동으로 병목 컴포넌트를 식별합니다.
               옵저버빌리티 시그널(메트릭·로그·트레이스)을 ML 워크플로우 컨텍스트로 재해석합니다.
             </p>
@@ -830,12 +918,13 @@ export default function ModelInsightsPage() {
 
       <Tabs defaultValue="inference">
         <TabsList>
-          <TabsTrigger value="inference">추론 병목 (Inference)</TabsTrigger>
-          <TabsTrigger value="pipeline">파이프라인 병목 (Training)</TabsTrigger>
+          <TabsTrigger value="inference">추론 병목 (서비스 응답)</TabsTrigger>
+          <TabsTrigger value="pipeline">파이프라인 병목 (학습→배포)</TabsTrigger>
         </TabsList>
 
         {/* ── Inference ── */}
         <TabsContent value="inference" className="mt-4 space-y-4">
+          <LiveServingMetrics />
           <LiveLlmCard />
           <LiveLatencySection />
           <LiveCacheQueueSection />

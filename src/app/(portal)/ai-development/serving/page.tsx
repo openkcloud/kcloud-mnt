@@ -16,20 +16,21 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { KF_ENABLED } from "@/lib/kf";
 
-/** 데모 호출 — sklearn iris 입력 형식 (KServe v1 protocol) */
+/** 호출 테스트 — 모델 형식에 맞는 샘플 입력을 백엔드가 만들어 호출한다 */
 async function testCall(s: KFInferenceService) {
   try {
-    const t0 = performance.now();
-    const res = await fetch(s.endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ instances: [[6.8, 2.8, 4.8, 1.4], [6.0, 3.4, 4.5, 1.6]] }),
-    });
-    const ms = Math.round(performance.now() - t0);
-    if (!res.ok) throw new Error(`${res.status}`);
+    const res = await fetch(`${KF_BASE}/api/v1/serving/${s.name}/test`,
+                            { method: "POST" });
     const json = await res.json();
-    toast.success(`${s.name} 응답 ${ms}ms`, {
-      description: `predictions: ${JSON.stringify(json.predictions ?? json).slice(0, 80)}`,
+    if (!res.ok) {
+      throw new Error(typeof json.detail === "string" ? json.detail : `${res.status}`);
+    }
+    const first = json.result?.predictions?.[0];
+    const summary = first && typeof first === "object" && "prediction" in first
+      ? `판정 ${first.prediction} (확신도 ${first.confidence}%)`
+      : JSON.stringify(json.result?.predictions ?? json.result).slice(0, 80);
+    toast.success(`${s.name} 응답 ${json.latencyMs}ms`, {
+      description: `${json.input} 입력 → ${summary}`,
     });
   } catch (e) {
     toast.error(`호출 실패: ${(e as Error).message}`);

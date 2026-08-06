@@ -21,6 +21,11 @@ const TABS = [
   { href: "/ai-development/model-insights", label: "병목 분석" },
 ];
 
+/** 경로 끝의 / 를 떼어 비교 기준을 맞춘다 (next.config의 trailingSlash 대응) */
+function normalize(path: string) {
+  return path.length > 1 ? path.replace(/\/+$/, "") : path;
+}
+
 export default function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [createOpen, setCreateOpen] = React.useState(false);
@@ -63,14 +68,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       />
       <div className="flex items-center gap-1 overflow-x-auto border-b border-border">
         {TABS.map((t) => {
-          const active = pathname === t.href;
+          // trailingSlash 설정 때문에 실제 경로 끝에 /가 붙는다.
+          // 하위 화면(예: /notebooks/ksb/ide)에서도 상위 탭이 켜지도록 한다.
+          const here = normalize(pathname);
+          const target = normalize(t.href);
+          const active = target === "/ai-development"
+            ? here === target
+            : here === target || here.startsWith(`${target}/`);
           return (
             <Link
               key={t.href}
               href={t.href}
+              aria-current={active ? "page" : undefined}
               className={cn(
-                "relative -mb-px shrink-0 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
-                active ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
+                "relative -mb-px shrink-0 rounded-t-md border-b-2 px-4 py-2.5 text-sm transition-colors",
+                active
+                  ? "border-primary bg-primary/5 font-semibold text-primary"
+                  : "border-transparent font-medium text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
               )}
             >
               {t.label}

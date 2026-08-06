@@ -16,7 +16,8 @@ import { KF_BASE, KF_ENABLED } from "@/lib/kf";
 import { cn } from "@/lib/utils";
 
 interface StoredModel {
-  name: string; files: number; sizeMb: number; uri: string; updatedAt: string;
+  name: string; files: number; sizeMb: number; uri: string;
+  updatedAt: string; format: string; servable: boolean;
 }
 
 /** 모델 형식 — KServe가 지원하는 서버 종류 */
@@ -130,16 +131,24 @@ export function ServingCreateDialog({
 
           <div className="space-y-1.5">
             <Label>배포할 모델</Label>
-            <Select value={uri} onValueChange={setUri}>
+            <Select
+              value={uri}
+              onValueChange={(v) => {
+                setUri(v);
+                // 파일 구조로 알아낸 형식을 자동으로 맞춘다
+                const m = models?.items.find((x) => x.uri === v);
+                if (m?.format) setFormat(m.format);
+              }}
+            >
               <SelectTrigger>
                 <SelectValue placeholder={
                   models?.items.length ? "저장소에서 고르세요" : "저장된 모델이 없습니다"
                 } />
               </SelectTrigger>
               <SelectContent>
-                {(models?.items ?? []).map((m) => (
+                {(models?.items ?? []).filter((m) => m.servable).map((m) => (
                   <SelectItem key={m.uri} value={m.uri}>
-                    {m.name} · {m.sizeMb}MB · {m.updatedAt}
+                    {m.name} · {m.format} · {m.sizeMb}MB · {m.updatedAt}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -148,9 +157,16 @@ export function ServingCreateDialog({
               <p className="font-mono text-[11px] text-muted-foreground">{uri}</p>
             )}
             <p className="text-[11px] text-muted-foreground">
-              학습 파이프라인이 저장한 모델이 여기에 나옵니다
+              바로 배포할 수 있는 모델만 나옵니다
               {models?.bucket ? ` (s3://${models.bucket})` : ""}
             </p>
+            {(models?.items ?? []).some((m) => !m.servable) && (
+              <p className="text-[11px] text-amber-700">
+                {(models?.items ?? []).filter((m) => !m.servable)
+                  .map((m) => m.name).join(", ")} 은(는) 서빙용으로 포장되지 않아
+                목록에서 제외했습니다 — 학습 파이프라인을 돌리면 자동으로 포장됩니다.
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">
