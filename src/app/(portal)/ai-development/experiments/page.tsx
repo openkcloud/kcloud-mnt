@@ -471,8 +471,21 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
   const qc = useQueryClient();
   const [busy, setBusy] = React.useState(false);
 
+  // K8s 리소스 이름 규칙 — 노트북과 동일 (소문자·숫자·하이픈)
+  const validName = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name);
+  const nameError =
+    name.trim() === ""
+      ? ""
+      : /[A-Z]/.test(name)
+        ? "대문자는 사용할 수 없습니다 — 소문자로 입력하세요"
+        : /[^a-z0-9-]/.test(name)
+          ? "영문 소문자·숫자·하이픈(-)만 사용할 수 있습니다 (밑줄·한글·공백 불가)"
+          : !validName
+            ? "이름은 영문/숫자로 시작하고 끝나야 합니다"
+            : "";
+
   const submit = async () => {
-    if (!name.trim()) return;
+    if (!validName) return;
     if (!KF_ENABLED) {
       toast.success(`HPO 실험 '${name}' 등록됨 (mock)`, {
         description: `${algorithm} · ${objective} ${metric} → ${goal} · 최대 ${maxTrials}회 시도`,
@@ -525,7 +538,16 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
         <div className="space-y-3 py-2">
           <div>
             <Label>실험 이름</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="lora-lr-tuning-v3" />
+            <Input value={name} onChange={(e) => setName(e.target.value)}
+                   placeholder="lora-lr-tuning-v3 (소문자·숫자·하이픈)"
+                   aria-invalid={!!nameError} />
+            {nameError ? (
+              <p className="mt-1 text-[11px] text-rose-600">{nameError}</p>
+            ) : name.trim() === "" ? (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                이름을 입력하면 등록 버튼이 활성화됩니다
+              </p>
+            ) : null}
           </div>
           <div>
             <Label>실행 워크스페이스</Label>
@@ -587,7 +609,9 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button onClick={submit} disabled={busy}>{busy ? "등록 중…" : "실험 등록"}</Button>
+          <Button onClick={submit} disabled={busy || !validName}>
+            {busy ? "등록 중…" : "실험 등록"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
