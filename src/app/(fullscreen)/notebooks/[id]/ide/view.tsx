@@ -28,6 +28,7 @@ import {
 import { Sparkline, makeSeries } from "@/components/viz/sparkline";
 import { useNotebookConnect, notebookAction, KF_API } from "@/lib/notebook-api";
 import { useQuery } from "@tanstack/react-query";
+import { ensureBackendSession } from "@/lib/auth";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +49,13 @@ import { cn } from "@/lib/utils";
  */
 export default function NotebookIdePage() {
   const params = useParams<{ id: string }>();
+  const [sessionReady, setSessionReady] = React.useState(false);
+
+  // IDE 프록시는 세션 쿠키를 요구한다 — iframe 로드 전에 먼저 확보
+  React.useEffect(() => {
+    ensureBackendSession().finally(() => setSessionReady(true));
+  }, []);
+
   const { data: nb, isLoading } = useNotebookConnect(params.id);
   const [running] = React.useState(true);
 
@@ -56,7 +64,7 @@ export default function NotebookIdePage() {
     toast.success(`노트북 ${act === "stop" ? "정지" : "재시작"} 요청 완료`);
   }
 
-  if (isLoading || !nb) return <Skeleton className="h-screen" />;
+  if (isLoading || !nb || !sessionReady) return <Skeleton className="h-screen" />;
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-950 text-slate-100">

@@ -113,6 +113,36 @@ export const useAuth = create<AuthState>()(
   ),
 );
 
+/**
+ * 백엔드(CMP) 세션 보장 — IDE 프록시 접근 전에 호출.
+ * 포털에 로그인돼 있는데 백엔드 쿠키만 없는 경우(백엔드 재시작·쿠키 만료 등)
+ * 사용자에게 다시 로그인을 요구하지 않고 조용히 세션을 재발급한다.
+ */
+export async function ensureBackendSession(): Promise<boolean> {
+  if (!KF_ENABLED) return true;
+  try {
+    const me = await fetch(`${KF_BASE}/api/v1/auth/me`, { credentials: "include" });
+    if (me.ok) return true;
+  } catch {
+    return false;
+  }
+  const user = useAuth.getState().user;
+  if (!user) return false;
+  const entry = MOCK_USERS[user.username.toLowerCase()];
+  if (!entry) return false;
+  try {
+    const res = await fetch(`${KF_BASE}/api/v1/auth/login`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: user.username, password: entry.password }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function roleLabel(role: Role) {
   return (
     {
