@@ -26,7 +26,8 @@ import {
   TabsContent,
 } from "@/components/ui/tabs";
 import { Sparkline, makeSeries } from "@/components/viz/sparkline";
-import { useNotebookConnect, notebookAction } from "@/lib/notebook-api";
+import { useNotebookConnect, notebookAction, KF_API } from "@/lib/notebook-api";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -296,9 +297,10 @@ function CodeServerSlot({
             {showLive ? "iframe" : "preview"}
           </Badge>
         </div>
-        {nb.connectMode === "live" && (
+        {/* 데모 전환 스위치는 개발용 — 실접속 상태에서는 노출하지 않는다 */}
+        {nb.connectMode !== "live" && (
           <div className="flex items-center gap-1.5">
-            <span>Force preview</span>
+            <span>미리보기 모드</span>
             <Switch checked={forceMock} onCheckedChange={setForceMock} />
           </div>
         )}
@@ -426,6 +428,35 @@ model.print_trainable_parameters()
 // ────────────────────────────────────────────────────────
 // Right: Accelerator Monitor (CMP 고유 — 그대로 유지)
 // ────────────────────────────────────────────────────────
+interface NbGpu {
+  node: string;
+  podPhase: string;
+  allocated: { kind: string; count: number } | null;
+  nodeGpu: {
+    gpu: string; utilPct: number; memUsedMb: number;
+    memTotalMb: number; tempC: number; powerW: number;
+  } | null;
+}
+
+/** 최근 값들을 모아 스파크라인용 시리즈로 (실측 샘플링) */
+function useGpuSamples(id: string) {
+  const [hist, setHist] = React.useState<NbGpu["nodeGpu"][]>([]);
+  const { data } = useQuery({
+    queryKey: ["ide-gpu", id],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/notebooks/${id}/gpu`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<NbGpu>;
+    },
+    enabled: !!KF_API,
+    refetchInterval: 3000,
+  });
+  React.useEffect(() => {
+    if (data?.nodeGpu) setHist((p) => [...p.slice(-29), data.nodeGpu]);
+  }, [data]);
+  return { data, hist };
+}
+
 function AcceleratorMonitor({
   nb,
   running,
@@ -433,40 +464,66 @@ function AcceleratorMonitor({
   nb: NonNullable<ReturnType<typeof useNotebookConnect>["data"]>;
   running: boolean;
 }) {
+  const params = useParams<{ id: string }>();
+  const { data: gpuData, hist } = useGpuSamples(params.id);
   const hasAcc = !!nb.resources.accelerator;
+  const g = gpuData?.nodeGpu;
+  const series = (pick: (x: NonNullable<NbGpu["nodeGpu"]>) => number) =>
+    hist.length > 1 ? hist.filter(Boolean).map((h) => pick(h!)) : makeSeries(1, 30, 20, 5);
+
   return (
     <aside className="hidden w-64 flex-col border-l border-slate-800 bg-slate-900 lg:flex">
-      <div className="border-b border-slate-800 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-        가속기 모니터
+      <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          가속기 모니터
+        </span>
+        {g && (
+          <span className="rounded bg-brand-mint-500/20 px-1.5 text-[9px] font-bold text-brand-mint-300">
+            실측
+          </span>
+        )}
       </div>
       <div className="space-y-3 p-3">
-        {hasAcc ? (
+        {hasAcc && g ? (
           <>
+            <div className="rounded border border-slate-800 bg-slate-950 px-2 py-1.5">
+              <div className="truncate text-[10px] font-semibold text-slate-200">{g.gpu}</div>
+              <div className="font-mono text-[9px] text-slate-500">
+                node/{gpuData?.node} · 할당 {gpuData?.allocated?.count ?? 0}장
+              </div>
+            </div>
             <MonitorMetric
-              label={`${nb.resources.accelerator!.kind.split("/")[1]?.toUpperCase()} 활용률`}
-              value={running ? "94%" : "12%"}
+              label="GPU 활용률"
+              value={`${g.utilPct}%`}
               color="#10b981"
-              data={makeSeries(1, 30, running ? 90 : 15, running ? 8 : 5)}
+              data={series((h) => h.utilPct)}
             />
             <MonitorMetric
               label="VRAM"
-              value={running ? "28.4 / 32 GB" : "4.2 / 32 GB"}
+              value={`${(g.memUsedMb / 1024).toFixed(1)} / ${(g.memTotalMb / 1024).toFixed(0)} GB`}
               color="#3b82f6"
-              data={makeSeries(2, 30, running ? 88 : 13, 4)}
+              data={series((h) => Math.round((h.memUsedMb / h.memTotalMb) * 100))}
             />
             <MonitorMetric
               label="온도"
-              value={running ? "72°C" : "48°C"}
+              value={`${g.tempC}°C`}
               color="#f59e0b"
-              data={makeSeries(3, 30, running ? 72 : 48, 3)}
+              data={series((h) => h.tempC)}
             />
             <MonitorMetric
               label="전력"
-              value={running ? "148 W" : "65 W"}
+              value={`${Math.round(g.powerW)} W`}
               color="#a855f7"
-              data={makeSeries(4, 30, running ? 148 : 65, 6)}
+              data={series((h) => Math.round(h.powerW))}
             />
+            <p className="text-[9px] leading-snug text-slate-500">
+              노드 전체 GPU 상태입니다. 다른 작업이 같은 GPU를 쓰면 함께 반영됩니다.
+            </p>
           </>
+        ) : hasAcc ? (
+          <div className="rounded border border-slate-800 bg-slate-950 p-3 text-center text-[10px] text-slate-400">
+            GPU 상태를 불러오는 중…
+          </div>
         ) : (
           <div className="rounded border border-slate-800 bg-slate-950 p-3 text-center text-xs text-slate-500">
             가속기 없음
@@ -477,13 +534,10 @@ function AcceleratorMonitor({
           <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
             메트릭 소스
           </div>
-          <Kv label="Source" value="Prometheus" mono small />
-          <Kv label="Endpoint" value="/api/v1/query" mono small />
-          <Kv label="Scrape" value="15s" mono small />
-        </div>
-
-        <div className="rounded border border-brand-mint-700/30 bg-brand-mint-900/20 p-2 text-[10px] text-brand-mint-200">
-          💡 데이터 소스: Prometheus + DCGM·RBLN exporter. 실제 구현 시 metric API 한 줄만 교체.
+          <Kv label="Source" value={g ? "nvidia-smi (DaemonSet)" : "-"} mono small />
+          <Kv label="Endpoint" value="/api/v1/notebooks/{id}/gpu" mono small />
+          <Kv label="주기" value="3s" mono small />
+          <Kv label="Pod 상태" value={gpuData?.podPhase ?? "-"} mono small />
         </div>
       </div>
     </aside>

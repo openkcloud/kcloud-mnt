@@ -97,6 +97,34 @@ export default function NotebookDetailPage() {
   const { data: filesData } = useWorkspaceFiles(params.id);
   const qc = useQueryClient();
 
+  // Pod 이벤트 (10초) · 환경 변수 (30초) 실측
+  const { data: eventsData } = useQuery({
+    queryKey: ["nb-events", params.id],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/notebooks/${params.id}/events`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{
+        items: { time: string; reason: string; message: string; type: string; count: number }[];
+      }>;
+    },
+    enabled: !!KF_API,
+    refetchInterval: 10000,
+  });
+
+  const { data: envData } = useQuery({
+    queryKey: ["nb-env", params.id],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/notebooks/${params.id}/env`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{
+        items: { name: string; value: string; source: string }[];
+        pod: Record<string, string>;
+      }>;
+    },
+    enabled: !!KF_API,
+    refetchInterval: 30000,
+  });
+
   async function act(action: "stop" | "restart") {
     try {
       await notebookAction(params.id, action);
@@ -287,21 +315,35 @@ export default function NotebookDetailPage() {
         <TabsContent value="events">
           <Card>
             <CardContent className="p-0">
-              <div className="divide-y divide-border">
-                {[
-                  { ts: "14:22", type: "Normal", reason: "Started", msg: "Container code-server started" },
-                  { ts: "14:21", type: "Normal", reason: "Pulled", msg: `Image ${nb.image} pulled successfully` },
-                  { ts: "14:20", type: "Normal", reason: "Scheduled", msg: `Pod assigned to gpu-node-01` },
-                  { ts: "14:19", type: "Normal", reason: "Created", msg: "Created PVC kf-nb-volume" },
-                ].map((e, i) => (
-                  <div key={i} className="flex items-center gap-3 px-5 py-2 font-mono text-xs">
-                    <span className="text-muted-foreground tabular-nums">{e.ts}</span>
-                    <Badge variant="ghost" className="text-[10px]">{e.type}</Badge>
-                    <span className="font-medium">{e.reason}</span>
-                    <span className="text-muted-foreground">{e.msg}</span>
-                  </div>
-                ))}
-              </div>
+              {live ? (
+                <div className="divide-y divide-border">
+                  {(eventsData?.items ?? []).length === 0 && (
+                    <div className="px-5 py-6 text-center text-xs text-muted-foreground">
+                      최근 이벤트가 없습니다 — 정상 운영 중입니다
+                      <div className="mt-1 text-[10px]">
+                        (쿠버네티스는 이벤트를 약 1시간만 보관합니다)
+                      </div>
+                    </div>
+                  )}
+                  {(eventsData?.items ?? []).map((e, i) => (
+                    <div key={i} className="flex items-start gap-3 px-5 py-2 text-xs">
+                      <span className="shrink-0 font-mono text-muted-foreground tabular-nums">{e.time}</span>
+                      <Badge variant={e.type === "Warning" ? "warning" : "ghost"} className="shrink-0 text-[10px]">
+                        {e.type}
+                      </Badge>
+                      <span className="shrink-0 font-medium">{e.reason}</span>
+                      <span className="text-muted-foreground">{e.message}</span>
+                      {e.count > 1 && (
+                        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">×{e.count}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-5 py-6 text-center text-xs text-muted-foreground">
+                  실백엔드 연동 시 실제 Pod 이벤트가 표시됩니다
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -309,21 +351,38 @@ export default function NotebookDetailPage() {
         <TabsContent value="env">
           <Card>
             <CardContent className="p-0">
-              <div className="divide-y divide-border">
-                {[
-                  ["RBLN_DEVICE_COUNT", "1"],
-                  ["KUBEFLOW_USER", "user@openkcloud.local"],
-                  ["NB_NAMESPACE", nb.namespace],
-                  ["HF_HUB_CACHE", "/home/kubeflow/.cache/huggingface"],
-                  ["PYTHONUNBUFFERED", "1"],
-                  ["NV_DRIVER_VERSION", "550.127.05"],
-                ].map(([k, v]) => (
-                  <div key={k} className="flex items-center gap-4 px-5 py-2 font-mono text-xs">
-                    <span className="w-56 font-medium">{k}</span>
-                    <span className="text-muted-foreground">{v}</span>
+              {live ? (
+                <>
+                  {envData?.pod && (
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 border-b border-border bg-secondary/30 px-5 py-3 text-xs md:grid-cols-3">
+                      <Pair label="Pod" value={<span className="font-mono text-[11px]">{envData.pod.podName}</span>} />
+                      <Pair label="노드" value={<span className="font-mono text-[11px]">{envData.pod.node}</span>} />
+                      <Pair label="Pod IP" value={<span className="font-mono text-[11px]">{envData.pod.podIP}</span>} />
+                      <Pair label="런타임" value={<span className="font-mono text-[11px]">{envData.pod.runtimeClass}</span>} />
+                      <Pair label="ServiceAccount" value={<span className="font-mono text-[11px]">{envData.pod.serviceAccount}</span>} />
+                      <Pair label="시작 시각" value={<span className="font-mono text-[11px]">{envData.pod.startedAt}</span>} />
+                    </div>
+                  )}
+                  <div className="divide-y divide-border">
+                    {(envData?.items ?? []).length === 0 && (
+                      <div className="px-5 py-6 text-center text-xs text-muted-foreground">
+                        설정된 환경 변수가 없습니다
+                      </div>
+                    )}
+                    {(envData?.items ?? []).map((e) => (
+                      <div key={e.name} className="flex items-center gap-4 px-5 py-2 font-mono text-xs">
+                        <span className="w-56 shrink-0 font-medium">{e.name}</span>
+                        <span className="flex-1 break-all text-muted-foreground">{e.value}</span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">{e.source}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </>
+              ) : (
+                <div className="px-5 py-6 text-center text-xs text-muted-foreground">
+                  실백엔드 연동 시 실제 환경 변수가 표시됩니다
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
