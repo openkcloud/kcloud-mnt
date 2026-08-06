@@ -24,7 +24,11 @@ import { KF_ENABLED } from "@/lib/kf";
  * 실제 Kubeflow CRD: kubeflow.org/v1 Profile
  * NEXT_PUBLIC_KF_API 설정 시 실제 Profile Controller 데이터, 미설정 시 아래 mock */
 
-type ProfileItem = (typeof MOCK_PROFILES)[number] & { status?: string };
+type ProfileItem = (typeof MOCK_PROFILES)[number] & {
+  status?: string;
+  /** 실백엔드에서만 내려온다 — 지금 실제로 쓰고 있는 양 (예약과 다름) */
+  actual?: { cpu: number; mem: number };
+};
 
 const MOCK_PROFILES = [
   {
@@ -139,10 +143,22 @@ export default function ProfilesPage() {
 
               {/* Quotas */}
               <div className="space-y-2 rounded-lg bg-secondary/30 p-3">
-                <QuotaRow label="vCPU" used={p.cpuQuota.used} limit={p.cpuQuota.limit} color="indigo" />
-                <QuotaRow label="MEM (GB)" used={p.memQuota.used} limit={p.memQuota.limit} color="mint" />
+                <div className="flex items-center justify-between text-[10px] uppercase text-muted-foreground">
+                  <span>배정(예약)</span>
+                  {p.actual && <span>지금 실제 사용</span>}
+                </div>
+                <QuotaRow label="vCPU" used={p.cpuQuota.used} limit={p.cpuQuota.limit}
+                          color="indigo" actual={p.actual?.cpu} />
+                <QuotaRow label="MEM (GB)" used={p.memQuota.used} limit={p.memQuota.limit}
+                          color="mint" actual={p.actual?.mem} />
                 <QuotaRow label="가속기" used={p.accQuota.used} limit={p.accQuota.limit} color="amber" />
                 <QuotaRow label="Storage (GB)" used={p.storageQuota.used} limit={p.storageQuota.limit} color="violet" />
+                {p.actual && (
+                  <p className="pt-1 text-[10px] leading-snug text-muted-foreground">
+                    예약은 &quot;최대 이만큼 쓰겠다&quot;는 약속입니다. 실제 사용이 훨씬 적으면
+                    한도를 줄여 다른 팀에 여유를 줄 수 있습니다.
+                  </p>
+                )}
               </div>
 
               {/* Plugins */}
@@ -218,7 +234,12 @@ spec:
   );
 }
 
-function QuotaRow({ label, used, limit, color }: { label: string; used: number; limit: number; color: "indigo" | "mint" | "amber" | "violet" }) {
+function QuotaRow({ label, used, limit, color, actual }: {
+  label: string; used: number; limit: number;
+  color: "indigo" | "mint" | "amber" | "violet";
+  /** 지금 실제로 쓰고 있는 양 — 예약과 크게 다를 수 있다 */
+  actual?: number;
+}) {
   const pct = Math.round((used / limit) * 100);
   const bar = {
     indigo: "bg-brand-indigo-500",
@@ -226,15 +247,29 @@ function QuotaRow({ label, used, limit, color }: { label: string; used: number; 
     amber: "bg-amber-500",
     violet: "bg-violet-500",
   }[color];
+  const actualPct = actual != null ? Math.round((actual / limit) * 100) : null;
   return (
     <div className="space-y-0.5">
       <div className="flex items-baseline justify-between text-[11px]">
         <span className="text-muted-foreground">{label}</span>
         <span className="font-mono tabular-nums">
           <strong>{used}</strong> / {limit} · {pct}%
+          {actual != null && (
+            <span className="ml-2 text-brand-mint-700">실제 {actual}</span>
+          )}
         </span>
       </div>
-      <Progress value={pct} className="h-1" indicatorClassName={bar} />
+      <div className="relative">
+        <Progress value={pct} className="h-1.5" indicatorClassName={bar} />
+        {actualPct != null && (
+          // 실사용 위치에 표시 — 예약 대비 얼마나 쓰는지 한눈에 보인다
+          <span
+            className="absolute top-1/2 h-2.5 w-0.5 -translate-y-1/2 rounded bg-brand-mint-700"
+            style={{ left: `${Math.min(actualPct, 100)}%` }}
+            title={`실제 사용 ${actual}`}
+          />
+        )}
+      </div>
     </div>
   );
 }

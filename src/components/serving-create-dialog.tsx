@@ -56,6 +56,7 @@ export function ServingCreateDialog({
   const [gpu, setGpu] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   // 배포 유형 — 저장된 모델 파일 vs 대화형 LLM(모델 ID로 불러옴)
+  const [namespace, setNamespace] = React.useState("llm-serving");
   const [kind, setKind] = React.useState<"file" | "llm">("file");
   const [modelId, setModelId] = React.useState(LLM_PRESETS[0].id);
   const [maxModelLen, setMaxModelLen] = React.useState(2048);
@@ -75,6 +76,18 @@ export function ServingCreateDialog({
   });
   // 한 서비스는 장비 한 대 안에서 돌기 때문에 노드 여유가 상한이다
   const freeGpu = gpuInfo?.maxPerPod ?? null;
+
+  // 어느 워크스페이스에 올릴지 — 그동안 선택이 없어 전부 llm-serving으로 갔다
+  const { data: profiles } = useQuery({
+    queryKey: ["kf", "profiles", "names"],
+    queryFn: async () => {
+      const res = await fetch(`${KF_BASE}/api/v1/profiles`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: { name: string }[] }>;
+    },
+    enabled: KF_ENABLED && open,
+    retry: false,
+  });
 
   const { data: models } = useQuery({
     queryKey: ["kf", "models"],
@@ -105,9 +118,10 @@ export function ServingCreateDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
           isLlm
-            ? { name, modelFormat: "vllm", modelId, maxModelLen,
+            ? { name, namespace, modelFormat: "vllm", modelId, maxModelLen,
                 gpuMemoryUtilization: llmUtil, cpu, memoryGi, gpu }
-            : { name, modelFormat: format, storageUri: uri, cpu, memoryGi, gpu },
+            : { name, namespace, modelFormat: format, storageUri: uri,
+                cpu, memoryGi, gpu },
         ),
       });
       if (!res.ok) {
@@ -162,6 +176,21 @@ export function ServingCreateDialog({
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>워크스페이스 (Profile)</Label>
+            <Select value={namespace} onValueChange={setNamespace}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {(profiles?.items ?? [{ name: "llm-serving" }]).map((p) => (
+                  <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">
+              이 서비스가 쓰는 자원은 여기 배정된 몫에서 차감됩니다.
+            </p>
           </div>
 
           <div className="space-y-1.5">

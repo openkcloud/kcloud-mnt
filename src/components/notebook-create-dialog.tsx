@@ -123,11 +123,6 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
     if (preset.storageGb !== undefined) setStorageGb(String(preset.storageGb));
   }, [preset]);
 
-  // 여유 GPU보다 많이 선택돼 있으면 자동으로 낮춘다 (프리셋이 GPU 1장인데 여유 0인 경우 등)
-  React.useEffect(() => {
-    if (avail && Number(gpu) > avail.maxPerPod) setGpu(String(avail.maxPerPod));
-  }, [avail, gpu]);
-
   const create = useMutation({
     mutationFn: createNotebook,
     onSuccess: () => {
@@ -151,13 +146,15 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
   // 노드 한 대가 감당할 수 있는 만큼만 고를 수 있다.
   // (클러스터에 2장이 남아도 서로 다른 장비에 있으면 2장짜리는 못 뜬다)
   const gpuMax = Math.min(avail?.maxPerPod ?? 0, left ? Math.floor(left.gpu) : 0);
+  // 프리셋이 GPU 1장인데 여유가 없는 경우 등 — 고를 수 있는 범위로 낮춰서 쓴다
+  const gpuVal = Math.min(Number(gpu) || 0, gpuMax);
 
   const overs: string[] = [];
   if (left) {
     if (Number(cpu) > left.cpu) overs.push(`vCPU ${cpu}개 (남은 몫 ${left.cpu}개)`);
     if (Number(memoryGi) > left.mem) overs.push(`메모리 ${memoryGi}GB (남은 몫 ${left.mem}GB)`);
     if (Number(storageGb) > left.storage) overs.push(`볼륨 ${storageGb}GB (남은 몫 ${left.storage}GB)`);
-    if (Number(gpu) > left.gpu) overs.push(`GPU ${gpu}장 (남은 몫 ${left.gpu}장)`);
+    if (gpuVal > left.gpu) overs.push(`GPU ${gpuVal}장 (남은 몫 ${left.gpu}장)`);
   }
   const quotaError = overs.length > 0;
 
@@ -187,8 +184,8 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
       image: tpl.image,
       cpu,
       memoryGi: Number(memoryGi),
-      acceleratorKind: Number(gpu) > 0 ? "nvidia.com/gpu" : undefined,
-      acceleratorCount: Number(gpu),
+      acceleratorKind: gpuVal > 0 ? "nvidia.com/gpu" : undefined,
+      acceleratorCount: gpuVal,
       storageGb: Number(storageGb),
     });
   }
@@ -275,12 +272,7 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
                 </>
               ) : (
                 <>
-                  <b>GPU {avail.total}장 모두 사용 중</b>
-                  {avail.holders.length > 0 && (
-                    <> ({avail.holders.map((h) => h.name.replace(/-0$/, "")).join(", ")} 사용)</>
-                  )}
-                  {" — "}<b>GPU 없이(CPU) 바로 생성됩니다.</b> GPU가 필요하면 다른 노트북을 정지한 뒤
-                  이 노트북의 &quot;리소스 변경&quot;으로 나중에 추가할 수 있습니다.
+                  <b>GPU {avail.total}장 모두 사용 중</b> — 지금은 CPU로만 만들 수 있습니다.
                 </>
               )}
             </div>
@@ -296,7 +288,7 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
             </div>
             <div className="space-y-1.5">
               <Label>GPU {avail && <span className="text-[10px] font-normal text-muted-foreground">({avail.available}/{avail.total} 여유)</span>}</Label>
-              <Select value={gpu} onValueChange={setGpu}>
+              <Select value={String(gpuVal)} onValueChange={setGpu}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="0">사용 안 함</SelectItem>
