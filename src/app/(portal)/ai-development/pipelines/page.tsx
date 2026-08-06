@@ -80,6 +80,33 @@ export default function PipelinesPage() {
     ? data?.items.find((p) => p.id === selected)
     : data?.items[0];
 
+  // 업로드된 정의에서 추출한 실제 단계 그래프
+  const { data: dagData } = useQuery({
+    queryKey: ["kf", "dag", active?.id],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/pipelines/${active!.id}/dag`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{
+        nodes: { id: string; name: string; dependsOn: string[];
+                 image: string; kind: string; level: number }[];
+      }>;
+    },
+    enabled: !!KF_API && !!active,
+  });
+
+  const liveDag = React.useMemo(
+    () =>
+      (dagData?.nodes ?? []).map((n) => ({
+        id: n.id,
+        name: n.name,
+        type: (["data", "compute", "ml", "deploy"].includes(n.kind)
+          ? n.kind
+          : "compute") as "data" | "compute" | "ml" | "deploy",
+        status: "ok" as const,
+      })),
+    [dagData],
+  );
+
   const { data: artifacts } = useQuery({
     queryKey: ["kf", "artifacts", active?.id],
     queryFn: async () => {
@@ -238,7 +265,25 @@ export default function PipelinesPage() {
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
-                {(PIPELINE_DAG[active.id] ?? []).length > 0 ? (
+                {liveDag.length > 0 ? (
+                  <>
+                    <div className="flex min-w-max items-center gap-2">
+                      {liveDag.map((step, i, arr) => (
+                        <React.Fragment key={step.id}>
+                          <PipelineStep step={step} />
+                          {i < arr.length - 1 && (
+                            <div className="flex h-px w-12 items-center justify-center bg-border" />
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </div>
+                    {KF_API && dagData && (
+                      <p className="mt-3 text-[11px] text-muted-foreground">
+                        업로드된 정의에서 자동 추출한 실제 단계입니다 · 총 {liveDag.length}단계
+                      </p>
+                    )}
+                  </>
+                ) : (PIPELINE_DAG[active.id] ?? []).length > 0 ? (
                   <div className="flex min-w-max items-center gap-2">
                     {(PIPELINE_DAG[active.id] ?? []).map((step, i, arr) => (
                       <React.Fragment key={step.id}>
@@ -251,7 +296,7 @@ export default function PipelinesPage() {
                   </div>
                 ) : (
                   <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
-                    DAG 시각화 준비 중 — 업로드된 YAML의 단계 구조는 실행 이력에서 확인할 수 있습니다
+                    단계 정보를 불러오는 중입니다
                   </div>
                 )}
               </div>
@@ -330,22 +375,7 @@ export default function PipelinesPage() {
               </Card>
             </TabsContent>
             <TabsContent value="schedule">
-              <Card>
-                <CardContent className="space-y-3 p-5 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">트리거</span>
-                    <Badge variant="success">활성</Badge>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Cron 표현식</span>
-                    <span className="font-mono">0 2 * * *</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">다음 실행</span>
-                    <span>매일 02:00 KST</span>
-                  </div>
-                </CardContent>
-              </Card>
+              <SchedulePanel pipelineId={active.id} pipelineName={active.name} />
             </TabsContent>
             <TabsContent value="artifacts">
               <Card>
@@ -399,6 +429,157 @@ export default function PipelinesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────
+ * 스케줄 — 정해진 시각에 파이프라인을 자동 실행 (KFP RecurringRun)
+ * ───────────────────────────────────────────────────────── */
+interface Schedule {
+  id: string; name: string; cron: string; status: string; createdAt: string;
+}
+
+const CRON_PRESETS = [
+  { label: "매일 새벽 2시", cron: "0 2 * * *" },
+  { label: "매일 정오", cron: "0 12 * * *" },
+  { label: "매주 월요일 오전 9시", cron: "0 9 * * 1" },
+  { label: "매시간", cron: "0 * * * *" },
+];
+
+/** cron을 사람이 읽는 문장으로 (KFP는 6자리: 초 분 시 일 월 요일) */
+function cronToKorean(cron: string): string {
+  const p = cron.trim().split(/\s+/);
+  const [min, hour, dom, , dow] = p.length === 6 ? p.slice(1) : p;
+  const days = ["일", "월", "화", "수", "목", "금", "토"];
+  const time = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  if (hour === "*") return "매시간";
+  if (dow !== "*" && dow !== undefined && !isNaN(Number(dow)))
+    return `매주 ${days[Number(dow) % 7]}요일 ${time}`;
+  if (dom !== "*") return `매월 ${dom}일 ${time}`;
+  return `매일 ${time}`;
+}
+
+function SchedulePanel({ pipelineId, pipelineName }:
+  { pipelineId: string; pipelineName: string }) {
+  const qc = useQueryClient();
+  const [cron, setCron] = React.useState("0 2 * * *");
+  const [busy, setBusy] = React.useState(false);
+
+  const { data } = useQuery({
+    queryKey: ["kf", "schedules", pipelineId],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/pipelines/${pipelineId}/schedules`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<{ items: Schedule[] }>;
+    },
+    enabled: !!KF_API,
+    refetchInterval: 15000,
+  });
+
+  async function call(url: string, method: string, okMsg: string, body?: object) {
+    setBusy(true);
+    try {
+      const res = await fetch(url, {
+        method,
+        ...(body ? { headers: { "Content-Type": "application/json" },
+                     body: JSON.stringify(body) } : {}),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail ?? `${res.status}`);
+      toast.success(okMsg);
+      qc.invalidateQueries({ queryKey: ["kf", "schedules", pipelineId] });
+    } catch (e) {
+      toast.error(`${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!KF_API) {
+    return (
+      <Card><CardContent className="p-6 text-center text-xs text-muted-foreground">
+        실백엔드 연동 시 자동 실행 예약을 설정할 수 있습니다
+      </CardContent></Card>
+    );
+  }
+
+  const items = data?.items ?? [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">자동 실행 예약</CardTitle>
+        <CardDescription>
+          정해진 시각에 <b>{pipelineName}</b> 파이프라인이 자동으로 실행됩니다 —
+          매일 새벽 재학습 같은 운영에 씁니다
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border bg-secondary/20 p-3">
+          <div className="flex-1 space-y-1.5">
+            <Label htmlFor="cron">실행 주기</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {CRON_PRESETS.map((p) => (
+                <button key={p.cron} type="button" onClick={() => setCron(p.cron)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+                    cron === p.cron
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:bg-secondary",
+                  )}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <Input id="cron" value={cron} onChange={(e) => setCron(e.target.value)}
+                   className="mt-1 font-mono text-xs" placeholder="분 시 일 월 요일" />
+            <p className="text-[11px] text-muted-foreground">
+              현재 설정: <b>{cronToKorean(cron)}</b>
+            </p>
+          </div>
+          <Button size="sm" disabled={busy}
+                  onClick={() => call(`${KF_API}/api/v1/pipelines/${pipelineId}/schedules`,
+                                      "POST", "예약을 등록했습니다", { cron })}>
+            <Clock className="size-3.5" /> 예약 추가
+          </Button>
+        </div>
+
+        <div className="divide-y divide-border rounded-lg border border-border">
+          {items.length === 0 && (
+            <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+              등록된 예약이 없습니다 — 위에서 주기를 골라 추가하세요
+            </div>
+          )}
+          {items.map((s) => (
+            <div key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+              <Clock className="size-4 text-violet-600" />
+              <div className="flex-1">
+                <div className="text-sm font-medium">{s.name}</div>
+                <div className="text-[11px] text-muted-foreground">
+                  {cronToKorean(s.cron)} · <span className="font-mono">{s.cron}</span> · 등록 {s.createdAt}
+                </div>
+              </div>
+              <Badge variant={s.status === "ENABLED" ? "success" : "secondary"}>
+                {s.status === "ENABLED" ? "동작 중" : "중지됨"}
+              </Badge>
+              <Button size="sm" variant="outline" disabled={busy}
+                      onClick={() => call(
+                        `${KF_API}/api/v1/schedules/${s.id}/toggle?enable=${s.status !== "ENABLED"}`,
+                        "POST", s.status === "ENABLED" ? "예약을 중지했습니다" : "예약을 다시 켰습니다")}>
+                {s.status === "ENABLED" ? "중지" : "시작"}
+              </Button>
+              <Button size="sm" variant="ghost" disabled={busy}
+                      className="text-rose-600 hover:bg-rose-50"
+                      onClick={() => {
+                        if (!window.confirm(`"${s.name}" 예약을 삭제할까요?`)) return;
+                        call(`${KF_API}/api/v1/schedules/${s.id}`, "DELETE", "예약을 삭제했습니다");
+                      }}>
+                삭제
+              </Button>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
