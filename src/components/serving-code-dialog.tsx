@@ -61,28 +61,24 @@ ask("DataMatrix 코드가 뭔지 한 문장으로 설명해줘")`,
           {
             key: "py",
             label: "파이썬",
-            hint: "노트북에 있는 실제 사진으로 바로 실행됩니다",
-            code: `import base64, glob, requests
+            hint: "복사해서 노트북에 붙여넣으면 그대로 실행됩니다",
+            code: `import base64, requests
 
 URL = "${url}"
 
-def judge(image_path):
-    with open(image_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-    r = requests.post(URL, json={"instances": [{"image_b64": b64}]},
-                      timeout=60)
-    r.raise_for_status()
-    p = r.json()["predictions"][0]
-    print(f"판정: {p['prediction']} (확신도 {p['confidence']}%)")
-    return p
+# 판정할 사진 한 장 (파일명을 바꿔 쓰세요)
+IMAGE = "qr_crops/098010S8R7P9KV7_260331_20260317-001.jpg"
 
-# 정답을 아는 사진으로 시험해 봅니다
-ok_files = sorted(glob.glob("qr_crops/*.jpg"))          # 판독 성공한 코드
-ng_files = sorted(glob.glob("qr_crops_failed/*.jpg"))   # 판독 실패한 코드
-print(f"성공 사진 {len(ok_files)}장 · 실패 사진 {len(ng_files)}장")
+with open(IMAGE, "rb") as f:
+    b64 = base64.b64encode(f.read()).decode()
 
-print("\\n[실패 사진]"); judge(ng_files[0])
-print("\\n[성공 사진]"); judge(ok_files[0])`,
+r = requests.post(URL, json={"instances": [{"image_b64": b64}]}, timeout=60)
+p = r.json()["predictions"][0]
+
+print(f"파일: {IMAGE.split('/')[-1]}")
+print(f"판정: {p['prediction']}  (확신도 {p['confidence']}%)")
+print(f"  읽을 수 있음(OK)  {p['probabilities']['OK']}%")
+print(f"  읽기 어려움(FAIL) {p['probabilities']['FAIL']}%")`,
           },
           {
             key: "batch",
