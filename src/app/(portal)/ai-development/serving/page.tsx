@@ -128,10 +128,14 @@ export default function ServingPage() {
               </Badge>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 rounded-lg bg-secondary/40 p-3">
-              <Metric label="레플리카" value={s.replicas} />
-              <Metric label="평균 RPS" value={formatNumber(s.rpsAvg)} />
-              <Metric label="p95 지연" value={`${s.p95LatencyMs}ms`} />
+            <div className="grid grid-cols-4 gap-2 rounded-lg bg-secondary/40 p-3">
+              <Metric label="서버 대수" value={s.replicas} />
+              <Metric label="누적 호출" value={s.requests != null ? `${s.requests}건` : "—"} />
+              {/* 호출 이력이 없으면 0이 아니라 '—'로 보여야 오해가 없다 */}
+              <Metric label="초당 처리"
+                      value={s.rpsAvg ? `${formatNumber(s.rpsAvg)}건` : "—"} />
+              <Metric label="p95 지연"
+                      value={s.p95LatencyMs ? `${s.p95LatencyMs}ms` : "—"} />
             </div>
 
             <div className="flex items-center justify-between text-xs">

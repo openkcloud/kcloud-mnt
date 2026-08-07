@@ -411,6 +411,8 @@ export interface KFInferenceServiceResources {
   /** 실백엔드에서만 내려온다 (mock 데이터에는 없음) */
   namespace?: string;
   storageUri?: string;
+  /** 지금까지 처리한 요청 수 (실측) */
+  requests?: number;
   cpu?: string;
   memoryGi?: number;
   gpu?: number;
