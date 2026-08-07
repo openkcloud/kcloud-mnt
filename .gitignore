@@ -56,3 +56,6 @@ Thumbs.db
 /out/
 *.zip
 
+
+# 개발 서버 로그 (로컬 전용)
+dev.log
