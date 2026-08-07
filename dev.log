@@ -1,0 +1,32 @@
+
+> openkcloud-cmp@0.1.0 dev
+> next dev
+
+▲ Next.js 16.2.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://172.24.16.1:3000
+- Environments: .env.local
+✓ Ready in 908ms
+⚠ `eslint` configuration in next.config.ts is no longer supported. See more info here: https://nextjs.org/docs/app/api-reference/cli/next#next-lint-options
+⚠ Invalid next.config.ts options detected: 
+⚠     Unrecognized key(s) in object: 'eslint'
+⚠ See more info here: https://nextjs.org/docs/messages/invalid-next-config
+
+ GET /ai-development/notebooks/ 200 in 848ms (next.js: 431ms, application-code: 417ms)
+ GET /ai-development/notebooks/ 200 in 107ms (next.js: 19ms, application-code: 88ms)
+ GET /ai-development/notebooks/ 200 in 66ms (next.js: 11ms, application-code: 55ms)
+ GET /notebooks/dm-train/ide/ 200 in 909ms (next.js: 787ms, generate-params: 719ms, application-code: 122ms)
+ GET /ai-development/ 200 in 121ms (next.js: 50ms, application-code: 72ms)
+ GET /ai-development/ 200 in 56ms (next.js: 8ms, application-code: 47ms)
+ GET /ai-development/experiments/ 200 in 110ms (next.js: 66ms, application-code: 44ms)
+ GET /ai-development/serving/ 200 in 66ms (next.js: 43ms, application-code: 23ms)
+ GET /ai-development/serving/ 200 in 30ms (next.js: 8ms, application-code: 22ms)
+ GET /ai-development/serving/ 200 in 29ms (next.js: 8ms, application-code: 21ms)
+ GET /ai-development/experiments/ 200 in 42ms (next.js: 12ms, application-code: 30ms)
+ GET /ai-development/serving/ 200 in 31ms (next.js: 7ms, application-code: 24ms)
+ GET /ai-development/experiments/ 200 in 25ms (next.js: 5ms, application-code: 19ms)
+ GET /ai-development/serving/ 200 in 32ms (next.js: 7ms, application-code: 26ms)
+ GET /ai-development/serving/ 200 in 14ms (next.js: 6ms, application-code: 9ms)
+ GET /ai-development/serving/ 200 in 26ms (next.js: 6ms, application-code: 21ms)
+ GET /ai-development/experiments/ 200 in 23ms (next.js: 5ms, application-code: 18ms)
+✓ Compiled in 745ms

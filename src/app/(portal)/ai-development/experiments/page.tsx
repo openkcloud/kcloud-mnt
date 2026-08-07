@@ -15,6 +15,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/page-header";
+import { ExperimentDetailDialog } from "@/components/experiment-detail-dialog";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -28,6 +29,28 @@ import { KF_BASE, KF_ENABLED } from "@/lib/kf";
 // ─────────────────────────────────────────────────────────────
 // Benchmark 시연 데이터 — ETRI 260615 §6.C.iii 반영
 // ─────────────────────────────────────────────────────────────
+/** 자주 쓰는 평가 기준 — 이름이 학습 코드 출력과 달라지면 실험이 실패하므로
+ *  직접 타이핑하지 않고 고르게 한다. objective는 높일지 낮출지의 기본값. */
+/** 표에 짧게 표시할 알고리즘 이름 */
+const ALGO_LABELS: Record<string, string> = {
+  bayesianoptimization: "Bayesian",
+  tpe: "TPE",
+  random: "Random",
+  grid: "Grid",
+  hyperband: "Hyperband",
+};
+
+const METRIC_PRESETS = [
+  { value: "accuracy", label: "accuracy — 정확도 (전체 중 맞힌 비율)", objective: "maximize" as const },
+  { value: "val_accuracy", label: "val_accuracy — 검증 정확도", objective: "maximize" as const },
+  { value: "loss", label: "loss — 손실 (낮을수록 좋음)", objective: "minimize" as const },
+  { value: "val_loss", label: "val_loss — 검증 손실 (낮을수록 좋음)", objective: "minimize" as const },
+  { value: "f1", label: "f1 — 정밀도·재현율 균형", objective: "maximize" as const },
+  { value: "precision", label: "precision — 정밀도 (오검출 줄이기)", objective: "maximize" as const },
+  { value: "recall", label: "recall — 재현율 (놓치지 않기)", objective: "maximize" as const },
+  { value: "auc", label: "auc — 판별력 종합 지표", objective: "maximize" as const },
+];
+
 const HW_BENCHMARKS = [
   { name: "MLPerf Inference 4.1 · Llama-3.1 8B", hw: "NVIDIA A100 40GB", tokens_s: 3421, latency_ms: 42, notes: "TP=1, batch=32" },
   { name: "MLPerf Inference 4.1 · Llama-3.1 8B", hw: "NVIDIA H100 80GB", tokens_s: 8752, latency_ms: 18, notes: "TP=1, batch=64" },
@@ -52,6 +75,7 @@ export default function ExperimentsPage() {
     isLoading: boolean;
   };
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [detail, setDetail] = React.useState<KFExperiment | null>(null);
   const qc = useQueryClient();
   const [busy, setBusy] = React.useState<string | null>(null);
 
@@ -84,6 +108,7 @@ export default function ExperimentsPage() {
 
   return (
     <div className="space-y-4">
+      <ExperimentDetailDialog experiment={detail} onClose={() => setDetail(null)} />
       <PageHeader
         title="Experiments — Hyperparameter Optimization (HPO)"
         description="Katib 기반 HPO 실험 + 하드웨어·모델 벤치마크"
@@ -107,9 +132,10 @@ export default function ExperimentsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>실험</TableHead>
-                  <TableHead>파이프라인</TableHead>
+                  <TableHead>탐색 방식</TableHead>
                   <TableHead>목표</TableHead>
                   <TableHead>현재 최고치</TableHead>
+                  <TableHead>찾아낸 설정값</TableHead>
                   <TableHead>진척률</TableHead>
                   <TableHead>시도</TableHead>
                   <TableHead>상태</TableHead>
@@ -125,12 +151,29 @@ export default function ExperimentsPage() {
                   return (
                     <TableRow key={e.id}>
                       <TableCell>
-                        <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setDetail(e)}
+                          className="flex items-center gap-2 rounded px-1 py-0.5 text-left
+                                     transition-colors hover:bg-secondary/60"
+                          title="실험 조건과 결과 보기"
+                        >
                           <FlaskConical className="size-4 text-amber-600" />
-                          <span className="font-medium">{e.name}</span>
+                          <span className="font-medium underline-offset-2 hover:underline">
+                            {e.name}
+                          </span>
+                        </button>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs">
+                            {ALGO_LABELS[e.algorithm ?? ""] ?? e.algorithm ?? "-"}
+                          </span>
+                          {e.realTraining
+                            ? <Badge variant="success" className="text-[10px]">실제 학습</Badge>
+                            : <Badge variant="outline" className="text-[10px]">검증용</Badge>}
                         </div>
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{e.pipelineId}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5">
                           <Target className="size-3.5 text-muted-foreground" />
@@ -139,6 +182,24 @@ export default function ExperimentsPage() {
                         </div>
                       </TableCell>
                       <TableCell className="font-mono tabular-nums">{e.bestMetric}</TableCell>
+                      <TableCell>
+                        {/* HPO의 진짜 결과물 — 이 값을 학습 코드에 넣으면 된다 */}
+                        {e.bestParams?.length ? (
+                          <div className="space-y-0.5">
+                            {e.bestParams.map((p) => (
+                              <div key={p.name} className="font-mono text-[11px]">
+                                <span className="text-muted-foreground">{p.name}</span>
+                                {" = "}
+                                <b>{/^\d*\.\d{5,}$/.test(p.value)
+                                  ? Number(p.value).toPrecision(4)
+                                  : p.value}</b>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground">탐색 중</span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Progress value={progress} className="w-24" indicatorClassName="bg-amber-500" />
@@ -634,13 +695,41 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
             </div>
             <div>
               <Label>메트릭</Label>
-              <Input value={metric} onChange={(e) => setMetric(e.target.value)} placeholder="accuracy" className="font-mono text-xs" />
+              <Select
+                value={METRIC_PRESETS.some((m) => m.value === metric) ? metric : "custom"}
+                onValueChange={(v) => {
+                  if (v === "custom") return;
+                  setMetric(v);
+                  // 손실(loss)은 낮출수록 좋고 나머지는 높일수록 좋다
+                  const p = METRIC_PRESETS.find((m) => m.value === v);
+                  if (p) setObjective(p.objective);
+                }}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {METRIC_PRESETS.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                  ))}
+                  <SelectItem value="custom">직접 입력</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label>목표값</Label>
               <Input value={goal} onChange={(e) => setGoal(e.target.value)} className="font-mono text-xs" />
             </div>
           </div>
+          {!METRIC_PRESETS.some((m) => m.value === metric) && (
+            <div className="space-y-1">
+              <Label>메트릭 이름 직접 입력</Label>
+              <Input value={metric} onChange={(e) => setMetric(e.target.value)}
+                     placeholder="예: val_f1" className="font-mono text-xs" />
+              <p className="text-[11px] text-muted-foreground">
+                학습 코드가 출력하는 이름과 <b>정확히 같아야</b> 합니다
+                (예: <code>accuracy=0.95</code>로 찍으면 <code>accuracy</code>).
+              </p>
+            </div>
+          )}
           <div className="rounded-md border border-amber-200 bg-amber-50/60 p-2 text-[11px] text-amber-900">
             파라미터 공간(learning rate, batch size 등)은 다음 단계에서 지정한다 — 여기선 실험 뼈대만 등록.
           </div>

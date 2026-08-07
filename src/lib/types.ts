@@ -397,6 +397,15 @@ export interface KFExperiment {
   createdAt: string;
   /** 실백엔드에서만 내려온다 (mock 데이터에는 없음) */
   namespace?: string;
+  /** HPO가 찾아낸 최적 설정값 — 이 값을 학습 코드에 반영해서 쓴다 */
+  bestParams?: { name: string; value: string }[];
+  bestTrial?: string;
+  searchSpace?: { name: string; type: string; range: string[] }[];
+  algorithm?: string;
+  maxTrials?: number;
+  parallelTrials?: number;
+  /** 실제 학습을 하는 실험인지 (계산식으로 점수만 내는 검증용과 구분) */
+  realTraining?: boolean;
 }
 export interface KFInferenceServiceResources {
   /** 실백엔드에서만 내려온다 (mock 데이터에는 없음) */
