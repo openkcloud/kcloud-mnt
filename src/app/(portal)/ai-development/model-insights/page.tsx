@@ -176,7 +176,11 @@ function LivePipelineInsight() {
   if (!KF_ENABLED || !runs.length) return null;
 
   const failed = runs.filter((r) => r.phase === "Failed");
-  const worst = [...runs].sort((a, b) => b.bottleneckPct - a.bottleneckPct)[0];
+  // 캐시로 건너뛴 실행은 단계 시간이 실제 계산 시간이 아니라 준비 시간이다.
+  // 이런 실행을 병목 근거로 쓰면 엉뚱한 단계를 지목하게 되므로 뒤로 미룬다.
+  const real = runs.filter((r) => !r.cachedSteps);
+  const worst = [...(real.length ? real : runs)]
+    .sort((a, b) => b.bottleneckPct - a.bottleneckPct)[0];
   const avgSec = Math.round(runs.reduce((a, r) => a + r.totalSec, 0) / runs.length);
   const critical = failed.length > 0;
 
@@ -205,12 +209,12 @@ function LivePipelineInsight() {
               <h2 className="mt-1 text-lg font-bold leading-tight">
                 {critical
                   ? `최근 실행 ${runs.length}건 중 ${failed.length}건이 실패했습니다`
-                  : `학습 시간의 ${worst.bottleneckPct}%가 '${worst.bottleneck}' 단계에 몰려 있습니다`}
+                  : `${worst.pipeline || worst.workflow} — 학습 시간의 ${worst.bottleneckPct}%가 '${worst.bottleneck}' 단계에 몰려 있습니다`}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 {critical
                   ? `실패한 워크플로우: ${failed.map((r) => r.workflow).join(", ")} — 해당 단계 로그를 먼저 확인하세요.`
-                  : `${worst.workflow} 기준 총 ${worst.totalSec}초 중 ${worst.bottleneck} 단계가 가장 오래 걸렸습니다. 이 단계를 줄이는 것이 전체 시간 단축에 가장 효과가 큽니다.`}
+                  : `${worst.workflow} 실행 기준 총 ${worst.totalSec}초 중 ${worst.bottleneck} 단계가 가장 오래 걸렸습니다. 이 단계를 줄이는 것이 전체 시간 단축에 가장 효과가 큽니다.`}
               </p>
             </div>
 
@@ -243,6 +247,8 @@ interface ServingMetric {
   name: string; namespace: string; format: string; accelerator: string;
   requests: number; totalMs: number; p95Ms: number | null;
   breakdown: { stage: string; ms: number; key: string }[];
+  /** 지표를 실제로 읽어왔는지 — false면 배포는 됐으나 아직 측정 전 */
+  measured?: boolean;
 }
 
 /** 배포된 모델 서비스의 추론 지표 — KServe 래퍼 실측 */
@@ -257,6 +263,9 @@ function LiveServingMetrics() {
     enabled: KF_ENABLED,
     refetchInterval: 10000,
     retry: false,
+    // 폴링이 한 번 실패해도 직전 값을 그대로 둔다 —
+    // 그렇지 않으면 카드가 나왔다 사라졌다 해서 배포가 풀린 것처럼 보인다
+    placeholderData: (prev) => prev,
   });
   if (!KF_ENABLED || !data?.items?.length) return null;
 
@@ -289,6 +298,11 @@ function LiveServingMetrics() {
                 <span className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Badge variant="outline" className="text-[10px]">{m.format}</Badge>
                   <Badge variant="outline" className="text-[10px]">{m.accelerator}</Badge>
+                  {m.measured === false && (
+                    <Badge variant="outline" className="text-[10px] text-amber-700">
+                      측정 대기
+                    </Badge>
+                  )}
                   누적 {m.requests}건 · 평균{" "}
                   <span className="font-mono font-semibold text-foreground">
                     {m.totalMs}ms
@@ -904,10 +918,19 @@ function LlmStat({ label, hint, value }: { label: string; hint: string; value: s
   );
 }
 
-interface WfStep { name: string; durSec: number; pct: number; phase: string }
+interface WfStep {
+  name: string; durSec: number; pct: number; phase: string;
+  /** 이전 실행 결과를 재사용한 단계 — 다시 계산하지 않았다 */
+  cached?: boolean;
+}
 interface WfRun {
-  workflow: string; phase: string; startedAt: string; totalSec: number;
-  steps: WfStep[]; bottleneck: string; bottleneckPct: number;
+  workflow: string; workflowId?: string; phase: string; startedAt: string;
+  totalSec: number; steps: WfStep[]; bottleneck: string; bottleneckPct: number;
+  cachedSteps?: number;
+  /** 어느 모델(파이프라인)의 실행인지 */
+  pipeline?: string;
+  /** 이 파이프라인이 만든 모델을 실제로 서비스하는 곳 */
+  services?: string[];
 }
 
 /** 실측 파이프라인 병목 — Argo Workflow 단계별 실행시간 분해 */
@@ -922,33 +945,59 @@ function LivePipelineBottleneck() {
     enabled: KF_ENABLED,
     refetchInterval: 10000,
     retry: false,
+    placeholderData: (prev) => prev,
   });
   if (!KF_ENABLED || !data?.items.length) return null;
   const barColors = ["bg-brand-indigo-400", "bg-brand-mint-500", "bg-violet-400",
                      "bg-amber-400", "bg-sky-400"];
+
+  // 추론 성능 카드와 같은 축으로 읽히도록 '배포된 모델' 하나당 한 줄로 묶는다.
+  // 한 모델은 여러 번 실행될 수 있으므로, 실제로 계산을 수행한 최신 실행을
+  // 대표로 쓴다(캐시로 건너뛴 실행은 단계 시간이 학습 시간이 아니다).
+  const byService = (() => {
+    const pick = new Map<string, WfRun>();
+    for (const run of data.items) {
+      for (const sv of run.services ?? []) {
+        const cur = pick.get(sv);
+        const better =
+          !cur ||
+          (!!cur.cachedSteps && !run.cachedSteps) ||
+          (!!cur.cachedSteps === !!run.cachedSteps &&
+            run.startedAt > cur.startedAt);
+        if (better) pick.set(sv, run);
+      }
+    }
+    return [...pick.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([service, run]) => ({ service, run }));
+  })();
+  if (!byService.length) return null;
   return (
     <Card className="border-brand-mint-200">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <GitBranch className="size-4 text-brand-mint-600" />
-          실측 파이프라인 단계 분석
-          <Badge variant="success" className="text-[10px]">LIVE</Badge>
+          배포 모델 학습 성능
+          <Badge variant="success" className="text-[10px]">실측</Badge>
         </CardTitle>
         <CardDescription>
-          최근 실행된 워크플로우의 단계별 소요시간 (Argo 실측) — 가장 오래 걸린 단계가 병목
+          배포된 모델을 만든 학습이 각 단계에 얼마나 쓰는지 보여줍니다 —
+          가장 긴 단계가 병목입니다
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        {data.items.map((run) => (
-          <div key={run.workflow} className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-mono text-xs">{run.workflow}</span>
-              <span className="text-xs text-muted-foreground">
-                총 {run.totalSec}초 ·{" "}
+        {byService.map(({ service, run }) => (
+          <div key={service} className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-bold">{service}</span>
+              <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <Badge variant="outline" className="text-[10px]">{run.pipeline}</Badge>
+                <span className="font-mono text-[11px]">{run.workflow}</span>
+                총 <b className="font-mono text-foreground">{run.totalSec}초</b> ·{" "}
                 <span className="font-semibold text-amber-700">
                   병목: {run.bottleneck} ({run.bottleneckPct}%)
                 </span>
-                <Badge className="ml-2 text-[10px]"
+                <Badge className="text-[10px]"
                        variant={run.phase === "Succeeded" ? "success"
                                 : run.phase === "Failed" ? "destructive" : "warning"}>
                   {run.phase}
@@ -971,9 +1020,17 @@ function LivePipelineBottleneck() {
                 <span key={s.name} className="inline-flex items-center gap-1">
                   <span className={cn("size-2 rounded-sm", barColors[i % barColors.length])} />
                   {s.name} {s.durSec}s
+                  {s.cached && <span className="text-sky-600">(캐시)</span>}
                 </span>
               ))}
             </div>
+            {!!run.cachedSteps && (
+              <p className="text-[11px] text-sky-700">
+                {run.steps.length}개 단계 중 {run.cachedSteps}개가 <b>캐시 재사용</b>입니다 —
+                입력이 지난번과 같아 다시 계산하지 않고 이전 결과를 그대로 썼습니다.
+                따라서 위 시간은 <b>실제 학습 시간이 아니라 준비·확인에 걸린 시간</b>입니다.
+              </p>
+            )}
           </div>
         ))}
       </CardContent>

@@ -7,7 +7,7 @@
  * ──────────────────────────────────────────────────────────────────── */
 
 import { useQuery } from "@tanstack/react-query";
-import { KF_BASE } from "@/lib/kf";
+import { KF_BASE, kfetch } from "@/lib/kf";
 
 /** Kubeflow Notebook CRD에 매핑되는 응답 모델 */
 export interface NotebookResource {
@@ -61,7 +61,7 @@ export async function createNotebook(body: {
   acceleratorCount: number;
   storageGb: number;
 }): Promise<{ id: string }> {
-  const res = await fetch(`${KF_API}/api/v1/notebooks`, {
+  const res = await kfetch(`${KF_API}/api/v1/notebooks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -94,7 +94,7 @@ export async function createProfile(body: {
   acceleratorCount: number;
   storageGi: number;
 }): Promise<{ name: string }> {
-  const res = await fetch(`${KF_API}/api/v1/profiles`, {
+  const res = await kfetch(`${KF_API}/api/v1/profiles`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

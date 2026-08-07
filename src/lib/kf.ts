@@ -20,3 +20,28 @@ export const KF_BASE = (() => {
   }
   return RAW;
 })();
+
+/**
+ * CMP 백엔드 호출 — 응답이 없으면 정해진 시간에 끊는다.
+ *
+ * 백엔드가 바쁘면(동시 처리 한도 소진) 요청이 무한정 줄을 서고, 화면은
+ * 아무 안내 없이 계속 도는 것처럼 보인다(2026-08-07 시연 중 프로파일 생성).
+ * 생성·삭제처럼 사용자가 결과를 기다리는 호출에 쓴다.
+ */
+export async function kfetch(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = 20000,
+): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new Error(
+        `서버가 응답하지 않습니다 (${timeoutMs / 1000}초 초과). ` +
+          `잠시 후 다시 시도하거나, 열어둔 다른 탭을 닫고 시도해 주세요.`,
+      );
+    }
+    throw e;
+  }
+}

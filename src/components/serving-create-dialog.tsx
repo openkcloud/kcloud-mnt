@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { KF_BASE, KF_ENABLED } from "@/lib/kf";
+import { KF_BASE, KF_ENABLED, kfetch } from "@/lib/kf";
 import { cn } from "@/lib/utils";
 
 interface StoredModel {
@@ -113,7 +113,7 @@ export function ServingCreateDialog({
     }
     setBusy(true);
     try {
-      const res = await fetch(`${KF_BASE}/api/v1/serving`, {
+      const res = await kfetch(`${KF_BASE}/api/v1/serving`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
