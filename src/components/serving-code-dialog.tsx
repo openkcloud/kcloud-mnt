@@ -61,8 +61,8 @@ ask("DataMatrix 코드가 뭔지 한 문장으로 설명해줘")`,
           {
             key: "py",
             label: "파이썬",
-            hint: "이미지 한 장을 보내 판정을 받습니다",
-            code: `import base64, requests
+            hint: "노트북에 있는 실제 사진으로 바로 실행됩니다",
+            code: `import base64, glob, requests
 
 URL = "${url}"
 
@@ -76,7 +76,13 @@ def judge(image_path):
     print(f"판정: {p['prediction']} (확신도 {p['confidence']}%)")
     return p
 
-judge("코드사진.jpg")`,
+# 정답을 아는 사진으로 시험해 봅니다
+ok_files = sorted(glob.glob("qr_crops/*.jpg"))          # 판독 성공한 코드
+ng_files = sorted(glob.glob("qr_crops_failed/*.jpg"))   # 판독 실패한 코드
+print(f"성공 사진 {len(ok_files)}장 · 실패 사진 {len(ng_files)}장")
+
+print("\\n[실패 사진]"); judge(ng_files[0])
+print("\\n[성공 사진]"); judge(ok_files[0])`,
           },
           {
             key: "batch",
@@ -90,7 +96,7 @@ def to_b64(path):
     with open(path, "rb") as f:
         return {"image_b64": base64.b64encode(f.read()).decode()}
 
-files = sorted(glob.glob("사진폴더/*.jpg"))[:20]
+files = sorted(glob.glob("qr_crops_failed/*.jpg"))[:20]   # 폴더는 바꿔 쓰세요
 r = requests.post(URL, json={"instances": [to_b64(f) for f in files]},
                   timeout=120)
 r.raise_for_status()
@@ -103,7 +109,7 @@ for path, p in zip(files, r.json()["predictions"]):
             key: "curl",
             label: "터미널 (curl)",
             hint: "설치 없이 바로 확인할 때",
-            code: `IMG=$(base64 -w0 코드사진.jpg)
+            code: `IMG=$(base64 -w0 qr_crops_failed/$(ls qr_crops_failed | head -1))
 curl -X POST "${url}" \\
   -H "Content-Type: application/json" \\
   -d "{\\"instances\\":[{\\"image_b64\\":\\"$IMG\\"}]}"`,
