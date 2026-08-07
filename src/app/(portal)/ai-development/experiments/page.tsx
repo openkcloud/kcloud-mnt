@@ -51,13 +51,15 @@ const METRIC_PRESETS = [
   { value: "auc", label: "auc — 판별력 종합 지표", objective: "maximize" as const },
 ];
 
+/** 처리량은 시험 종류마다 세는 대상이 달라 단위를 함께 적는다.
+ *  추론은 초당 토큰, 학습은 초당 이미지·스텝을 센다. */
 const HW_BENCHMARKS = [
-  { name: "MLPerf Inference 4.1 · Llama-3.1 8B", hw: "NVIDIA A100 40GB", tokens_s: 3421, latency_ms: 42, notes: "TP=1, batch=32" },
-  { name: "MLPerf Inference 4.1 · Llama-3.1 8B", hw: "NVIDIA H100 80GB", tokens_s: 8752, latency_ms: 18, notes: "TP=1, batch=64" },
-  { name: "MLPerf Inference 4.1 · Llama-3.1 8B", hw: "Rebellions REBEL Quad", tokens_s: 5218, latency_ms: 24, notes: "batch=32, INT8" },
-  { name: "MLPerf Inference 4.1 · Llama-3.1 8B", hw: "Furiosa RNGD × 2", tokens_s: 3892, latency_ms: 31, notes: "batch=16" },
-  { name: "MLPerf Training 3.1 · ResNet-50", hw: "NVIDIA A100 × 8", tokens_s: 2450, latency_ms: 0, notes: "images/s, mixed precision" },
-  { name: "MLPerf Training 3.1 · BERT-Large", hw: "NVIDIA H100 × 8", tokens_s: 1820, latency_ms: 0, notes: "steps/s, TF32" },
+  { name: "MLPerf Inference 4.1 · Llama-3.1 8B", kind: "추론", hw: "NVIDIA A100 40GB", tokens_s: 3421, unit: "tokens/s", latency_ms: 42, notes: "TP=1, batch=32" },
+  { name: "MLPerf Inference 4.1 · Llama-3.1 8B", kind: "추론", hw: "NVIDIA H100 80GB", tokens_s: 8752, unit: "tokens/s", latency_ms: 18, notes: "TP=1, batch=64" },
+  { name: "MLPerf Inference 4.1 · Llama-3.1 8B", kind: "추론", hw: "Rebellions REBEL Quad", tokens_s: 5218, unit: "tokens/s", latency_ms: 24, notes: "batch=32, INT8" },
+  { name: "MLPerf Inference 4.1 · Llama-3.1 8B", kind: "추론", hw: "Furiosa RNGD × 2", tokens_s: 3892, unit: "tokens/s", latency_ms: 31, notes: "batch=16" },
+  { name: "MLPerf Training 3.1 · ResNet-50", kind: "학습", hw: "NVIDIA A100 × 8", tokens_s: 2450, unit: "images/s", latency_ms: 0, notes: "mixed precision" },
+  { name: "MLPerf Training 3.1 · BERT-Large", kind: "학습", hw: "NVIDIA H100 × 8", tokens_s: 1820, unit: "steps/s", latency_ms: 0, notes: "TF32" },
 ];
 
 const MODEL_BENCHMARKS = [
@@ -250,16 +252,23 @@ export default function ExperimentsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>벤치마크</TableHead>
+                    <TableHead>종류</TableHead>
                     <TableHead>하드웨어</TableHead>
-                    <TableHead className="text-right">Throughput</TableHead>
-                    <TableHead className="text-right">Latency (ms)</TableHead>
-                    <TableHead>비고</TableHead>
+                    <TableHead className="text-right">처리량 (Throughput)</TableHead>
+                    <TableHead className="text-right">지연 (Latency)</TableHead>
+                    <TableHead>시험 조건</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {HW_BENCHMARKS.map((b, i) => (
                     <TableRow key={i}>
                       <TableCell className="text-xs">{b.name}</TableCell>
+                      <TableCell>
+                        <Badge variant={b.kind === "추론" ? "outline" : "ghost"}
+                               className="text-[10px]">
+                          {b.kind}
+                        </Badge>
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5">
                           <Cpu className="size-3.5 text-brand-mint-600" />
@@ -268,9 +277,13 @@ export default function ExperimentsPage() {
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
                         {b.tokens_s.toLocaleString()}
+                        {/* 시험마다 세는 대상이 달라 단위를 함께 보여준다 */}
+                        <span className="ml-1 text-[10px] text-muted-foreground">
+                          {b.unit}
+                        </span>
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
-                        {b.latency_ms || "—"}
+                        {b.latency_ms ? `${b.latency_ms}ms` : "—"}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">{b.notes}</TableCell>
                     </TableRow>
