@@ -160,6 +160,10 @@ export default function ServingPage() {
                 <Cpu className="size-3" />
                 <span className="font-mono">
                   {s.gpu ? `GPU ${s.gpu}장` : "CPU"}
+                  {/* 어떤 장비의 어떤 GPU를 쓰는지까지 보여준다 */}
+                  {s.gpu && (s as { gpuModel?: string }).gpuModel
+                    ? ` (${(s as { gpuModel?: string }).gpuModel})`
+                    : ""}
                   {s.cpu ? ` · ${s.cpu} vCPU` : ""}
                   {s.memoryGi ? ` · ${s.memoryGi}GB` : ""}
                 </span>
@@ -189,6 +193,11 @@ export default function ServingPage() {
                   </Button>
                 )
               )}
+              {/* 삭제 후 재생성 없이 자원을 고칠 수 있게 — 눈에 보이는 버튼으로 */}
+              <Button size="sm" variant="outline" onClick={() => setEditing(s)}
+                      title="CPU·메모리·GPU 변경 (삭제 없이 적용)">
+                <Settings2 className="size-3.5" /> 설정 변경
+              </Button>
               <Button size="sm" variant="outline" onClick={() => setCoding(s)}
                       title="예제 코드 보기">
                 <Code2 className="size-3.5" /> 예제 코드
