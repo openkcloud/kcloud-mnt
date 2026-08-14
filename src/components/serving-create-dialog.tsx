@@ -104,7 +104,11 @@ export function ServingCreateDialog({
   // 모델이 클수록 GPU 메모리를 더 잡아야 뜬다. 목록에 없는 모델은 넉넉히.
   const llmUtil = LLM_PRESETS.find((m) => m.id === modelId)?.util ?? 0.85;
   const nameOk = name === "" || NAME_RE.test(name);
-  const canSubmit = !!name && nameOk && !busy && (isLlm ? !!modelId : !!uri);
+  // vLLM은 GPU 필수 — 없이 배포하면 "Failed to infer device type"으로
+  // 무한 재시작한다 (4시간 헛기다린 실사례). 생성 단계에서 막는다.
+  const llmNeedsGpu = isLlm && gpu < 1;
+  const canSubmit = !!name && nameOk && !busy && !llmNeedsGpu &&
+    (isLlm ? !!modelId : !!uri);
 
   async function submit() {
     if (!KF_ENABLED) {
@@ -320,6 +324,13 @@ export function ServingCreateDialog({
               </Select>
             </div>
           </div>
+
+          {llmNeedsGpu && (
+            <div className="rounded-md border border-red-200 bg-red-50/70 p-2.5 text-[11px] leading-snug text-red-800">
+              LLM(vLLM)은 <b>GPU가 반드시 필요합니다</b> — GPU 없이 배포하면
+              서버가 뜨지 못하고 계속 재시작합니다. 위에서 GPU를 1장 이상 선택하세요.
+            </div>
+          )}
 
           {gpu > 0 && (
             <div className={cn(

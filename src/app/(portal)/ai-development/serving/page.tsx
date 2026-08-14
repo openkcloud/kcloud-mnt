@@ -128,6 +128,17 @@ export default function ServingPage() {
               </Badge>
             </div>
 
+            {/* 안 되는 건 안 된다고 이유까지 보여준다 — Pending으로만 두면
+                사용자가 몇 시간을 헛기다린다 */}
+            {s.status !== "Ready" && (s as { statusReason?: string }).statusReason && (
+              <p className={`rounded-md p-2 text-[11px] leading-snug ${
+                s.status === "Failed"
+                  ? "bg-red-50 text-red-700"
+                  : "bg-amber-50 text-amber-700"}`}>
+                {(s as { statusReason?: string }).statusReason}
+              </p>
+            )}
+
             <div className="grid grid-cols-4 gap-2 rounded-lg bg-secondary/40 p-3">
               <Metric label="서버 대수" value={s.replicas} />
               <Metric label="누적 호출" value={s.requests != null ? `${s.requests}건` : "—"} />
