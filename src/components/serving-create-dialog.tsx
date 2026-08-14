@@ -167,7 +167,15 @@ export function ServingCreateDialog({
                 <button
                   key={k}
                   type="button"
-                  onClick={() => setKind(k)}
+                  onClick={() => {
+                    setKind(k);
+                    // LLM은 GPU 필수 — 여유가 있으면 1장을 자동 선택하고,
+                    // 메모리 기본값도 LLM이 뜰 수 있는 8GB로 올려준다
+                    if (k === "llm") {
+                      if (gpu < 1 && (freeGpu === null || freeGpu >= 1)) setGpu(1);
+                      if (memoryGi < 8) setMemoryGi(8);
+                    }
+                  }}
                   className={cn(
                     "rounded-lg border p-2.5 text-left transition-colors",
                     kind === k
