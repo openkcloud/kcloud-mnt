@@ -17,8 +17,10 @@ export const KF_BASE = (() => {
   if (RAW.startsWith("auto:")) {
     if (typeof window === "undefined") return ""; // SSR 시점에는 호출 안 함
     // https로 들어왔다면 외부 터널(단일 입구 리버스 프록시) 경유다 —
-    // 별도 포트가 밖에 없으므로 같은 주소(상대 경로)로 호출한다
-    if (window.location.protocol === "https:") return "";
+    // 별도 포트가 밖에 없으므로 같은 주소(origin)로 호출한다.
+    // 주의: 빈 문자열을 돌려주면 안 된다 — KF_BASE가 falsy면 곳곳에서
+    // mock 모드로 해석해 목업 미리보기가 뜬다(실사례).
+    if (window.location.protocol === "https:") return window.location.origin;
     return `${window.location.protocol}//${window.location.hostname}:${RAW.slice(5)}`;
   }
   return RAW;
