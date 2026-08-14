@@ -48,17 +48,29 @@ interface GpuMetric {
 
 /** 실측 GPU 상태 스트립 — 클러스터 양쪽 노드의 nvidia-smi 라이브 (3s 폴링) */
 function LiveGpuStrip() {
-  const { data } = useQuery({
+  // GPU 실측(nvidia-smi)은 노드마다 수 초 걸린다 — 페이지 진입을 늦추지 않도록
+  // 버튼을 눌렀을 때만 수집을 시작한다
+  const [on, setOn] = React.useState(false);
+  const { data, isFetching } = useQuery({
     queryKey: ["metrics", "gpu"],
     queryFn: async () => {
       const res = await fetch(`${KF_BASE}/api/v1/metrics/gpu`);
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json() as Promise<{ items: GpuMetric[] }>;
     },
-    enabled: KF_ENABLED,
+    enabled: KF_ENABLED && on,
     refetchInterval: 3000,
   });
-  if (!KF_ENABLED || !data) return null;
+  if (!KF_ENABLED) return null;
+  if (!on || !data)
+    return (
+      <div>
+        <Button variant="outline" size="sm" disabled={on && !data}
+                onClick={() => setOn(true)}>
+          {on ? "GPU 상태 측정 중…" : "GPU 실측 보기 (nvidia-smi · 3초 주기)"}
+        </Button>
+      </div>
+    );
   return (
     <div className="grid gap-3 md:grid-cols-2">
       {data.items.map((g) => (
