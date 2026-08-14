@@ -42,6 +42,13 @@ export function LlmChatDialog({
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgs, busy]);
 
+  // 다른 서비스의 채팅창을 열면 이전 서비스의 대화가 그대로 보이던 문제 —
+  // 대화 상대(service)가 바뀌면 기록을 비운다
+  React.useEffect(() => {
+    setMsgs([]);
+    setInput("");
+  }, [service]);
+
   async function send(text: string) {
     const q = text.trim();
     if (!q || busy) return;
