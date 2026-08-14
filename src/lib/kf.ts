@@ -16,6 +16,9 @@ export const KF_BASE = (() => {
   if (!RAW) return "";
   if (RAW.startsWith("auto:")) {
     if (typeof window === "undefined") return ""; // SSR 시점에는 호출 안 함
+    // https로 들어왔다면 외부 터널(단일 입구 리버스 프록시) 경유다 —
+    // 별도 포트가 밖에 없으므로 같은 주소(상대 경로)로 호출한다
+    if (window.location.protocol === "https:") return "";
     return `${window.location.protocol}//${window.location.hostname}:${RAW.slice(5)}`;
   }
   return RAW;

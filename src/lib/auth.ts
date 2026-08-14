@@ -19,7 +19,7 @@ export interface User {
 
 export const MOCK_USERS: Record<string, { password: string; user: User }> = {
   admin: {
-    password: "admin",
+    password: "Okc!2026#admin",
     user: {
       id: "u-001",
       username: "admin",
@@ -31,7 +31,7 @@ export const MOCK_USERS: Record<string, { password: string; user: User }> = {
     },
   },
   user: {
-    password: "user",
+    password: "Okc!2026#user",
     user: {
       id: "u-002",
       username: "user",
