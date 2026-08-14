@@ -12,7 +12,9 @@ const nextConfig: NextConfig = {
   trailingSlash: true,
   // 개발 서버를 사내망 다른 PC에서 접속할 수 있도록 허용
   // (Next.js 15+ 는 dev 에셋을 동일 origin 외에는 차단)
-  allowedDevOrigins: ["192.168.0.41", "192.168.0.6", "localhost", "127.0.0.1"],
+  allowedDevOrigins: ["192.168.0.41", "192.168.0.6", "localhost", "127.0.0.1",
+                      // 외부 공개 터널 (Cloudflare 퀵 터널 — 주소가 매번 바뀌므로 와일드카드)
+                      "*.trycloudflare.com"],
   // shadcn chart.tsx vs Recharts 3.x — upstream type drift (payload/label
   // are runtime-injected and dropped from props in Recharts 3.x). Runtime works
   // fine; only the type-check chokes.
