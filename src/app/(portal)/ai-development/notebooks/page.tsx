@@ -81,11 +81,16 @@ export default function NotebooksPage() {
     let keepVolume = false;
     if (action === "delete") {
       const hasVolume = nb.storageGb > 0;
-      const msg = hasVolume
-        ? `"${nb.name}" 노트북을 삭제합니다.\n\n[확인] 데이터 볼륨(${nb.storageGb}GB)은 남겨둡니다 — 같은 이름으로 다시 만들면 작업 파일이 복구됩니다.\n[취소] 를 누르면 삭제하지 않습니다.\n\n볼륨까지 완전히 지우려면 삭제 후 관리자에게 문의하세요.`
-        : `"${nb.name}" 노트북을 삭제할까요?\n\n이 노트북에는 볼륨이 없어 저장된 작업 파일이 없습니다.`;
-      if (!window.confirm(msg)) return;
-      keepVolume = hasVolume;
+      if (!hasVolume) {
+        if (!window.confirm(`"${nb.name}" 노트북을 삭제할까요?\n\n이 노트북에는 볼륨이 없어 저장된 작업 파일이 없습니다.`)) return;
+      } else {
+        if (!window.confirm(`"${nb.name}" 노트북을 삭제합니다.\n\n데이터 볼륨(${nb.storageGb}GB) 처리는 다음 단계에서 선택합니다.`)) return;
+        // 볼륨을 남기면 워크스페이스 몫을 계속 차지한다 — 쌓이면 새 노트북을
+        // 만들 수 없게 되므로, 남길지 지울지 반드시 사용자가 고르게 한다
+        keepVolume = window.confirm(
+          `데이터 볼륨(${nb.storageGb}GB)을 남겨둘까요?\n\n[확인] 볼륨 유지 — 같은 이름으로 다시 만들면 작업 파일이 복구됩니다. 단, 워크스페이스 저장 몫(${nb.storageGb}GB)을 계속 차지합니다.\n[취소] 볼륨까지 완전 삭제 — 작업 파일이 사라지고 저장 몫이 반환됩니다.`,
+        );
+      }
     }
     try {
       await notebookAction(nb.id, action, { keepVolume });

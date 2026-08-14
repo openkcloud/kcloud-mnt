@@ -207,6 +207,13 @@ export function ResizeDialog({
         <p className="text-[11px] text-muted-foreground">
           현재 할당: {nb.cpu} vCPU · {nb.memGb} GiB · GPU {nb.acceleratorCount}장
         </p>
+        {nb.storageGb > 0 && (
+          <p className="text-[11px] leading-snug text-amber-700">
+            이 노트북의 작업 볼륨은 특정 장비(노드)에 놓여 있어, GPU도 그 장비에
+            남은 것만 쓸 수 있습니다. 다른 장비에 GPU가 남아 있어도 그쪽 GPU는
+            쓰지 못해 &ldquo;GPU 부족&rdquo;으로 멈출 수 있습니다.
+          </p>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>취소</Button>
