@@ -1043,26 +1043,6 @@ export default function ModelInsightsPage() {
     <div className="space-y-4">
       {/* 실측 GPU 라이브 */}
       <LiveGpuStrip />
-      {/* Intro */}
-      <Card className="border-sky-200 bg-gradient-to-br from-sky-50/60 to-transparent">
-        <CardContent className="flex items-start gap-3 p-4">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-700">
-            <Sparkles className="size-4" />
-          </div>
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              ML 워크플로우 병목 분석
-              <Badge variant="ghost" className="font-mono text-[10px]">Davis AI</Badge>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              <strong className="text-foreground">모델을 만들어 배포하기까지의 각 단계</strong>와 <strong className="text-foreground">배포된 모델의 응답 지연</strong>을
-              상관 분석해서 자동으로 병목 컴포넌트를 식별합니다.
-              옵저버빌리티 시그널(메트릭·로그·트레이스)을 ML 워크플로우 컨텍스트로 재해석합니다.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
       <Tabs defaultValue="inference">
         <TabsList>
           <TabsTrigger value="inference">추론 병목 (서비스 응답)</TabsTrigger>
