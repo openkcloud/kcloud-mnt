@@ -182,6 +182,60 @@ function ConnectionBadge({
 
 // ────────────────────────────────────────────────────────
 // Left: Notebook side panel (CMP 고유 — 그대로 유지)
+/** 볼륨 카드 — 총 용량(PVC) + 실제 사용량(du 실측, 30초 갱신) */
+function VolumeUsageCard({
+  nbId, live, pvcName, sizeGb, mountPath,
+}: {
+  nbId: string; live: boolean; pvcName: string; sizeGb: number; mountPath: string;
+}) {
+  const { data } = useQuery({
+    queryKey: ["ide-nb-volume", nbId],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/notebooks/${nbId}/volume`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return (await res.json()) as {
+        sizeGb: number; usedHuman: string | null; usedPercent: number | null;
+      };
+    },
+    enabled: live && !!KF_API,
+    refetchInterval: 30000,
+  });
+  const totalGb = data?.sizeGb || sizeGb;
+  const pct = data?.usedPercent ?? null;
+  return (
+    <div className="flex items-start gap-2 rounded border border-slate-800 bg-slate-950 p-2">
+      <HardDrive className="size-3.5 text-brand-mint-500" />
+      <div className="flex-1 space-y-1 text-[10px]">
+        <div className="font-mono text-white">{pvcName}</div>
+        <div className="text-slate-400">
+          {totalGb > 0 ? `${totalGb} GB` : "용량 정보 없음"} · {mountPath}
+        </div>
+        {data?.usedHuman != null && (
+          <>
+            <div className="text-slate-300">
+              사용 중 <span className="font-mono text-white">{data.usedHuman}</span>
+              {pct != null && (
+                <span className={cn("ml-1", pct >= 90 ? "text-rose-400" : "text-slate-400")}>
+                  ({pct}%)
+                </span>
+              )}
+            </div>
+            {pct != null && (
+              <div className="h-1 overflow-hidden rounded bg-slate-800">
+                <div
+                  className={cn("h-full rounded",
+                    pct >= 90 ? "bg-rose-500" : pct >= 70 ? "bg-amber-400" : "bg-brand-mint-500")}
+                  style={{ width: `${Math.min(100, pct)}%` }}
+                />
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** 실측 파일 목록 — live 모드에서만 조회, 데이터 없으면 안내 문구 (mock 목록 없음) */
 function WorkspaceFileList({ nbId, live }: { nbId: string; live: boolean }) {
   const { data } = useQuery({
@@ -268,17 +322,13 @@ function NotebookSidePanel({
         </TabsContent>
 
         <TabsContent value="pvc" className="space-y-2 px-1 pt-2">
-          <div className="flex items-start gap-2 rounded border border-slate-800 bg-slate-950 p-2">
-            <HardDrive className="size-3.5 text-brand-mint-500" />
-            <div className="flex-1 space-y-0.5 text-[10px]">
-              <div className="font-mono text-white">
-                {nb.workspaceVolume.pvcName}
-              </div>
-              <div className="text-slate-400">
-                {nb.workspaceVolume.sizeGb} GB · {nb.workspaceVolume.mountPath}
-              </div>
-            </div>
-          </div>
+          <VolumeUsageCard
+            nbId={nb.name}
+            live={nb.connectMode === "live"}
+            pvcName={nb.workspaceVolume.pvcName}
+            sizeGb={nb.workspaceVolume.sizeGb}
+            mountPath={nb.workspaceVolume.mountPath}
+          />
           <WorkspaceFileList nbId={nb.name} live={nb.connectMode === "live"} />
         </TabsContent>
 
