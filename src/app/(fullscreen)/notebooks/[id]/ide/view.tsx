@@ -25,7 +25,7 @@ import {
   TabsTrigger,
   TabsContent,
 } from "@/components/ui/tabs";
-import { Sparkline, makeSeries } from "@/components/viz/sparkline";
+import { Sparkline } from "@/components/viz/sparkline";
 import { useNotebookConnect, notebookAction, KF_API } from "@/lib/notebook-api";
 import { useQuery } from "@tanstack/react-query";
 import { ensureBackendSession } from "@/lib/auth";
@@ -182,6 +182,43 @@ function ConnectionBadge({
 
 // ────────────────────────────────────────────────────────
 // Left: Notebook side panel (CMP 고유 — 그대로 유지)
+/** 실측 파일 목록 — live 모드에서만 조회, 데이터 없으면 안내 문구 (mock 목록 없음) */
+function WorkspaceFileList({ nbId, live }: { nbId: string; live: boolean }) {
+  const { data } = useQuery({
+    queryKey: ["ide-nb-files", nbId],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/notebooks/${nbId}/files`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      const json = (await res.json()) as {
+        items: { name: string; modified?: string }[];
+      };
+      return json.items.filter((f) => !f.name.startsWith("."));
+    },
+    enabled: live && !!KF_API,
+    refetchInterval: 15000,
+  });
+  const files = live ? (data ?? []) : [];
+  return (
+    <div className="space-y-1">
+      <div className="text-[9px] uppercase text-slate-500">워크스페이스 파일</div>
+      {files.length === 0 && (
+        <div className="px-1.5 py-1 text-[10px] text-slate-500">
+          {live ? "파일 정보를 불러오는 중…" : "연결 후 표시됩니다"}
+        </div>
+      )}
+      {files.slice(0, 8).map((f) => (
+        <div
+          key={f.name}
+          className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] hover:bg-slate-800"
+        >
+          <Folder className="size-3 text-amber-400" />
+          <span className="truncate font-mono">{f.name}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ────────────────────────────────────────────────────────
 function NotebookSidePanel({
   nb,
@@ -242,18 +279,7 @@ function NotebookSidePanel({
               </div>
             </div>
           </div>
-          <div className="space-y-1">
-            <div className="text-[9px] uppercase text-slate-500">최근 변경 파일</div>
-            {["src/train.py", "config.yaml", "logs/train.log"].map((f) => (
-              <div
-                key={f}
-                className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] hover:bg-slate-800"
-              >
-                <Folder className="size-3 text-amber-400" />
-                <span className="truncate font-mono">{f}</span>
-              </div>
-            ))}
-          </div>
+          <WorkspaceFileList nbId={nb.name} live={nb.connectMode === "live"} />
         </TabsContent>
 
         <TabsContent value="info" className="space-y-2 px-1 pt-2 text-[10px]">
@@ -476,8 +502,9 @@ function AcceleratorMonitor({
   const { data: gpuData, hist } = useGpuSamples(params.id);
   const hasAcc = !!nb.resources.accelerator;
   const g = gpuData?.nodeGpu;
+  // 샘플이 쌓이기 전에는 그래프를 그리지 않는다 — "실측" 배지 아래 가짜 곡선 금지
   const series = (pick: (x: NonNullable<NbGpu["nodeGpu"]>) => number) =>
-    hist.length > 1 ? hist.filter(Boolean).map((h) => pick(h!)) : makeSeries(1, 30, 20, 5);
+    hist.filter(Boolean).map((h) => pick(h!));
 
   return (
     <aside className="hidden w-64 flex-col border-l border-slate-800 bg-slate-900 lg:flex">

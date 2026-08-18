@@ -332,7 +332,7 @@ export default function PipelinesPage() {
                       </p>
                     )}
                   </>
-                ) : (PIPELINE_DAG[active.id] ?? []).length > 0 ? (
+                ) : !KF_API && (PIPELINE_DAG[active.id] ?? []).length > 0 ? (
                   <div className="flex min-w-max items-center gap-2">
                     {(PIPELINE_DAG[active.id] ?? []).map((step, i, arr) => (
                       <React.Fragment key={step.id}>

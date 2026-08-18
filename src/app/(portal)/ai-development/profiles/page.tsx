@@ -76,11 +76,15 @@ const MOCK_PROFILES = [
 ];
 
 export default function ProfilesPage() {
-  const { data } = api.kubeflow.profiles() as {
+  const { data, isLoading, isError } = api.kubeflow.profiles() as {
     data: { items: ProfileItem[] } | undefined;
+    isLoading: boolean;
+    isError: boolean;
   };
-  const profiles: ProfileItem[] =
-    KF_ENABLED && data ? data.items : MOCK_PROFILES;
+  // 실백엔드 모드에서는 mock을 절대 노출하지 않는다 — 로딩/오류는 아래에서 별도 표시
+  const profiles: ProfileItem[] = KF_ENABLED
+    ? (data?.items ?? [])
+    : MOCK_PROFILES;
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editOpen, setEditOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<EditableProfile | null>(null);
@@ -118,6 +122,20 @@ export default function ProfilesPage() {
         </CardContent>
       </Card>
 
+      {KF_ENABLED && isLoading && profiles.length === 0 && (
+        <Card>
+          <CardContent className="p-8 text-center text-sm text-muted-foreground">
+            워크스페이스 목록을 불러오는 중…
+          </CardContent>
+        </Card>
+      )}
+      {KF_ENABLED && isError && (
+        <Card>
+          <CardContent className="p-8 text-center text-sm text-muted-foreground">
+            워크스페이스 목록을 불러오지 못했습니다 — 잠시 후 자동으로 다시 시도합니다.
+          </CardContent>
+        </Card>
+      )}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {profiles.map((p) => (
           <Card key={p.name} className="overflow-hidden">
