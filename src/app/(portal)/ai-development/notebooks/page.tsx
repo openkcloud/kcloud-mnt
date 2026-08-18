@@ -53,9 +53,41 @@ import {
 import { MoreHorizontal } from "lucide-react";
 import { cn, relativeTime } from "@/lib/utils";
 import type { KFNotebook } from "@/lib/types";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { notebookAction } from "@/lib/notebook-api";
+import { notebookAction, KF_API } from "@/lib/notebook-api";
+
+/** 볼륨 칸 — 총 용량 + 실사용량(du 실측, 60초 갱신, Running일 때만) */
+function VolumeCell({ id, storageGb, running }: { id: string; storageGb: number; running: boolean }) {
+  const { data } = useQuery({
+    queryKey: ["nb-volume", id],
+    queryFn: async () => {
+      const res = await fetch(`${KF_API}/api/v1/notebooks/${id}/volume`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return (await res.json()) as { usedHuman: string | null; usedPercent: number | null };
+    },
+    enabled: !!KF_API && running && storageGb > 0,
+    refetchInterval: 60000,
+    staleTime: 55000,
+  });
+  if (storageGb <= 0) return <span className="text-muted-foreground">—</span>;
+  return (
+    <span>
+      {storageGb} GiB
+      {data?.usedHuman != null && (
+        <span
+          className={cn(
+            "ml-1 text-[10px]",
+            (data.usedPercent ?? 0) >= 90 ? "text-rose-600" : "text-muted-foreground",
+          )}
+        >
+          · {data.usedHuman} 사용
+          {data.usedPercent != null && ` (${data.usedPercent}%)`}
+        </span>
+      )}
+    </span>
+  );
+}
 import { NotebookCreateDialog, type NotebookPreset } from "@/components/notebook-create-dialog";
 import { SnapshotDialog, ResizeDialog } from "@/components/notebook-manage-dialogs";
 
@@ -218,7 +250,7 @@ export default function NotebooksPage() {
                   )}
                 </TableCell>
                 <TableCell className="font-mono text-xs tabular-nums">
-                  {nb.storageGb} GiB
+                  <VolumeCell id={nb.id} storageGb={nb.storageGb} running={nb.status === "Running"} />
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
                   <span className="inline-flex items-center gap-1">
