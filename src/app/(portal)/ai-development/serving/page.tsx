@@ -119,6 +119,9 @@ export default function ServingPage() {
                   <div className="font-semibold">{s.name}</div>
                   <div className="font-mono text-[11px] text-muted-foreground">
                     {s.modelName} · {s.modelVersion}
+                    {(s as { namespace?: string }).namespace && (
+                      <> · <span title="워크스페이스(네임스페이스)">{(s as { namespace?: string }).namespace}</span></>
+                    )}
                   </div>
                 </div>
               </div>
