@@ -1,0 +1,56 @@
+# vLLM을 KServe 표준 방식으로 배포하기 위한 실행환경(ServingRuntime).
+#
+# 이것을 등록해두면 LLM도 포털의 Serving 화면에서 다른 모델과 똑같이
+# 배포·삭제·자원변경할 수 있다. (등록 전에는 kubectl로 직접 올려야 했다)
+#
+# 모델은 storageUri 대신 InferenceService의 args로 지정한다 —
+# HuggingFace 모델 ID를 그대로 쓰기 위함.
+#   예: args: ["--model=Qwen/Qwen2.5-0.5B-Instruct"]
+apiVersion: serving.kserve.io/v1alpha1
+kind: ClusterServingRuntime
+metadata:
+  name: vllm-openai
+spec:
+  annotations:
+    prometheus.kserve.io/port: "8000"
+    prometheus.kserve.io/path: /metrics
+  supportedModelFormats:
+    - name: vllm
+      version: "1"
+      autoSelect: true
+      priority: 1
+  protocolVersions:
+    - v2
+    - v1
+  containers:
+    - name: kserve-container
+      image: docker.io/vllm/vllm-openai:v0.6.3
+      args:
+        - --port=8080          # KServe는 8080으로 트래픽을 보낸다
+        - --served-model-name={{.Name}}
+      env:
+        - name: HF_HOME
+          value: /cache
+      ports:
+        - containerPort: 8080
+          protocol: TCP
+      resources:
+        requests:
+          cpu: "2"
+          memory: 6Gi
+        limits:
+          cpu: "6"
+          memory: 12Gi
+      volumeMounts:
+        - name: cache
+          mountPath: /cache
+        - name: shm
+          mountPath: /dev/shm
+  volumes:
+    - name: cache
+      emptyDir:
+        sizeLimit: 10Gi
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi

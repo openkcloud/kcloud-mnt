@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openKcloud AI 노트북 — 대표님 시연 시나리오</title>
+<style>
+:root{
+  --bg:#ffffff; --surface:#fbfdfd; --ink:#223336; --muted:#66797d;
+  --line:#e3ecec; --accent:#0d9488; --accent-soft:#e9f7f5;
+  --indigo:#4f46e5;
+  --code-bg:#f2f7f6; --warn-bg:#fff8e8; --warn-line:#f0dcaa;
+  --say-bg:#f0f7ff; --say-line:#c8ddf5; --say-ink:#1d4e89;
+  --mono:"Cascadia Code","Consolas","D2Coding",monospace;
+}
+body{background:var(--bg);color:var(--ink);font-family:"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif;line-height:1.75;margin:0;font-variant-numeric:tabular-nums}
+.wrap{max-width:76ch;margin:0 auto;padding:48px 24px 96px}
+.eyebrow{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700;margin:0 0 8px}
+h1{font-size:1.65rem;line-height:1.3;margin:0 0 6px;text-wrap:balance}
+.sub{color:var(--muted);font-size:.92rem;margin:0 0 4px}
+h2{font-size:1.15rem;margin:50px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--accent);display:flex;align-items:baseline;gap:10px}
+h2 .no{font-family:var(--mono);font-size:.78rem;color:var(--accent);font-weight:700}
+h3{font-size:.98rem;margin:24px 0 8px}
+p{margin:0 0 12px}
+code{font-family:var(--mono);font-size:.85em;background:var(--code-bg);padding:.1em .4em;border-radius:4px}
+table{border-collapse:collapse;width:100%;font-size:.85rem;background:#fff}
+.tablebox{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:0 0 16px}
+th{background:var(--accent-soft);text-align:left;padding:9px 12px;font-size:.78rem;white-space:nowrap}
+td{padding:8px 12px;border-top:1px solid var(--line);vertical-align:top}
+.step{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:16px 18px;margin:0 0 18px}
+.step h3{margin:0 0 8px;display:flex;align-items:baseline;gap:8px}
+.step h3 .t{margin-left:auto;font-family:var(--mono);font-size:.72rem;color:var(--muted);font-weight:400}
+.do{font-size:.88rem;margin:0 0 8px}
+.do b{color:var(--indigo)}
+.say{background:var(--say-bg);border:1px solid var(--say-line);border-radius:8px;padding:11px 14px;font-size:.9rem;color:var(--say-ink);margin:0 0 8px}
+.say::before{content:"💬 이렇게 말씀하세요  ";font-weight:700;font-size:.75rem}
+.expect{font-size:.8rem;color:var(--muted)}
+.expect::before{content:"✓ 화면에 나오는 것: ";color:var(--accent);font-weight:700}
+.note{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:8px;padding:12px 15px;font-size:.86rem;margin:0 0 14px}
+ol,ul{padding-left:1.3em;margin:0 0 12px}
+li{margin-bottom:5px}
+.check li{list-style:none;margin-left:-1.1em}
+.check li::before{content:"☐ ";color:var(--accent)}
+footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);font-size:.78rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<p class="eyebrow">openKcloud · AI 노트북 파트</p>
+<h1>시연 시나리오 — "클릭 몇 번으로 AI 개발부터 서비스까지"</h1>
+<p class="sub">본편 15분 + 질의응답 · 시간 없을 때 5분 버전 별첨 · 발표: 고부장님</p>
+<p class="sub">※ 비전공 청중 기준 — 전문용어 없이, 비유 중심으로 구성했습니다</p>
+<p class="sub">✅ 이 시나리오로 <b>08-07 대표님 시연</b>과 <b>08-14 원청(윤박사님) 시연</b>을 완료했습니다.
+08-14 시연에서 확인된 개선점(예제 코드 주소·접속 안정화 등)이 반영된 버전입니다.</p>
+
+<h2><span class="no">00</span>꼭 전달할 세 문장 (이것만 기억하시면 됩니다)</h2>
+<ol>
+  <li><b>"그림(목업)이 아니라 진짜로 돌아갑니다"</b> — 화면 뒤에 실제 장비와 진짜 AI가 있음</li>
+  <li><b>"저희 현장 데이터로 직접 AI를 만들어봤습니다"</b> — DM코드 판독 판별 모델, 정확도 95%</li>
+  <li><b>"만든 AI를 바로 서비스로 띄워 현장이 갖다 쓸 수 있습니다"</b> — API로 호출되는 것까지 확인</li>
+  <li><b>"발주처 장비에 그대로 옮겨 갈 준비가 끝났습니다"</b> — 다음 단계로 갈 수 있는 상태</li>
+</ol>
+<div class="note"><b>이번 시연의 무기</b> — 남의 예제가 아니라 <b>우리 현장 DM코드 이미지 5,651장</b>으로 실제 AI를
+만들어 95% 정확도를 얻었습니다. 이 이야기가 시연 전체를 관통하는 줄거리입니다.</div>
+
+<h2><span class="no">01</span>시연 30분 전 준비 체크리스트</h2>
+<ul class="check">
+  <li>Claude Code 열고 <b>"시연 준비 상태 점검해줘"</b> 요청 → 시스템 자동 점검·복구</li>
+  <li>브라우저 탭 미리 열기: ①포털 홈 ②Notebooks ③Pipelines ④Experiments ⑤병목 분석</li>
+  <li>포털 로그인 확인 (admin/admin)</li>
+  <li>화면 글자 키우기 (Ctrl 누른 채 + 두세 번)</li>
+  <li>메신저·알림 끄기, 절전모드 해제</li>
+  <li>비상용으로 <code>docs/구축보고서.html</code> 열어두기</li>
+  <li><b>Serving 탭에서 <code>dm-code-classifier</code>가 Ready인지 확인</b> — 아니면 Claude에게 "서빙 살려줘" 요청</li>
+  <li><b>스케줄 예약 1건 등록해두기</b> — Pipelines → 스케줄 탭 (시연에서 보여줄 것)</li>
+  <li><b>dm-train 노트북 미리 실행</b> — <code>dm_train.ipynb</code> 6·7번 셀, <code>dm_deploy.ipynb</code> 6번 셀을 미리 돌려 결과를 띄워두면 시연 중 기다릴 필요가 없음</li>
+</ul>
+
+<h2><span class="no">02</span>본편 시나리오 (15분)</h2>
+
+<div class="step">
+<h3>STEP 0 — 시작 인사 <span class="t">1분 · 포털 첫 화면</span></h3>
+<p class="do"><b>화면:</b> 포털 첫 화면을 띄워놓고 시작</p>
+<p class="say">"저희가 국책과제에서 맡은 건 'AI 노트북'입니다. 쉽게 말해 <b>연구원들이 AI를 만드는 온라인 작업실</b>이에요. 2주 전엔 화면 그림만 있었는데, 지금은 사무실 컴퓨터 3대를 연결해서 <b>진짜로 작동하는 시스템</b>을 만들었습니다. 지금부터 신입 연구원이 AI 하나를 만들어 서비스로 내놓는 과정을 처음부터 끝까지 보여드리겠습니다."</p>
+</div>
+
+<div class="step">
+<h3>STEP 1 — 팀별로 장비를 나눠 쓰는 화면 <span class="t">2분 · Profiles 탭</span></h3>
+<p class="do"><b>클릭:</b> AI 개발환경 → Profiles. 카드의 게이지(막대)를 가리키기</p>
+<p class="say">"먼저 회사 아파트 관리사무소 같은 화면입니다. 팀마다 '작업 공간'을 배정하고, 컴퓨터 자원을 얼마나 쓸 수 있는지 정해줍니다. 이 막대가 <b>지금 이 순간 각 팀이 쓰고 있는 양</b>이고요 — 정해진 몫을 넘으면 시스템이 알아서 막아줍니다. 나중에 <b>'쓴 만큼 요금을 매기는' 클라우드 사업의 기초</b>가 되는 부분입니다."</p>
+<p class="expect">팀 카드 3장, 사용량 막대가 실시간으로 표시됨</p>
+</div>
+
+<div class="step">
+<h3>STEP 2 — 1분 만에 개발 작업실 만들기 <span class="t">3분 · Notebooks 탭 ★하이라이트</span></h3>
+<p class="do"><b>클릭:</b> Notebooks 탭 → 아래쪽 카탈로그에서 <b>"Kubeflow Code Server (Python)"</b> 카드 클릭 → 이름 <code>demo-ceo</code> 입력 → 생성 → 목록에서 "Running" 되면 <b>"연결"</b> 클릭</p>
+<p class="say">"연구원이 개발용 컴퓨터를 신청하는 장면입니다. 예전엔 장비 신청서 내고 며칠 기다렸다면 — (생성 클릭) — 지금 시스템이 작업실을 준비하고 있고요… (Running 뜨면) <b>1분 만에 끝났습니다.</b> '연결'을 누르면 — 보시는 것처럼 <b>브라우저 안에 개발 프로그램이 통째로 뜹니다.</b> 연구원 개인 컴퓨터가 좋을 필요가 없어요. 어느 컴퓨터에서든 접속만 하면 고성능 장비로 일할 수 있는 겁니다."</p>
+<p class="say">"그리고 화면 <b>오른쪽</b>을 보시면 — 이 작업실이 쓰고 있는 <b>장비 상태가 실시간</b>으로 나옵니다.
+GPU가 얼마나 일하는지, 온도가 몇 도인지. 학습을 돌리면 이 숫자가 확 올라갑니다."</p>
+<p class="expect">30초~1분 안에 Running → 연결하면 개발 프로그램 화면 + 우측 GPU 실측 수치(3초마다 갱신)</p>
+</div>
+
+<div class="step">
+<h3>STEP 3 — 보안도 챙겼습니다 <span class="t">1분 · 시크릿 창</span></h3>
+<p class="do"><b>클릭:</b> Ctrl+Shift+N (새 비공개 창) → 방금 그 작업실 주소 붙여넣기 → 차단 화면 확인 → 창 닫기</p>
+<p class="say">"그런데 이 작업실, 주소만 알면 아무나 들어올 수 있을까요? 로그인 안 한 창에서 들어가 보면 — <b>이렇게 잠겨 있습니다.</b> 연구원들이 만드는 코드는 회사 자산이니까, 허가받은 사람만 들어올 수 있게 해놨습니다."</p>
+<p class="expect">"🔒 인증이 필요합니다" 잠금 화면</p>
+</div>
+
+<div class="step">
+<h3>STEP 4 — 반복 작업은 자동으로 <span class="t">2분 · Pipelines 탭</span></h3>
+<p class="do"><b>클릭:</b> Pipelines → <code>dm-code-train</code> 선택 → 상단 <b>단계 그림</b>(5단계) 가리키기 → <b>"새 실행"</b> 클릭 → <b>스케줄 탭</b> 열어 <code>daily-retrain</code> 예약 보여주기 (결과는 STEP 4-C에서 확인)</p>
+<p class="say">"AI를 가르치는 일은 '재료 손질 → 요리 → 맛보기' 같은 여러 단계를 반복하는 일인데요, 그 과정을 <b>레시피로 등록해두면 버튼 하나로 전 과정이 자동으로</b> 돕니다.<br><br>(화면 위 그림 가리키며) 보시면 <b>이 파이프라인이 어떤 순서로 도는지 그림으로</b> 나옵니다 —
+<b>데이터 준비 → 학습 → 성능 평가 → 포장 → 서비스 반영</b>, 다섯 단계입니다.
+중요한 건 <b>마지막 두 단계</b>인데요, AI를 만들기만 하는 게 아니라 <b>만든 즉시 현장이 쓸 수 있는 서비스로 자동으로 올려줍니다.</b>
+사람 손이 한 번도 안 들어갑니다.<br><br>
+(새 실행 클릭) 방금 눌렀고 지금 실제로 돌아가기 시작했습니다.
+그리고 <b>스케줄 탭</b>을 보시면 — <b>매일 새벽 2시에 자동 실행되도록 예약</b>해뒀습니다.
+<b>새 데이터가 쌓이면 밤사이 AI가 알아서 다시 학습하고, 아침엔 더 똑똑해진 AI가 현장에 올라가 있는 겁니다.</b>
+결과는 이따가 보겠습니다."</p>
+<p class="expect">단계 그림 5개(prep→train→evaluate→package→deploy) · 실행 이력에 "Running" · 스케줄 탭에 daily-retrain</p>
+<p class="note" style="background:#eef6ff;border-left:4px solid #4a90d9;padding:10px 14px;margin-top:10px;border-radius:0 6px 6px 0">
+<b>[말씀 도움]</b> "이게 왜 대단하냐"고 물으시면 —
+보통은 연구원이 학습을 돌리고, 결과를 확인하고, 파일을 옮기고, 서버에 올리는 일을 <b>손으로 며칠</b> 합니다.
+그 전 과정을 <b>버튼 하나에 76초</b>로 묶은 것입니다.</p>
+</div>
+
+<div class="step">
+<h3>STEP 4-B — 우리 현장 데이터로 만든 AI (실제 사례) <span class="t">4분 · dm-train 노트북 ★최고 하이라이트</span></h3>
+<p class="do"><b>클릭:</b> Notebooks → <code>dm-train</code>의 <b>연결</b> → <code>dm_train.ipynb</code> 열기
+→ <b>3번 셀</b>(샘플 이미지) 결과 보여주기 → <b>6번 셀</b>(학습 결과 5줄) → <b>7번 셀</b>(성적표)
+→ <code>dm_deploy.ipynb</code>의 <b>6번 셀</b>(판정 테스트 6줄)</p>
+<p class="say">"여기서부터는 남의 예제가 아니라 <b>저희 현장 이야기</b>입니다. 부품에 찍는 DM코드 — 큐알코드 같은 산업용 코드인데,
+잘 안 찍히면 판독기가 못 읽어서 다시 찍어야 하죠. 그래서 <b>'이 코드는 읽힐까 안 읽힐까'를 미리 판정하는 AI</b>를
+제가 직접 만들어봤습니다.<br><br>
+(3번 셀 가리키며) 위가 잘 읽힌 코드, 아래가 실패한 코드입니다. 이런 이미지 <b>5,651장</b>을 넣고 —
+(6번 셀) <b>학습이 16초 만에 끝났습니다.</b> 아까 그 4080 장비가 한 겁니다. 정확도 <b>95%</b>고요.<br><br>
+(7번 셀) 성적표를 보면 1,130장 중 1,073장을 맞혔습니다. (dm_deploy 6번 셀) 실제로 이미지를 넣어보면
+이렇게 <b>'실패 예상, 확신도 100%'</b> 하고 답을 줍니다. <b>현장에 붙이면 촬영 즉시 재촬영하라고 알려줄 수 있는 겁니다.</b>"</p>
+<p class="expect">성공/실패 이미지 비교 · 학습 로그 5줄(16초) · 정확도 94.96% · 판정 테스트 6건 전부 정답</p>
+</div>
+
+<div class="step">
+<h3>STEP 4-C — 만든 AI를 서비스로 올리기 <span class="t">3분 · Serving 탭 ★마무리 하이라이트</span></h3>
+<p class="do"><b>클릭:</b> 포털 → AI 개발환경 → <b>Serving</b> 탭 → <code>dm-code-classifier</code> 카드가 <b>Ready</b>인 것 확인
+→ <b>"API 호출 테스트"</b> 버튼 클릭 (판정 결과와 응답 시간이 바로 뜸)
+→ (선택) 노트북 <code>dm_serve.ipynb</code>의 <b>5번 셀</b> 실행해 한 번 더 보여주기</p>
+<p class="say">"그런데 AI를 만들기만 하면 소용이 없죠. 현장 장비가 갖다 쓸 수 있어야 합니다.
+그래서 — (Serving 탭 가리키며) <b>아까 그 파이프라인이 방금 이 서비스를 올려놨습니다.</b>
+제가 손으로 올린 게 아니라, <b>학습이 끝나자마자 자동으로</b> 올라간 겁니다.<br><br>
+(API 호출 테스트 클릭) 실제로 불량 코드 사진 한 장을 보내보면 — 보세요, <b>0.05초 만에 판정</b>이 옵니다.
+이제 현장 검사 PC든, 웹 화면이든, <b>이 주소로 사진만 보내면 판정을 받아갈 수 있습니다.</b><br><br>
+정리하면 — <b>데이터를 올리고, AI를 만들고, 서비스로 띄우고, 갖다 쓰는 것까지 이 한 화면 안에서 다 됩니다.</b>
+이게 저희가 만든 AI 노트북입니다."</p>
+<p class="expect">dm-code-classifier 카드 Ready · 판정 결과와 응답 시간(50~90ms) 표시</p>
+</div>
+
+<div class="step">
+<h3>STEP 5 — 기계가 스스로 최적 설정을 찾음 <span class="t">2분 · Experiments 탭</span></h3>
+<p class="do"><b>클릭:</b> Experiments → "Succeeded"로 끝난 <code>lr-batch-hpo</code> 실험 가리키기</p>
+<p class="say">"AI 성능은 요리로 치면 '불 조절, 소금 양' 같은 설정에 크게 좌우됩니다. 최적값 찾기는 원래 연구원이 밤새 이것저것 해보던 일인데 — 여기선 <b>시스템이 알아서 여섯 가지 조합을 실험해보고 가장 좋은 답을 찾아냈습니다.</b> 사람의 감이 아니라 데이터로 찾는 거고, 연구원은 그 시간에 다른 일을 할 수 있죠."</p>
+<p class="expect">완료된 실험과 최고 성적(정확도 95.7%)이 표시됨</p>
+</div>
+
+<div class="step">
+<h3>STEP 6 — 장비 성능을 숫자로 비교 <span class="t">2분 · 벤치마크 탭</span></h3>
+<p class="do"><b>클릭:</b> 같은 화면의 "하드웨어 벤치마크" 탭 → 실측 표 가리키기</p>
+<p class="say">"이 국책과제의 핵심이 '여러 회사의 AI 반도체를 골라 쓰게 하자'인데요, 고르려면 성능 비교표가 있어야겠죠. 그 표가 <b>실제 측정으로</b> 나옵니다. 저희 장비 두 대를 재보니 한쪽이 다른 쪽보다 <b>3배 이상 빠르다</b>고 나오네요 — 그럼 무거운 작업은 빠른 쪽에 시키면 되는 겁니다. 나중에 국산 AI 반도체(리벨리온)가 들어오면 이 표에 그대로 한 줄 추가됩니다."</p>
+<p class="expect">장비 2종의 연산속도·처리 속도 실측 숫자 표</p>
+</div>
+
+<div class="step">
+<h3>STEP 7 — 진짜 AI가 대답합니다 (피날레) <span class="t">2분 · 병목 분석 탭 ★하이라이트</span></h3>
+<p class="do"><b>클릭:</b> 병목 분석 → 맨 위 장비 상태 카드(LIVE) 2장 가리키기 → "실측 LLM 추론 지표" 카드에서 <b>"테스트 요청 보내기"</b> 클릭 → 숫자 움직이는 것 확인 → 이어서 "파이프라인 병목" 탭에서 아까 STEP 4 실행이 완료된 것 + 색깔 막대 보여주기</p>
+<p class="say">"마지막으로 제일 신기한 걸 보여드리면 — 저희 장비에는 지금 <b>챗GPT 같은 진짜 AI가 하나 올라가서 서비스 중</b>입니다. 질문을 보내보면… 보세요, 응답 속도 숫자들이 실시간으로 움직입니다. 질문받고 0.03초 만에 답을 시작하네요. 그리고 아까 돌려놓은 자동 학습 — 완료됐고요, 시스템이 <b>'가운데 단계가 시간을 제일 많이 먹는다'고 색깔 막대로 짚어줍니다.</b> 어디를 개선해야 할지 알려주는 거죠. <b>만들고, 가르치고, 서비스하고, 진단하는 것까지 — 이 한 벌 안에서 다 됩니다.</b>"</p>
+<p class="expect">장비 상태 실시간 숫자 + AI 응답 지표 갱신 + 단계별 색깔 막대</p>
+</div>
+
+<div class="step">
+<h3>STEP 8 — 마무리 <span class="t">1분</span></h3>
+<p class="say">"정리드리면 — 추가 장비 구입 없이 사내 컴퓨터 3대로 여기까지 만들었고, 전부 업계 표준 기술이라 <b>발주처의 대형 장비(A100)에 설정 파일 하나만 바꿔서 그대로 옮길 수 있습니다.</b> 설치 안내서와 기술 문서까지 준비해뒀습니다.<br><br>
+무엇보다 — <b>저희 현장 데이터로 실제 AI를 만들어 95% 정확도까지 확인했습니다.</b> 이 플랫폼이 그림이 아니라
+실제로 쓸 수 있는 물건이라는 걸, 저희가 직접 써보면서 증명한 셈입니다."</p>
+</div>
+
+<h2><span class="no">03</span>대표님이 하실 만한 질문 &amp; 답변</h2>
+<div class="tablebox"><table>
+<thead><tr><th>예상 질문</th><th>이렇게 답하세요</th></tr></thead>
+<tbody>
+<tr><td>"이거 발주처 장비에서도 되는 거야?"</td><td>"네. 업계 표준 방식으로 만들어서 장비 종류와 상관없이 돌아갑니다. 설정 파일 하나만 바꾸면 되고, 설치 안내서까지 넘길 준비가 됐습니다."</td></tr>
+<tr><td>"국산 반도체(NPU)는 언제 되나?"</td><td>"들어갈 자리는 이미 만들어놨습니다. 실물 칩이 확보되면 연결 부품(드라이버)만 붙이면 되는 구조입니다."</td></tr>
+<tr><td>"돈은 얼마나 들었나?"</td><td>"장비는 사내 컴퓨터 3대를 활용했고, 소프트웨어는 전부 무료 공개 소프트웨어입니다. 추가 지출 없이 만들었습니다."</td></tr>
+<tr><td>"해킹 걱정은 없나?"</td><td>"방금 보신 것처럼 로그인 없이는 차단됩니다. 정식 운영 때는 회사 계정 체계와 연동하는 설계까지 돼 있습니다."</td></tr>
+<tr><td>"사람이 없어도 알아서 돌아가나?"</td><td>"네. 방금 보신 스케줄 기능으로 매일 새벽 자동 학습 같은 예약이 됩니다. 장애가 나면 시스템이 스스로 다시 띄우고요."</td></tr>
+<tr><td>"그 DM코드 AI, 현장에 바로 쓸 수 있나?"</td><td>"판정 성능은 확인했고(95%), 실제 적용하려면 현장 카메라와 연결하는 작업이 남았습니다. 다만 불량을 놓치지 않는 쪽으로 민감도를 조절하는 등 현장 요구에 맞춘 조정은 바로 가능합니다."</td></tr>
+<tr><td>"데이터가 더 있으면 더 정확해지나?"</td><td>"네. 지금은 5,600장인데 데이터가 늘수록 정확도가 올라갑니다. 특히 실패 사례가 더 모이면 놓치는 비율이 줄어듭니다."</td></tr>
+<tr><td>"우리가 만든 게 정확히 어디까지야?"</td><td>"화면과 장비를 연결하는 두뇌 역할(기능 32개)과 화면 전체의 실제 연동이 저희가 개발한 부분입니다. 바탕이 되는 공개 소프트웨어들을 고르고 조립·구축한 것도 저희 몫이고요."</td></tr>
+</tbody>
+</table></div>
+
+<h2><span class="no">04</span>사고 대비 (Plan B)</h2>
+<div class="tablebox"><table>
+<thead><tr><th>이런 상황이면</th><th>이렇게 하세요</th></tr></thead>
+<tbody>
+<tr><td>STEP 2에서 작업실이 1분 넘게 안 뜸</td><td>"먼저 만들어둔 걸 보시죠" → 기존 <code>ksb</code>의 "연결"을 눌러 진행</td></tr>
+<tr><td>개발 화면(iframe)이 하얗게 빈 화면</td><td>Ctrl+Shift+R 새로고침 → 안 되면 로그아웃 후 재로그인</td></tr>
+<tr><td>Serving이 Ready가 아님</td><td>노트북 <code>dm_deploy.ipynb</code> 6번 셀(로컬 판정 테스트)로 대체 — "서비스로도 띄워뒀는데 지금은 노트북에서 보여드리겠습니다"</td></tr>
+<tr><td>AI 응답이 안 옴</td><td>장비 상태 카드와 벤치마크 표로 대신 설명하고 넘어가기</td></tr>
+<tr><td>노트북에 붙여넣은 예제 코드가 "연결 거부(Connection refused)"</td>
+    <td>주소가 <code>http://192.168.0.41:8000</code>인지 확인 — <code>localhost</code>는
+        노트북 안에서 자기 자신을 가리켜 실패함. 서빙 화면의 예제 코드 창을 닫았다 다시 열어
+        복사하면 올바른 주소가 들어 있음 (08-14 실사례)</td></tr>
+<tr><td>특정 노트북 하나만 안 열리고 나머지는 정상</td>
+    <td>그 노트북이 원격 노드에 배치된 경우 — 새로고침 2~3회로 대부분 복구.
+        새로 만드는 노트북은 안정적인 로컬 노드에 뜨므로, 급하면 새로 만들어 진행 (08-14 실사례)</td></tr>
+<tr><td>노트북 생성이 "저장 몫 초과"로 막힘</td>
+    <td>지워진 노트북의 볼륨이 남아 몫을 차지하는 경우 — 노트북 삭제 시
+        "볼륨까지 완전 삭제"를 선택했는지 확인, 급하면 Claude에게 "고아 볼륨 정리해줘" (08-14 실사례)</td></tr>
+<tr><td>시스템 전체가 안 됨</td><td><code>구축보고서.html</code>을 열어 문서 기반 발표로 전환 (모든 수치가 담겨 있음)</td></tr>
+</tbody>
+</table></div>
+<div class="note"><b>철칙</b> — 시연 당일 아침에 ① Claude에게 "시연 준비 점검" 시키기 ② 새 작업실 만들기 리허설 1회 (만든 건 지우면 됩니다). 이 두 가지만 하면 사고 확률이 거의 없습니다.</div>
+
+<h2><span class="no">05</span>시간 없을 때: 5분 압축 버전</h2>
+<ol>
+  <li><b>우리 현장 AI 사례</b> (STEP 4-B) — "DM코드 5,651장으로 95% 정확도, 학습 16초" <i>2분</i></li>
+  <li><b>작업실 만들기 → 개발 화면</b> (STEP 2) — "1분 만에 개발 환경이 나옵니다" <i>1분 30초</i></li>
+  <li><b>만든 AI를 API로 호출</b> (STEP 4-C) — "현장이 갖다 쓸 수 있습니다" <i>1분</i></li>
+  <li><b>AI에게 질문 보내기</b> (STEP 7 앞부분) — "생성형 AI도 서비스 중입니다" <i>1분</i></li>
+  <li><b>마무리</b> — "발주처로 옮길 준비 끝났습니다" <i>30초</i></li>
+</ol>
+
+<footer>openKcloud AI 노트북 · 시연 시나리오 v2.0 (08-07 대표 시연 · 08-14 원청 시연 완료, 실전 경험 반영) · 2026-08-14 갱신</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,33 @@
+# GPU time-slicing — GPU 한 장을 논리 2슬롯으로 광고해 여러 워크로드가 공유
+#
+# 배경: MIG(하드웨어 분할)는 A100/H100 전용이라 개발 장비(RTX)에서는 불가.
+# time-slicing은 스케줄링 차원의 공유로, 메모리·성능 격리는 없다 —
+# 합산 VRAM이 한도를 넘으면 OOM이 나므로 vLLM은 --gpu-memory-utilization으로
+# 점유를 제한해 둘 것(현재 qwen-llm 0.5). 운영(A100) 전환 시 MIG로 대체.
+#
+# 적용:
+#   kubectl apply -f nvidia-device-plugin-timeslicing.yaml
+#   kubectl -n kube-system patch ds nvidia-device-plugin-daemonset --type=json -p '[
+#    {"op":"replace","path":"/spec/template/spec/volumes","value":[
+#      {"name":"device-plugin","hostPath":{"path":"/var/lib/kubelet/device-plugins"}},
+#      {"name":"config","configMap":{"name":"nvidia-device-plugin-config"}}]},
+#    {"op":"replace","path":"/spec/template/spec/containers/0/volumeMounts","value":[
+#      {"name":"device-plugin","mountPath":"/var/lib/kubelet/device-plugins"},
+#      {"name":"config","mountPath":"/etc/nvidia"}]},
+#    {"op":"add","path":"/spec/template/spec/containers/0/args","value":["--config-file=/etc/nvidia/config.yaml"]}]'
+#   ※ volumes/volumeMounts는 patch가 배열을 통째로 교체하므로 기존 소켓 마운트를 꼭 포함할 것
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvidia-device-plugin-config
+  namespace: kube-system
+data:
+  config.yaml: |
+    version: v1
+    sharing:
+      timeSlicing:
+        renameByDefault: false
+        failRequestsGreaterThanOne: false
+        resources:
+        - name: nvidia.com/gpu
+          replicas: 2
