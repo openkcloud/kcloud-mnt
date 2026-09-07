@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openKcloud AI 노트북 — 구축 완료 보고서</title>
+
+<style>
+:root{
+  --bg:#f8fafb; --surface:#ffffff; --ink:#1a2b2e; --muted:#5b6f73;
+  --line:#dde6e6; --accent:#0d9488; --accent-soft:#e6f4f2;
+  --indigo:#4f46e5; --indigo-soft:#eceafd;
+  --code-bg:#f0f5f4; --warn-bg:#fdf6e8; --warn-line:#e6cf9a;
+  --live:#0d9488; --mock:#b45309;
+  --mono:"Cascadia Code","Consolas","D2Coding",monospace;
+}
+
+
+
+body{background:var(--bg);color:var(--ink);font-family:"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif;line-height:1.7;margin:0;font-variant-numeric:tabular-nums}
+.wrap{max-width:76ch;margin:0 auto;padding:48px 24px 96px}
+.eyebrow{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700;margin:0 0 8px}
+h1{font-size:1.7rem;line-height:1.3;margin:0 0 6px;text-wrap:balance}
+.sub{color:var(--muted);font-size:.92rem;margin:0 0 4px}
+h2{font-size:1.15rem;margin:52px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--accent);display:flex;align-items:baseline;gap:10px}
+h2 .no{font-family:var(--mono);font-size:.78rem;color:var(--accent);font-weight:700}
+h3{font-size:.98rem;margin:24px 0 8px}
+p{margin:0 0 14px}
+code{font-family:var(--mono);font-size:.85em;background:var(--code-bg);padding:.1em .4em;border-radius:4px}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:16px 18px;overflow-x:auto;font-family:var(--mono);font-size:.78rem;line-height:1.55;margin:0 0 16px}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.85rem}
+.tablebox{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:0 0 16px}
+th{background:var(--accent-soft);color:var(--ink);text-align:left;padding:9px 12px;font-size:.78rem;letter-spacing:.04em;white-space:nowrap}
+td{padding:8px 12px;border-top:1px solid var(--line);vertical-align:top}
+.pill{display:inline-block;font-size:.7rem;font-weight:700;padding:1px 9px;border-radius:99px}
+.pill.live{background:var(--accent-soft);color:var(--live)}
+.pill.mock{background:var(--warn-bg);color:var(--mock)}
+.kpis{display:flex;gap:12px;flex-wrap:wrap;margin:20px 0 0}
+.kpi{flex:1 1 140px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.kpi b{display:block;font-size:1.3rem;line-height:1.3}
+.kpi span{font-size:.74rem;color:var(--muted)}
+.note{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:8px;padding:13px 16px;font-size:.87rem;margin:0 0 14px}
+ol,ul{padding-left:1.3em;margin:0 0 14px}
+li{margin-bottom:6px}
+footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);font-size:.78rem;color:var(--muted)}
+.num{font-family:var(--mono)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<p class="eyebrow">openKcloud CMP · AI 노트북 파트</p>
+<h1>구축 완료 보고서 — 목업에서 실동작 시스템까지</h1>
+<p class="sub">기간 2026-08-04 ~ 08-14 · 작업환경: 사내 PC 3대 (RTX 4080 + RTX 4070 Laptop + RTX 4070)</p>
+<p class="sub">IITP 과제 「AI반도체 클라우드 플랫폼 구축」 — 오케스트로 협력 개발</p>
+
+<div class="kpis">
+  <div class="kpi"><b>6/6 탭</b><span>AI 개발환경 전체 실연동</span></div>
+  <div class="kpi"><b>3노드 K8s</b><span>GPU 3장 멀티노드 클러스터</span></div>
+  <div class="kpi"><b>70 API</b><span>CMP 백엔드 신규 개발</span></div>
+  <div class="kpi"><b>목업 0건</b><span>AI 개발환경 화면 전체 실측 전환</span></div>
+  <div class="kpi"><b>학습→배포<br>자동화</b><span>버튼 하나로 76초</span></div>
+</div>
+
+<h2><span class="no">01</span>요약</h2>
+<p>UI 목업뿐이던 openKcloud <b>AI 노트북(AI 개발환경) 파트를 실제로 동작하는 시스템으로 전환</b>했습니다. 사내 GPU 2장으로 Kubernetes 멀티노드 클러스터를 구성하고, Kubeflow 표준 스택 전체(Notebook·Profile·Pipelines·Katib·KServe)를 설치했으며, 포털과 클러스터를 잇는 CMP 백엔드를 신규 개발했습니다. 기획서의 핵심 사용자 여정이 포털 클릭만으로 전부 실행됩니다:</p>
+<pre><code>Profile 생성(쿼터 자동) → GPU 노트북 생성 → VSCode/Jupyter IDE 접속(인증)
+→ Pipeline 업로드·실행 → HPO 자동 튜닝 → 모델 배포 → API 호출 → 성능 실측</code></pre>
+
+<p>이후 세 단계로 완성도를 높였습니다. ① 화면에 남아 있던 <b>목업 수치를 전량
+실측으로 전환</b>, ② <b>학습부터 서비스 반영까지를 파이프라인 하나로 자동화</b>하고
+현장 데이터로 실제 모델을 만들어 서비스에 배포, ③ 세 번째 GPU 머신을 편입해
+<b>3노드·GPU 3장 멀티노드 체제로 확장</b>. 이 상태로 <b>두 차례 시연(경영진·원청)을
+통해 전 기능을 실사용 조건에서 검증</b>했고, 그 과정에서 드러난 안정성 이슈를
+모두 해결해 반영했습니다(06절).</p>
+
+<div class="note"><b>현장 데이터 실증</b> — 협력사 실제 생산라인의 DataMatrix 코드 이미지
+<b class="num">5,651장</b>(판독 성공 3,636 / 실패 2,015)으로 판정 모델을 학습해
+<b class="num">검증 정확도 95.58%</b>를 얻었고, 이 모델이 파이프라인을 통해 자동으로
+서비스에 배포되어 <b class="num">32ms</b>에 응답합니다. 예제 데이터가 아닌
+실제 업무 데이터로 전 과정을 검증했습니다.</div>
+
+<h2><span class="no">02</span>탭별 구현 현황</h2>
+<div class="tablebox"><table>
+<thead><tr><th>화면</th><th>상태</th><th>실제로 되는 것</th></tr></thead>
+<tbody>
+<tr><td>Profiles</td><td><span class="pill live">실동작</span></td><td>생성 폼 → 네임스페이스+쿼터+RBAC 자동 프로비저닝, 사용량 실시간 게이지</td></tr>
+<tr><td>Notebooks</td><td><span class="pill live">실동작</span></td><td>템플릿 카탈로그 생성(GPU/볼륨), IDE iframe 접속, 시작·정지·삭제, 상세(실파일·실측차트)</td></tr>
+<tr><td>Pipelines</td><td><span class="pill live">실동작</span></td><td>YAML 업로드 → Argo 실행 → 이력·성공률 실데이터</td></tr>
+<tr><td>Experiments</td><td><span class="pill live">실동작</span></td><td>HPO 정의 → Katib Trial 실행 → 최적 파라미터 자동 선정. <b>Trial이 실제 학습을 수행</b>(DM코드 5,651장 · ResNet18)하며, 찾아낸 설정값과 탐색 범위를 화면에서 확인</td></tr>
+<tr><td>Serving</td><td><span class="pill live">실동작</span></td><td>모델 배포(KServe) → 호출 테스트 → 부하 테스트(p50/p95/p99) → 자원 변경(GPU 포함) → 삭제. <b>LLM도 동일 화면에서 배포·관리</b>(vLLM ServingRuntime 등록), 예제 코드 제공</td></tr>
+<tr><td>병목 분석</td><td><span class="pill live">전체 실측</span></td><td>GPU 라이브(양 노드) · LLM TTFT/TPOT/KV cache(모델 선택) · 응답시간 분위수 · 배포 모델 구간 분해 · 파이프라인 단계 병목 · 규칙 기반 자동 진단 · <b>연산별 핫스팟 프로파일링</b>(요청 시 실행). <b>목업 수치 0건</b></td></tr>
+</tbody>
+</table></div>
+
+<h2><span class="no">03</span>실측 성과 (전부 우리 클러스터에서 측정)</h2>
+<h3>하드웨어 벤치마크 — 이종 가속기 비교 기준의 실증</h3>
+<div class="tablebox"><table>
+<thead><tr><th>GPU</th><th>FP32</th><th>FP16</th><th>메모리 대역폭</th></tr></thead>
+<tbody>
+<tr><td>RTX 4080 (워커 노드)</td><td class="num">33.1 TFLOPS</td><td class="num">105.2 TFLOPS</td><td class="num">545 GB/s</td></tr>
+<tr><td>RTX 4070 Laptop (관리 노드)</td><td class="num">11.2 TFLOPS</td><td class="num">35.6 TFLOPS</td><td class="num">210 GB/s</td></tr>
+</tbody>
+</table></div>
+<h3>LLM 추론 — ETRI 지적 지표(TTFT/TPOT/KV cache)의 실증</h3>
+<p>실제 LLM(Qwen2.5-0.5B)을 vLLM으로 RTX 4080에 배포해 표준 메트릭 확보:
+<b class="num">TTFT 33ms · TPOT 5.8ms · 171 tokens/s</b> + KV cache 사용률 실시간. "응답 지연을 TTFT/TPOT/E2E로 구분하라"는 검토 의견을 실측으로 충족.</p>
+<h3>모델 서빙 부하 테스트 — 실제 업무 모델 기준</h3>
+<div class="tablebox"><table>
+<thead><tr><th>서비스</th><th>RPS</th><th>p50</th><th>p95</th><th>p99</th><th>오류율</th></tr></thead>
+<tbody>
+<tr><td>dm-code-classifier (이미지 판정, CPU)</td><td class="num">25.7</td><td class="num">361.6ms</td><td class="num">772.8ms</td><td class="num">875.4ms</td><td class="num">0.0%</td></tr>
+<tr><td>qwen-llm (LLM, GPU)</td><td class="num">51.2</td><td class="num">171.3ms</td><td class="num">400.9ms</td><td class="num">404.3ms</td><td class="num">0.0%</td></tr>
+</tbody></table></div>
+<p>100회 동시 호출(동시성 10) 기준. 두 서비스 모두 <b>오류율 0%</b>로, 몰린 요청을 하나도 놓치지 않았습니다.</p>
+<h3>파이프라인 병목 자동 식별</h3>
+<p>3단계 파이프라인 실행 → Argo 실측으로 <b>"train 단계가 전체의 58% = 병목"</b> 자동 분석.</p>
+
+<h3>현장 데이터 학습 — DM코드 판독 가능성 판정 모델</h3>
+<p>협력사 생산라인의 DataMatrix 코드 이미지로 실제 모델을 학습했습니다.
+판독기가 값을 읽어낸 사진(파일명에 코드값 포함)은 성공, 못 읽은 사진은 실패로
+<b>자동 라벨링</b>되어 별도 작업 없이 학습 데이터가 확보됐습니다.</p>
+<div class="tablebox"><table>
+<thead><tr><th>항목</th><th>값</th></tr></thead>
+<tbody>
+<tr><td>학습 데이터</td><td class="num">5,651장 (성공 3,636 / 실패 2,015)</td></tr>
+<tr><td>모델 구조</td><td>ResNet18 전이학습 · 5 epoch</td></tr>
+<tr><td>학습 시간</td><td class="num">34초 (RTX 4080)</td></tr>
+<tr><td>검증 정확도</td><td class="num">95.58%</td></tr>
+<tr><td>불량 검출률</td><td class="num">90.27%</td></tr>
+<tr><td>서비스 응답</td><td class="num">32ms (CPU 추론)</td></tr>
+</tbody></table></div>
+<p>이 모델은 코드 값을 읽는 것이 아니라 <b>판독 가능 여부를 미리 판정</b>합니다.
+못 읽을 코드를 판독기까지 보내지 않고 촬영 직후 재촬영을 유도하는 것이 목적입니다.</p>
+
+<h3>학습 → 배포 자동화 (5단계 파이프라인)</h3>
+<pre><code>prep(데이터 준비) → train(GPU 학습) → evaluate(성능 평가)
+→ package(서빙용 포장) → deploy(서비스 반영)      총 76초</code></pre>
+<p>버튼 한 번으로 <b>학습부터 서비스 반영까지 사람 손 없이</b> 진행됩니다.
+평가 단계 이후에만 배포가 실행되도록 순서를 걸어 검증되지 않은 모델이 나가지 않게 했습니다.
+매일 새벽 자동 실행 예약도 등록되어 있어, 새 데이터가 쌓이면 밤사이 재학습됩니다.</p>
+
+<h3>HPO 실학습 전환</h3>
+<p>Katib Trial이 계산식으로 점수를 만들던 것을 <b>실제 학습을 수행</b>하도록 교체했습니다.
+매 Trial이 DM코드 5,651장으로 ResNet18을 학습하고 검증 정확도를 반환합니다.
+4회 탐색 결과 90.88~93.63%로 서로 다른 값이 나와 실학습임이 확인되며,
+찾아낸 설정값(<code>lr=0.000137, batch=32</code>)과 탐색 범위를 화면에서 볼 수 있습니다.</p>
+
+<h3>연산별 핫스팟 프로파일링</h3>
+<p>ETRI 검토의견의 "병목 컴포넌트 식별"을 실측으로 충족했습니다.
+vLLM 내장 torch profiler를 <b>요청 시에만</b> 켜서 실제 추론을 추적하고,
+트레이스의 self time을 집계해 연산별 소요시간을 산출합니다(상시 수집은 추론을 느리게 하므로 on-demand).
+<b>GPU 커널 단위는 WSL 환경에서 CUPTI가 초기화되지 않아 수집되지 않으며</b>,
+이 제약을 화면에 명시했습니다. 표준 리눅스 클러스터에서는 동일 코드로 커널 단위까지 수집됩니다.</p>
+
+<h2><span class="no">04</span>시스템 구성</h2>
+<pre><code>포털 (Next.js :3000) ── REST/iframe ──▶ CMP 백엔드 (FastAPI :8000, 신규 개발)
+                                          │ 70 API · IDE 프록시(HTTP+WS) · 세션 인증
+                                          ▼
+                      Kubernetes k3s 3노드
+                      (관리: 4070 Laptop PC / 워커: 4080 PC / 워커: 4070 PC)
+                      ├ Kubeflow: Notebook·Profile Controller v1.10
+                      ├ KFP 2.4 + Argo (MySQL·MinIO 내장)
+                      ├ Katib v0.17 (HPO) · KServe v0.14 (서빙)
+                      ├ vLLM ServingRuntime (LLM을 KServe 표준으로 배포) · gpu-metrics
+                      └ NVIDIA device plugin — GPU 3장 스케줄링</code></pre>
+
+<h3>구성요소별 역할 — 무엇이 어떤 일을 하는가</h3>
+<div class="tablebox"><table>
+<thead><tr><th>구성요소</th><th>역할</th><th>왜 이것을 썼나</th></tr></thead>
+<tbody>
+<tr><td><b>Kubernetes (k3s)</b></td>
+    <td>모든 워크로드(노트북·학습·서빙)의 실행 기반. 자원 스케줄링, 장애 시 자동 재기동,
+        멀티노드 확장을 담당</td>
+    <td>k3s는 K8s 표준 API를 그대로 제공하는 경량 배포판 — 개발 PC에서 검증한 매니페스트가
+        운영 클러스터(A100)에서 그대로 동작</td></tr>
+<tr><td><b>Kubeflow</b></td>
+    <td>K8s 위에 "ML 개발 플랫폼" 계층을 얹는 표준 스택. 본 시스템은 그중
+        Notebook·Profile 컨트롤러를 사용 — <b>Notebook CRD</b>를 만들면 컨트롤러가
+        Pod·Service·볼륨 연결까지 프로비저닝하고, <b>Profile CRD</b>를 만들면
+        네임스페이스+자원쿼터+RBAC가 한 번에 생성됨</td>
+    <td>노트북 생성·팀별 격리를 직접 구현하지 않고 선언(CRD)만으로 처리.
+        업계 표준이라 원청 환경과 호환</td></tr>
+<tr><td><b>Kubeflow Pipelines (KFP) + Argo</b></td>
+    <td>학습 워크플로우 엔진. 파이프라인 정의(YAML)를 올리면 Argo가 단계별 컨테이너를
+        순서·의존성에 맞게 실행. 실행 이력·아티팩트는 내장 MySQL·MinIO에 기록</td>
+    <td>"데이터 준비→학습→평가→포장→배포" 자동화와 스케줄 재학습(cron)이 표준 기능으로 제공됨</td></tr>
+<tr><td><b>Katib</b></td>
+    <td>하이퍼파라미터 자동 탐색(HPO). Experiment CRD에 탐색 범위를 선언하면
+        Trial(학습 Job)을 반복 실행하며 최적값을 수렴</td>
+    <td>탐색 알고리즘·병렬 실행·조기 중단을 직접 구현할 필요가 없음</td></tr>
+<tr><td><b>KServe</b></td>
+    <td>모델 서빙 표준화. InferenceService CRD에 모델 위치(s3://)와 형식만 선언하면
+        추론 서버 기동·버전 교체·자원 관리·표준 예측 API(v1)를 제공</td>
+    <td>sklearn·PyTorch·LLM(vLLM)을 <b>같은 방식</b>으로 배포·관리 — 포털 화면 하나로 통합 가능</td></tr>
+<tr><td><b>vLLM</b></td>
+    <td>LLM 전용 고성능 추론 엔진. KServe의 ServingRuntime으로 등록해
+        일반 모델과 동일한 절차로 배포. TTFT·TPOT·KV cache 등 LLM 표준 메트릭을 자체 노출</td>
+    <td>PagedAttention 기반으로 GPU 메모리 효율이 높고, ETRI 검토 지표를 실측으로 제공</td></tr>
+<tr><td><b>MinIO (S3 호환)</b></td>
+    <td>데이터셋·학습 산출물·서빙 모델의 단일 저장소. 파이프라인이 쓰고 KServe가 읽는 접점</td>
+    <td>S3 API 호환이라 운영 전환 시 주소만 바꾸면 사내 스토리지·AWS S3로 대체</td></tr>
+<tr><td><b>NVIDIA device plugin</b></td>
+    <td>각 노드의 GPU를 K8s 자원(<code>nvidia.com/gpu</code>)으로 등록해 스케줄러가
+        장수 단위로 배분하게 함. <b>time-slicing 설정으로 GPU 한 장을 논리 2슬롯으로
+        광고</b> — LLM 서빙과 노트북 학습이 같은 GPU를 공유
+        (<code>deploy/nvidia-device-plugin-timeslicing.yaml</code>)</td>
+    <td>K8s 표준 확장점이라 NPU(리벨리온)도 같은 방식의 플러그인으로 추가 가능.
+        MIG(하드웨어 분할)는 A100/H100 전용이라 개발 장비에서는 time-slicing이 대안 —
+        메모리·성능 격리는 없으므로 vLLM 점유율을 제한해 공존시킴</td></tr>
+<tr><td><b>CMP 백엔드 (신규 개발)</b></td>
+    <td>포털과 클러스터 사이의 번역기. 화면의 클릭을 CRD 생성·패치로 바꾸고,
+        클러스터 상태·실측 메트릭을 화면용 JSON으로 가공. IDE 접속 프록시(HTTP+WS)와
+        세션 인증도 담당 — 70개 API</td>
+    <td>Kubeflow 원본 대시보드를 쓰지 않고 openKcloud 포털 UX에 맞춘 화면을 제공하기 위한
+        접착 계층. 운영 전환 시 인증·라우팅만 Istio/oauth2-proxy로 교체</td></tr>
+</tbody>
+</table></div>
+
+<h2><span class="no">05</span>원청(테스트베드) 인수인계 준비 완료</h2>
+<ul>
+  <li><b>환경설정 외부화</b> — 사내 IP·노드명 등 하드코딩 0건. <code>config.env</code> 값만 바꾸면 A100 클러스터에서 동작 (K8s 표준 <code>nvidia.com/gpu</code>라 GPU 기종 무관)</li>
+  <li><b>설치 가이드</b> — <code>cmp-backend/README.md</code>에 표준 클러스터 설치 명령 전체 + 알려진 함정(폐기된 gcr.io 이미지 교체 등) 문서화</li>
+  <li><b>파이프라인·실행환경 자산화</b> — 학습·배포 파이프라인(<code>pipelines/dm_train_pipeline.py</code>),
+      HPO 학습 스크립트(<code>pipelines/hpo_dm_train.py</code>), vLLM 실행환경
+      (<code>deploy/vllm-servingruntime.yaml</code>)을 저장소에 포함. A100 환경에서 그대로 재사용</li>
+  <li><b>데이터·모델 저장소 일원화</b> — 데이터셋·모델·산출물을 모두 MinIO(S3 호환)에 두어
+      <code>MODEL_STORE_ENDPOINT</code> 값만 바꾸면 사내 NAS·AWS S3로 전환. 파일서버 불필요</li>
+  <li><b>로컬 전용 우회의 opt-in화</b> — WSL 개발환경 제약(크로스노드·egress) 우회는 설정으로 켜는 방식. 미설정 시 표준 클러스터 기준 동작</li>
+</ul>
+
+<h2><span class="no">06</span>해결한 주요 기술 이슈 (지식 자산)</h2>
+<div class="tablebox"><table>
+<thead><tr><th>이슈</th><th>해결</th></tr></thead>
+<tbody>
+<tr><td>KFP 2.4 이미지가 gcr.io 폐기로 소실 (minio·argoexec)</td><td>Docker Hub/quay.io 동일 버전으로 교체 — README에 기록</td></tr>
+<tr><td>Jupyter iframe "연결 거부" (CSP frame-ancestors)</td><td>IDE 프록시에서 프레임 차단 헤더 제거 (Istio 방식과 동일)</td></tr>
+<tr><td>Katib 초단기 Trial 메트릭 수집 실패</td><td>ConfigMap 스크립트 + 수집기 대기시간 확보</td></tr>
+<tr><td>WSL 개발환경 3대 제약 (크로스노드/egress/동적포트)</td><td>노드 고정·프록시 주입·백엔드 단일 프록시 — 전부 opt-in 설정화</td></tr>
+<tr><td>Profile이 기존 네임스페이스 인수 거부</td><td>owner 주석 부여로 인수 (운영 마이그레이션에도 유효)</td></tr>
+<tr><td>KFP가 <code>runtimeClassName</code>을 지원하지 않아 파이프라인이 GPU를 못 잡음</td>
+    <td>Argo workflow-controller의 <code>workflowDefaults.podSpecPatch</code>로 주입</td></tr>
+<tr><td>프록시 설정이 KFP launcher(Go)에도 적용돼 클러스터 내부 통신까지 사외로 나가며 실패</td>
+    <td><code>NO_PROXY</code>에 내부 도메인·대역 추가 (gRPC도 프록시 환경변수를 따른다)</td></tr>
+<tr><td>한글 단계 이름이 아티팩트 경로에 들어가 KFP 2.4 드라이버가 죽음</td>
+    <td>표시명을 ASCII로 고정 — 다국어 환경에서 재현 가능한 함정</td></tr>
+<tr><td>KServe가 자원 <b>축소</b>를 Deployment에 반영하지 않아 GPU가 영구 점유됨</td>
+    <td>축소 시 Deployment를 직접 정리 — 부여·회수 왕복 검증 완료</td></tr>
+<tr><td>서비스 이름과 <code>.mar</code> 내부 모델명이 다르면 예측 경로 404</td>
+    <td>서버에 등록된 이름을 조회해 사용 (예측·테스트·부하테스트 공통)</td></tr>
+<tr><td>노트북 자원 변경 시 작업 볼륨 연결 유실</td>
+    <td>CRD 병합 패치가 배열을 통째로 교체하는 특성 — 기존 컨테이너를 복사해 자원만 교체.
+        볼륨 누락 시 자동 복구 로직 추가</td></tr>
+<tr><td>JupyterLab에서 파일 생성·커널 시작 시 <code>'_xsrf' argument missing</code></td>
+    <td>IDE 프록시가 응답 헤더를 dict로 재조립하며 다건 <code>Set-Cookie</code>가
+        쉼표로 병합돼 XSRF 쿠키가 유실됨 — Set-Cookie만 개별 헤더로 전달</td></tr>
+<tr><td>서빙 호출 테스트가 간헐적으로 500 (될 때·안 될 때 반복)</td>
+    <td>kubernetes <code>stream()</code>이 exec 동안 공유 ApiClient의 request를
+        websocket으로 바꿔치기 → 3초 주기 GPU 폴링과 겹친 일반 API 호출이 오염되는
+        레이스. exec 계열을 전용 ApiClient로 분리</td></tr>
+<tr><td>새 노트북이 원격 노드에 배치돼 접속이 불안정</td>
+    <td>학습 Job·서빙과 달리 노트북 생성에만 <code>DEV_PIN_NODE</code> nodeSelector가
+        누락 — 동일 적용. 원격 노드 Windows 방화벽의 kubelet(10250) 인바운드도 허용</td></tr>
+<tr><td>노트북 삭제 반복 시 스토리지 쿼터 고갈</td>
+    <td>삭제 시 볼륨을 무조건 보존해 고아 PVC가 누적 — 삭제 화면에서
+        볼륨 유지/완전 삭제를 사용자가 선택하도록 개선</td></tr>
+</tbody>
+</table></div>
+
+<h2><span class="no">07</span>남은 과제 (운영 전환 로드맵)</h2>
+<ol>
+  <li>IDE 라우팅·인증을 Istio + oauth2-proxy로 교체 (현재 자체 프록시+세션 — 동일 아키텍처 위치)</li>
+  <li>IAM 연동 (현재 데모 계정 2개) · API 엔드포인트 인증 확대</li>
+  <li>모델 저장소 MinIO/S3 정식화 · Portal DB(사용자·과금·감사)</li>
+  <li>NPU(Rebellions)·PIM: 디바이스 플러그인+SDK 이미지 확보 시 동일 구조로 확장 — 벤치마크 표에 실측 열 추가</li>
+  <li>공유 스토리지 도입 — 현재 노드 로컬(local-path)이라 볼륨이 노드에 고정됨. NFS·Ceph 전환 시 노트북을 어느 노드에서든 재개 가능
+      (볼륨이 놓인 노드의 GPU가 선점되면 다른 노드 GPU가 남아도 못 쓰는 제약도 함께 해소)</li>
+  <li>원격 워커 노드 연결 안정화 — Windows/WSL 워커 노드는 유휴 시
+      kubelet 스트리밍이 끊기는 사례가 있어 keepalive 예약작업으로 잡아둔 상태.
+      운영 전환 시 표준 리눅스 노드로 대체하면 해소</li>
+  <li>GPU 분할(MIG) 적용 — A100 도입 시 한 장을 최대 7개로 나눠 <b>격리된</b> 다중 사용자
+      동시 사용 (개발 장비에는 격리 없는 time-slicing 공유를 이미 적용 — MIG로 승격되는 자리)</li>
+  <li>파이프라인 실행 파라미터 입력 UI — 백엔드는 지원하나 화면 미연결. HPO가 찾은 값을 화면에서 바로 넣어 재학습하는 흐름 완성 필요</li>
+</ol>
+
+<div class="note"><b>브랜치 안내</b> — 프론트 변경은 <code>openkcloud</code> 저장소의 <code>feature/real-notebook-api</code> 브랜치, 백엔드는 신규 <code>cmp-backend</code> 저장소에 있습니다(모두 로컬). 원청 <code>main</code>과 충돌 없으며(main 대비 앞선 커밋만 존재), 원격 푸시는 검토 후 결정합니다.</div>
+
+<footer>openKcloud CMP AI 노트북 파트 · 구축 완료 보고서 · 2026-08-14 갱신 (원청 시연 검증 반영)</footer>
+</div>
+</body>
+</html>

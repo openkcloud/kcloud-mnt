@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: vllm-qwen
+  name: vllm-qwen
+  namespace: llm-serving
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: vllm-qwen
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: vllm-qwen
+    spec:
+      containers:
+      - args:
+        - --model=Qwen/Qwen2.5-0.5B-Instruct
+        - --max-model-len=2048
+        - --gpu-memory-utilization=0.35
+        - --port=8000
+        env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: all
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: compute
+        - name: HTTP_PROXY
+          value: http://192.168.0.41:3128
+        - name: HTTPS_PROXY
+          value: http://192.168.0.41:3128
+        - name: http_proxy
+          value: http://192.168.0.41:3128
+        - name: https_proxy
+          value: http://192.168.0.41:3128
+        - name: NO_PROXY
+          value: localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/24,.svc,.cluster.local
+        - name: HF_HOME
+          value: /cache/hf
+        - name: VLLM_TORCH_PROFILER_DIR
+          value: /profiles
+        image: docker.io/vllm/vllm-openai:v0.6.3
+        imagePullPolicy: IfNotPresent
+        name: vllm
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: '6'
+            memory: 12Gi
+          requests:
+            cpu: '2'
+            memory: 6Gi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /cache
+          name: cache
+        - mountPath: /profiles
+          name: profiles
+      dnsPolicy: ClusterFirst
+      nodeSelector:
+        kubernetes.io/hostname: gps
+      restartPolicy: Always
+      runtimeClassName: nvidia
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - emptyDir:
+          sizeLimit: 10Gi
+        name: cache
+      - emptyDir: {}
+        name: profiles
