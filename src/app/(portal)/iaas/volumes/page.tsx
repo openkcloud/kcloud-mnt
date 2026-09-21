@@ -1,4 +1,5 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   HardDrive,
@@ -15,6 +16,8 @@ import {
   Copy,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { useFeatureVisible, FEATURE_MAP } from "@/lib/scope";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -63,6 +66,8 @@ import { toast } from "sonner";
 import type { Volume } from "@/lib/types";
 
 export default function VolumesPage() {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
+  const reuseVisible = useFeatureVisible("iaas.volumes.reuse");
   const { data, isLoading } = api.iaas.volumes() as {
     data: { items: Volume[] } | undefined;
     isLoading: boolean;
@@ -85,7 +90,8 @@ export default function VolumesPage() {
         <StatChip label="평균 크기" value={`${Math.round(totalGb / data.items.length)} GB`} />
       </div>
 
-      <Card className="p-4">
+      <ChangeMark ids={["CR-IAAS-03"]}>
+<Card className="p-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
@@ -103,15 +109,19 @@ export default function VolumesPage() {
           <Button variant="outline" size="sm" className="ml-auto" onClick={() => toast.success("볼륨 목록 CSV 내보내기")}>
             <Download className="size-3.5" /> 내보내기
           </Button>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-3.5" /> 볼륨 생성
-          </Button>
+          {isAdmin && (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-3.5" /> 볼륨 생성 (관리자)
+            </Button>
+          )}
         </div>
         <div className="mt-3 rounded-md border border-brand-mint-200 bg-brand-mint-50/50 p-2.5 text-[11px] text-brand-mint-900">
-          <strong>생성 주체 정책:</strong> 사용자는 자신의 프로젝트 쿼터 범위 안에서 볼륨을 <strong>직접 생성·확장·스냅샷·삭제</strong> 가능하다.
-          자원 신청 위저드에서도 <strong>기존 볼륨을 VM에 연결</strong>할 수 있다. 관리자 승인 없음.
+          <strong>생성 주체:</strong> 사용자가 자원 신청에서 <strong>Flavor를 선택하면 볼륨은 자동 생성</strong>된다. 사용자는 별도로 볼륨을 만들지 않고 목록·상태·스냅샷을 확인한다.
+          기존 스토리지 재사용(다른 VM에 연결)은 고도화 항목으로 <strong>최종 형상</strong>에만 둔다.
+          {!reuseVisible && <span className="ml-1 text-muted-foreground">현재 형상에서는 &lsquo;{FEATURE_MAP["iaas.volumes.reuse"].label}&rsquo; 액션을 숨긴다.</span>}
         </div>
       </Card>
+</ChangeMark>
 
       <Card>
         <Table>
@@ -168,21 +178,29 @@ export default function VolumesPage() {
                         <Camera className="size-3.5" /> 스냅샷 생성
                       </DropdownMenuItem>
                       {v.attachedVmId ? (
-                        <DropdownMenuItem onClick={() => toast.success(`${v.name} ↛ ${v.attachedVmId} 분리됨`)}>
-                          <Link2Off className="size-3.5" /> VM 분리
-                        </DropdownMenuItem>
+                        isAdmin && (
+                          <DropdownMenuItem onClick={() => toast.success(`${v.name} ↛ ${v.attachedVmId} 분리됨`)}>
+                            <Link2Off className="size-3.5" /> VM 분리
+                          </DropdownMenuItem>
+                        )
                       ) : (
-                        <DropdownMenuItem onClick={() => toast.success(`${v.name} VM 연결 다이얼로그`)}>
-                          <Link2 className="size-3.5" /> VM 연결
-                        </DropdownMenuItem>
+                        reuseVisible && (
+                          <DropdownMenuItem onClick={() => toast.success(`${v.name} VM 연결 다이얼로그 (기존 볼륨 재사용 · 최종 형상)`)}>
+                            <Link2 className="size-3.5" /> VM 연결 (재사용)
+                          </DropdownMenuItem>
+                        )
                       )}
                       <DropdownMenuItem onClick={() => toast.success(`${v.name} 크기 확장`)}>
                         <Edit className="size-3.5" /> 크기 확장
                       </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem className="text-rose-600" onClick={() => toast.error(`${v.name} 삭제 요청`)}>
-                        <Trash2 className="size-3.5" /> 삭제
-                      </DropdownMenuItem>
+                      {isAdmin && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem className="text-rose-600" onClick={() => toast.error(`${v.name} 삭제 요청`)}>
+                            <Trash2 className="size-3.5" /> 삭제
+                          </DropdownMenuItem>
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>

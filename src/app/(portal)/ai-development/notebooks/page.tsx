@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import * as React from "react";
 import Link from "next/link";
 import {
@@ -197,7 +198,7 @@ export default function NotebooksPage() {
                         </Button>
                       </>
                     ) : nb.status === "Stopped" ? (
-                      <Button size="sm" variant="outline">
+                      <Button size="sm" variant="outline" onClick={() => toast.success("노트북 서버 시작을 요청했다")}>
                         <Play className="size-3" /> 시작
                       </Button>
                     ) : (
@@ -250,7 +251,7 @@ export default function NotebooksPage() {
                   "group flex items-start gap-3 rounded-xl border border-border bg-card p-4 text-left transition-colors",
                   "hover:border-primary/40 hover:bg-secondary/30",
                 )}
-              >
+               onClick={() => toast.success("템플릿 선택 — 새 노트북 서버 생성 시 적용된다")}>
                 <div
                   className={cn(
                     "flex size-10 shrink-0 items-center justify-center rounded-lg",

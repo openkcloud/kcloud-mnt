@@ -4,6 +4,8 @@ import { useRouter, usePathname } from "next/navigation";
 import { useAuth, canAccess } from "@/lib/auth";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AppHeader } from "@/components/app-header";
+import { ChangePanel } from "@/components/change-panel";
+import { ChangeDetailSheet } from "@/components/change-mark";
 
 export default function PortalLayout({
   children,
@@ -43,6 +45,8 @@ export default function PortalLayout({
           </div>
         </main>
       </div>
+      <ChangePanel />
+      <ChangeDetailSheet />
     </div>
   );
 }

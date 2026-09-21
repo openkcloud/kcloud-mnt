@@ -1,0 +1,4 @@
+:HL["/versions/v1.0/_next/static/media/bb3ef058b751a6ad-s.p.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/versions/v1.0/_next/static/media/ff840cfebfb63b0c-s.p.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/versions/v1.0/_next/static/css/d4f25388e1f3bdb0.css","style"]
+0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"(portal)","param":null,"prefetchHints":0,"slots":{"children":{"name":"ai-accelerators","param":null,"prefetchHints":0,"slots":{"children":{"name":"devices","param":null,"prefetchHints":0,"slots":{"children":{"name":"id","param":{"type":"d","key":"acc-rbln-1-6","siblings":null},"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}}}}}}}},"staleTime":300,"buildId":"M5PJk7zNW4kKvcDDbNcUp"}

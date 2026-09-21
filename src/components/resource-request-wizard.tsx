@@ -1,4 +1,5 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   FolderKanban,
@@ -25,21 +26,23 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useFeatureVisible } from "@/lib/scope";
 
+// 260702 회의록 2.5 자원 신청 흐름: CPU·메모리·가속기 쿼터로 프로젝트 생성 → 네트워크망 선택(관리자 생성 네트워크) → Flavor(볼륨 자동 생성) → 가속기 → 신청
 const STEPS = [
-  { key: "project", title: "프로젝트", icon: FolderKanban, desc: "OpenStack 프로젝트 선택" },
-  { key: "network", title: "네트워크", icon: Network, desc: "VLAN·IP 대역" },
-  { key: "spec", title: "스펙", icon: Server, desc: "Flavor (vCPU·RAM·Disk)" },
+  { key: "project", title: "프로젝트", icon: FolderKanban, desc: "쿼터(CPU·메모리·가속기)" },
+  { key: "network", title: "네트워크", icon: Network, desc: "관리자 네트워크 선택" },
+  { key: "spec", title: "Flavor", icon: Server, desc: "vCPU·RAM · 볼륨 자동" },
   { key: "gpu", title: "가속기", icon: Cpu, desc: "GPU/NPU 패스스루" },
-  { key: "review", title: "확인", icon: CheckCircle2, desc: "요청 검토 및 제출" },
+  { key: "review", title: "확인", icon: CheckCircle2, desc: "신청 검토 및 제출" },
 ] as const;
 
 type StepKey = typeof STEPS[number]["key"];
 
 const PROJECTS = [
-  { id: "proj-ai-research", name: "ai-research", quota: "vCPU 256 · RAM 1024GB · 가속기 8" },
-  { id: "proj-llm-serving", name: "llm-serving", quota: "vCPU 192 · RAM 768GB · 가속기 6" },
-  { id: "proj-edge-inference", name: "edge-inference", quota: "vCPU 96 · RAM 384GB · 가속기 4" },
+  { id: "proj-ai-research", name: "ai-research", quota: "vCPU 256 · RAM 1024GB · 가속기 8", used: "vCPU 118 · RAM 412GB · 가속기 5" },
+  { id: "proj-llm-serving", name: "llm-serving", quota: "vCPU 192 · RAM 768GB · 가속기 6", used: "vCPU 96 · RAM 384GB · 가속기 4" },
+  { id: "proj-edge-inference", name: "edge-inference", quota: "vCPU 96 · RAM 384GB · 가속기 4", used: "vCPU 24 · RAM 96GB · 가속기 1" },
 ];
 
 const NETWORKS = [
@@ -76,6 +79,8 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
   const [network, setNetwork] = React.useState<string>("");
   const [flavor, setFlavor] = React.useState<string>("");
   const [gpu, setGpu] = React.useState<string>("");
+  const [reuseVolume, setReuseVolume] = React.useState<string>("");
+  const reuseVisible = useFeatureVisible("iaas.volumes.reuse");
 
   const stepIdx = STEPS.findIndex((s) => s.key === step);
 
@@ -120,11 +125,12 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
         <DialogHeader>
           <DialogTitle>자원 신청 (Resource Request)</DialogTitle>
           <DialogDescription>
-            NIRS RES-09 워크플로우 — 5단계로 가상서버 신청
+            프로젝트(쿼터) → 네트워크 선택 → Flavor → 가속기 → 신청. 볼륨은 Flavor에 따라 자동 생성된다.
           </DialogDescription>
         </DialogHeader>
 
         {/* Stepper */}
+        <ChangeMark ids={["CR-IAAS-01", "CR-IAAS-03"]}>
         <div className="flex items-center justify-between border-y border-border py-3">
           {STEPS.map((s, i) => {
             const Icon = s.icon;
@@ -158,13 +164,17 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
             );
           })}
         </div>
+        </ChangeMark>
 
         {/* Step content */}
         <div className="min-h-[280px] space-y-3 py-2">
           {step === "project" && (
             <>
               <div className="text-sm font-semibold">프로젝트 선택</div>
-              <p className="text-xs text-muted-foreground">자원이 생성될 OpenStack 프로젝트(=과금 단위)를 선택하세요.</p>
+              <p className="text-xs text-muted-foreground">
+                자원이 생성될 OpenStack 프로젝트(과금 단위)를 선택한다. 프로젝트는 CPU·메모리·가속기 개수를 정해 먼저 생성하고, 신청 자원은 그 쿼터 안에서 배정된다.
+                프로젝트가 없으면 <span className="font-medium text-foreground">클라우드 자원 › 프로젝트</span>에서 먼저 생성한다.
+              </p>
               <div className="grid gap-2">
                 {PROJECTS.map((p) => (
                   <button
@@ -178,7 +188,8 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
                     <FolderKanban className="size-5 text-brand-indigo-600" />
                     <div className="flex-1">
                       <div className="font-mono font-semibold">{p.name}</div>
-                      <div className="text-xs text-muted-foreground">쿼터: {p.quota}</div>
+                      <div className="text-xs text-muted-foreground">쿼터 {p.quota}</div>
+                      <div className="text-[11px] text-muted-foreground">사용 중 {p.used}</div>
                     </div>
                     {project === p.id && <CheckCircle2 className="size-4 text-brand-mint-600" />}
                   </button>
@@ -190,7 +201,9 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
           {step === "network" && (
             <>
               <div className="text-sm font-semibold">네트워크 선택</div>
-              <p className="text-xs text-muted-foreground">VM이 연결될 네트워크(VLAN)를 선택하세요. IP는 자동 할당됩니다.</p>
+              <p className="text-xs text-muted-foreground">
+                관리자가 생성한 네트워크 중에서 VM이 연결될 망을 선택한다. 사용자는 네트워크를 직접 만들지 않는다. IP는 자동 할당된다.
+              </p>
               <div className="grid gap-2">
                 {NETWORKS.map((n) => (
                   <button
@@ -218,6 +231,9 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
           {step === "spec" && (
             <>
               <div className="text-sm font-semibold">VM 이름 및 Flavor 선택</div>
+              <p className="text-xs text-muted-foreground">
+                Flavor를 선택하면 루트 볼륨이 Flavor의 디스크 크기로 <span className="font-medium text-foreground">자동 생성</span>된다. 볼륨을 따로 만들거나 고르지 않는다.
+              </p>
               <div className="grid gap-2">
                 <Label htmlFor="vmname">VM 이름</Label>
                 <Input
@@ -249,6 +265,30 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
                   </button>
                 ))}
               </div>
+              {reuseVisible && (
+                <div className="space-y-1.5 rounded-lg border border-dashed border-violet-200 bg-violet-50/40 p-3">
+                  <div className="flex items-center gap-2 text-xs font-medium">
+                    <HardDrive className="size-3.5 text-violet-600" /> 기존 볼륨 재사용 (선택)
+                    <Badge variant="outline" className="border-violet-200 bg-violet-50 text-[10px] text-violet-700">최종 형상</Badge>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">이미 있는 데이터 볼륨을 새 VM에 연결한다. 2차년도 시범서비스에서는 제공하지 않는 고도화 항목이다.</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {["(연결 안 함)", "vol-dataset-imagenet", "vol-ckpt-llama3"].map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setReuseVolume(v === "(연결 안 함)" ? "" : v)}
+                        className={cn(
+                          "rounded-md border px-2 py-1 font-mono text-[11px]",
+                          (reuseVolume === v || (!reuseVolume && v === "(연결 안 함)")) ? "border-violet-500 bg-violet-100/60" : "border-border hover:bg-secondary/40",
+                        )}
+                      >
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           )}
 
@@ -287,8 +327,9 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
                 <Row label="프로젝트" value={selectedProject?.name} />
                 <Row label="네트워크" value={`${selectedNetwork?.name} (${selectedNetwork?.cidr})`} />
                 <Row label="Flavor" value={`${selectedFlavor?.name} — ${selectedFlavor?.vcpu}vCPU / ${selectedFlavor?.ramGb}GB / ${selectedFlavor?.diskGb}GB`} />
+                <Row label="볼륨" value={`루트 ${selectedFlavor?.diskGb}GB 자동 생성${reuseVolume ? ` + ${reuseVolume} 연결` : ""}`} />
                 <Row label="가속기" value={selectedGpu?.name} />
-                <Row label="처리 흐름" value="nTops 시스템 → 승인 → Nova create-server → 부팅 → 사용 가능" />
+                <Row label="처리 흐름" value="신청 → 쿼터 확인 → 승인 → Nova create-server(볼륨 자동) → 부팅 → 사용 가능" />
               </div>
             </>
           )}

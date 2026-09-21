@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import * as React from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -89,10 +90,10 @@ export default function NotebookDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("재시작 요청을 보냈다")}>
             <RefreshCw className="size-3.5" /> 재시작
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("정지 요청을 보냈다")}>
             <Square className="size-3.5" /> 정지
           </Button>
           <Button size="sm" asChild>

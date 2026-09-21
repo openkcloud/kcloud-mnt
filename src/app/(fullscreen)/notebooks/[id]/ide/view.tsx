@@ -70,8 +70,8 @@ export default function NotebookIdePage() {
           </Link>
           <div className="h-4 w-px bg-slate-700" />
           <div className="flex items-center gap-2">
-            <div className="flex size-5 items-center justify-center rounded bg-gradient-to-br from-brand-mint-400 to-brand-indigo-400">
-              <TerminalSquare className="size-3 text-white" />
+            <div className="flex size-5 items-center justify-center rounded bg-white/95 p-0.5">
+              <img src="/logo/openkcloud-mark.png" alt="openKcloud" className="size-full object-contain" />
             </div>
             <span className="text-sm font-semibold">openKcloud Code Server</span>
             <span className="text-xs text-slate-400">·</span>

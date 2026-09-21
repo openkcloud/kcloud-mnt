@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import * as React from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -91,13 +92,13 @@ export default function VMDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("라이브 마이그레이션 대상 호스트 선택")}>
             <Move className="size-3.5" /> 마이그레이션
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("설정 편집 다이얼로그")}>
             <Settings className="size-3.5" /> 설정
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("재시작 요청을 보냈다")}>
             <RefreshCw className="size-3.5" /> 재시작
           </Button>
         </div>
@@ -317,16 +318,16 @@ export default function VMDetailPage() {
                 <CardTitle className="text-base">전원 관리</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                <Button variant="outline" className="w-full justify-start">
+                <Button variant="outline" className="w-full justify-start" onClick={() => toast.success("노트북 서버 시작을 요청했다")}>
                   <Play className="size-3.5" /> 시작
                 </Button>
-                <Button variant="outline" className="w-full justify-start">
+                <Button variant="outline" className="w-full justify-start" onClick={() => toast.success("ACPI 정지 요청을 보냈다")}>
                   <Square className="size-3.5" /> 정지 (soft)
                 </Button>
-                <Button variant="outline" className="w-full justify-start">
+                <Button variant="outline" className="w-full justify-start" onClick={() => toast.success("강제 종료(hard stop) 요청을 보냈다")}>
                   <Square className="size-3.5" /> 강제 종료
                 </Button>
-                <Button variant="outline" className="w-full justify-start">
+                <Button variant="outline" className="w-full justify-start" onClick={() => toast.success("재시작 요청을 보냈다")}>
                   <RefreshCw className="size-3.5" /> 재시작
                 </Button>
               </CardContent>
@@ -336,10 +337,10 @@ export default function VMDetailPage() {
                 <CardTitle className="text-base">리소스 조정</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                <Button variant="outline" className="w-full justify-start">vCPU 변경</Button>
-                <Button variant="outline" className="w-full justify-start">메모리 변경</Button>
-                <Button variant="outline" className="w-full justify-start">디스크 추가</Button>
-                <Button variant="outline" className="w-full justify-start">GPU 패스스루 추가</Button>
+                <Button variant="outline" className="w-full justify-start" onClick={() => toast.success("vCPU 변경 — resize 후 재시작 필요")}>vCPU 변경</Button>
+                <Button variant="outline" className="w-full justify-start" onClick={() => toast.success("메모리 변경 — resize 후 재시작 필요")}>메모리 변경</Button>
+                <Button variant="outline" className="w-full justify-start" onClick={() => toast.success("볼륨 추가 다이얼로그")}>디스크 추가</Button>
+                <Button variant="outline" className="w-full justify-start" onClick={() => toast.success("가속기 패스스루 추가 — 관리자 승인 후 적용")}>GPU 패스스루 추가</Button>
               </CardContent>
             </Card>
           </div>

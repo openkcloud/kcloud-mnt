@@ -1,4 +1,6 @@
 "use client";
+import { toast } from "sonner";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   Activity,
@@ -101,7 +103,7 @@ export default function DashboardPage() {
               <span className="size-1.5 rounded-full bg-brand-mint-500" />
               플랫폼 정상
             </Badge>
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" onClick={() => toast.success("운영 리포트(PDF) 생성 — 완료되면 알림")}>
               운영 리포트 내보내기
             </Button>
           </div>
@@ -234,7 +236,7 @@ export default function DashboardPage() {
               </CardDescription>
             </div>
             <Link href="/monitoring/alerts">
-              <Button variant="ghost" size="sm">
+              <Button variant="ghost" size="sm" onClick={() => toast.success("전체 보기 — 목업 응답")}>
                 전체 보기 <ArrowRight className="size-3" />
               </Button>
             </Link>
@@ -335,10 +337,11 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Resource utilization summary */}
-        <Card className="lg:col-span-1">
+        <ChangeMark ids={["CR-OVW-03"]}>
+<Card className="lg:col-span-1">
           <CardHeader>
             <CardTitle>플랫폼 자원 종합</CardTitle>
-            <CardDescription>전체 풀(센터·존·자원풀) 기준</CardDescription>
+            <CardDescription>단일 클러스터 전체 기준</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
             <ResourceRow label="vCPU" pct={k.cpuPct} accent="indigo" />
@@ -347,6 +350,7 @@ export default function DashboardPage() {
             <ResourceRow label="AI반도체" pct={k.avgAccUtil} accent="violet" />
           </CardContent>
         </Card>
+</ChangeMark>
 
         {/* Activity feed */}
         <Card className="lg:col-span-2">
@@ -355,11 +359,11 @@ export default function DashboardPage() {
               <CardTitle>최근 활동</CardTitle>
               <CardDescription>플랫폼 전역 운영 이벤트 (감사 로그)</CardDescription>
             </div>
-            <Link href="/iam/audit">
-              <Button variant="ghost" size="sm">
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/iam/audit">
                 감사 로그 전체 <ArrowRight className="size-3" />
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
@@ -392,14 +396,15 @@ export default function DashboardPage() {
       </div>
 
       {/* Observability quick links — ETRI 260615 §3.i.1 (개요 → 옵저버빌리티 연계) */}
-      <Card>
+      <ChangeMark ids={["CR-OVW-01", "CR-OVW-02"]}>
+<Card>
         <CardHeader className="flex-row items-center justify-between">
           <div>
             <CardTitle>옵저버빌리티 바로가기</CardTitle>
             <CardDescription>모니터링·트레이스·로그·알람으로 즉시 이동</CardDescription>
           </div>
           <Link href="/monitoring">
-            <Button variant="ghost" size="sm">
+            <Button variant="ghost" size="sm" onClick={() => toast.success("전체 옵저버빌리티 — 목업 응답")}>
               전체 옵저버빌리티 <ArrowRight className="size-3" />
             </Button>
           </Link>
@@ -414,6 +419,7 @@ export default function DashboardPage() {
           </div>
         </CardContent>
       </Card>
+</ChangeMark>
 
       {/* Quick links — 주요 자원 */}
       <Card>

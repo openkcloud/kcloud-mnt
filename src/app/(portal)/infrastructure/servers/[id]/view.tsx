@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import * as React from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -93,13 +94,13 @@ export default function ServerDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("설정 편집 다이얼로그")}>
             <Settings className="size-3.5" /> 설정
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("재시작 요청을 보냈다")}>
             <RefreshCw className="size-3.5" /> 재시작
           </Button>
-          <Button variant="destructive" size="sm">
+          <Button variant="destructive" size="sm" onClick={() => toast.success("종료 요청을 보냈다")}>
             <Power className="size-3.5" /> 종료
           </Button>
         </div>

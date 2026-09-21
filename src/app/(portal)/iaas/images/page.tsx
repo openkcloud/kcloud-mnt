@@ -1,4 +1,5 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   Disc,
@@ -50,6 +51,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { FeatureGate } from "@/components/feature-gate";
+import { useFeatureVisible } from "@/lib/scope";
 import { toast } from "sonner";
 import type { Image } from "@/lib/types";
 
@@ -74,6 +77,7 @@ export default function ImagesPage() {
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const [createFlavorOpen, setCreateFlavorOpen] = React.useState(false);
   const [q, setQ] = React.useState("");
+  const packagingVisible = useFeatureVisible("iaas.images.packaging");
   if (isLoading || !data) return <Skeleton className="h-96" />;
 
   const filteredImages = data.items.filter((i) => !q || i.name.toLowerCase().includes(q.toLowerCase()));
@@ -84,7 +88,32 @@ export default function ImagesPage() {
         <TabsList>
           <TabsTrigger value="images">이미지 ({data.items.length})</TabsTrigger>
           <TabsTrigger value="flavors">Flavor ({FLAVORS.length})</TabsTrigger>
+          {packagingVisible && <TabsTrigger value="packaging">패키징</TabsTrigger>}
         </TabsList>
+
+        <TabsContent value="packaging">
+          <ChangeMark ids={["CR-IAAS-09"]}>
+          <FeatureGate id="iaas.images.packaging">
+            <Card className="p-6">
+              <div className="space-y-2 text-sm">
+                <div className="font-semibold">이미지 패키징 — 멀티레벨 이미지 빌더 연동 자리</div>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  외부 멀티레벨 이미지 빌더가 준비되면 이 메뉴에 연동한다.
+                  현재 포털은 Glance 업로드·동기화까지 제공한다. 연동 시 소스(Dockerfile·모델 아티팩트) 선택 → 베이스 이미지(AI반도체 런타임) 선택 → 빌드 → Glance/Harbor 등록 흐름을 이 탭에 배치한다.
+                </p>
+                <div className="mt-2 grid gap-2 text-xs md:grid-cols-4">
+                  {["소스 선택", "베이스 이미지(런타임)", "빌드 · 검증", "Glance/Harbor 등록"].map((t, i) => (
+                    <div key={t} className="rounded-md border border-dashed border-border p-3 text-center text-muted-foreground">
+                      <div className="font-mono text-[10px]">STEP {i + 1}</div>
+                      <div className="mt-1 text-foreground">{t}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Card>
+          </FeatureGate>
+          </ChangeMark>
+        </TabsContent>
 
         <TabsContent value="images">
           <Card className="mb-4 p-4">

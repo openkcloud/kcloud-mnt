@@ -1,4 +1,5 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import Link from "next/link";
 import {
@@ -12,6 +13,7 @@ import {
   Activity,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 
 const MENUS = [
   {
@@ -90,7 +92,12 @@ export default function AIDevHomePage() {
       </Card>
 
       {/* 전체 흐름 가이드 — ETRI 260615 §6.A 반영 */}
-      <WorkflowGuide />
+      <ChangeMark ids={["CR-AID-09"]}>
+        <ScopeNote />
+      </ChangeMark>
+      <ChangeMark ids={["CR-AID-01"]}>
+        <WorkflowGuide />
+      </ChangeMark>
 
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -139,6 +146,16 @@ const WORKFLOW_STEPS = [
   { n: 7, label: "Serving", desc: "KServe · 모델 배포 · Auto-scale 0→N", href: "/ai-development/serving", color: "bg-brand-indigo-100 text-brand-indigo-700" },
   { n: 8, label: "API 호출", desc: "endpoint URL로 서비스 운영 확인", href: "/ai-development/serving", color: "bg-brand-mint-100 text-brand-mint-700" },
 ];
+
+// 260702 회의록 2.4: 전체 지원 기능과 2차년도 개발 기능을 구분해 포털에 반영한다
+function ScopeNote() {
+  return (
+    <div className="rounded-md border border-violet-200 bg-violet-50/60 px-3 py-2 text-[11px] text-violet-900">
+      <strong>형상</strong> — 2차년도 개발 기능(Profiles·Notebooks(code-server)·Pipelines·Serving·모델 구조 시각화)은 시범서비스 형상에 두고,
+      Experiments(HPO)·MLPerf 벤치마크·KV Cache 미스율 같은 과업 외 항목은 최종 형상 설계안에만 둔다. 환경설정 › 포털 형상에서 전환한다.
+    </div>
+  );
+}
 
 function WorkflowGuide() {
   const [open, setOpen] = React.useState(true);

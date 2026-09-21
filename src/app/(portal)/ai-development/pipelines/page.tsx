@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { ChangeMark } from "@/components/change-mark";
 import {
   GitBranch,
   Play,
@@ -75,9 +76,9 @@ export default function PipelinesPage() {
             <span>파이프라인</span>
             <div className="flex items-center gap-2">
               <Badge variant="ghost">{data.items.length}</Badge>
-              <Button size="sm" onClick={() => setUploadOpen(true)}>
+              <ChangeMark ids={["CR-AID-02"]} inline><Button size="sm" onClick={() => setUploadOpen(true)}>
                 <Upload className="size-3.5" /> YAML 업로드
-              </Button>
+              </Button></ChangeMark>
             </div>
           </CardTitle>
           <CardDescription className="text-[11px]">
@@ -130,8 +131,8 @@ export default function PipelinesPage() {
                 <CardDescription>{active.description}</CardDescription>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm">YAML 다운로드</Button>
-                <Button size="sm">
+                <Button variant="outline" size="sm" onClick={() => toast.success("pipeline.yaml 다운로드")}>YAML 다운로드</Button>
+                <Button size="sm" onClick={() => toast.success("파이프라인 실행 run-015 생성")}>
                   <Play className="size-3.5" /> 새 실행
                 </Button>
               </div>
@@ -222,7 +223,7 @@ export default function PipelinesPage() {
                         <Database className="size-4 text-brand-indigo-600" />
                         <span className="flex-1 font-mono text-sm">{a.name}</span>
                         <span className="font-mono text-xs text-muted-foreground tabular-nums">{a.size}</span>
-                        <Button variant="ghost" size="sm">다운로드</Button>
+                        <Button variant="ghost" size="sm" onClick={() => toast.success("아티팩트 다운로드")}>다운로드</Button>
                       </div>
                     ))}
                   </div>

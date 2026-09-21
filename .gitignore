@@ -56,3 +56,9 @@ Thumbs.db
 /out/
 *.zip
 
+
+# version snapshot worktrees (scripts/build-version-snapshot.sh)
+/.snapshots/
+
+# Local Netlify folder
+.netlify

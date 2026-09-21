@@ -1,21 +1,25 @@
 "use client";
 import * as React from "react";
+import { ChangeMark } from "@/components/change-mark";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { getNavByRole, type NavItem } from "@/lib/nav";
+import { useScope, hiddenFeatures } from "@/lib/scope";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 
 export function AppSidebar() {
   const user = useAuth((s) => s.user);
+  const visible = useScope((s) => s.visible);
   const pathname = usePathname();
 
+  // 포털 형상에서 숨긴 기능(메뉴 단위)은 사이드바에서도 제외한다
   const sections = React.useMemo(
-    () => (user ? getNavByRole(user.role) : []),
-    [user],
+    () => (user ? getNavByRole(user.role, hiddenFeatures(visible)) : []),
+    [user, visible],
   );
 
   return (
@@ -25,8 +29,13 @@ export function AppSidebar() {
         className="flex h-16 items-center gap-3 border-b border-sidebar-border px-5 transition-colors hover:bg-sidebar-accent/30"
         title="홈으로"
       >
-        <div className="flex size-9 items-center justify-center rounded-lg bg-gradient-to-br from-brand-mint-400 to-brand-indigo-400 font-bold text-sidebar-primary-foreground shadow-md">
-          K
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-white/95 p-1 shadow-md">
+          {/* openKcloud 공식 로고 — github.com/openkcloud 조직 아바타 */}
+          <img
+            src="/logo/openkcloud-mark.png"
+            alt="openKcloud"
+            className="size-full object-contain"
+          />
         </div>
         <div className="flex flex-col leading-tight">
           <span className="text-sm font-semibold text-white">openKcloud</span>
@@ -36,20 +45,35 @@ export function AppSidebar() {
         </div>
       </Link>
       <ScrollArea className="flex-1">
-        <nav className="flex flex-col gap-1 p-3">
-          {sections.map((section) => (
-            <div key={section.label} className="mb-3">
-              <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
-                {section.label}
-              </div>
-              <div className="flex flex-col gap-0.5">
-                {section.items.map((item) => (
-                  <SidebarItem key={item.href} item={item} pathname={pathname} />
-                ))}
-              </div>
-            </div>
-          ))}
-        </nav>
+        <ChangeMark ids={["CR-NAV-01", "CR-NAV-02"]} className="mx-1">
+          <nav className="flex flex-col gap-1 p-3">
+            {sections.map((section) => (
+              <ChangeMark
+                key={section.label}
+                ids={
+                  section.label === "네트워크·볼륨·서비스 구성"
+                    ? ["CR-NAV-03"]
+                    : []
+                }
+              >
+                <div className="mb-3">
+                  <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
+                    {section.label}
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    {section.items.map((item) => (
+                      <SidebarItem
+                        key={item.href}
+                        item={item}
+                        pathname={pathname}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </ChangeMark>
+            ))}
+          </nav>
+        </ChangeMark>
       </ScrollArea>
     </aside>
   );
@@ -65,7 +89,8 @@ function SidebarItem({
   depth?: number;
 }) {
   const isActive =
-    pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+    pathname === item.href ||
+    (item.href !== "/" && pathname.startsWith(item.href));
   const hasChildren = !!item.children?.length;
   const [open, setOpen] = React.useState(isActive);
   React.useEffect(() => {

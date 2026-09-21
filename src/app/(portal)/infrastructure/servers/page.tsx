@@ -1,9 +1,18 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Server, Cpu, Zap, Activity, Search, Layers } from "lucide-react";
+import { Server, Cpu, Zap, Activity, Search, Layers, HeartPulse, CheckCircle2, AlertCircle, Plus } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { useFeatureVisible } from "@/lib/scope";
+import { FeatureGate } from "@/components/feature-gate";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Progress } from "@/components/ui/progress";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import type { Pool } from "@/lib/types";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +52,10 @@ export default function ServersPage() {
     isLoading: boolean;
   };
   const [q, setQ] = React.useState("");
+  const [tab, setTab] = React.useState("servers");
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
+  const healthVisible = useFeatureVisible("infra.health-check");
+  const storageVisible = useFeatureVisible("infra.storage-pools");
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const items = data.items.filter((s) => !q || s.hostname.toLowerCase().includes(q.toLowerCase()));
@@ -58,38 +71,214 @@ export default function ServersPage() {
     <div className="space-y-6">
       <PageHeader
         title="인프라 관리"
-        description={`Layer 0/L1 물리 인프라 · ${totals.servers}대 · ${totals.accelerators}장 가속기 · ${totals.vms} VM · ${totals.powerKw}kW`}
+        description={`Layer 0/L1 물리 인프라 · ${totals.servers}대 · ${totals.accelerators}장 가속기 · ${totals.vms} VM · ${totals.powerKw}kW · 단일 클러스터`}
         actions={
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("Discovery 실행 — 물리 서버·가속기 재탐색")}>
             <Activity className="size-3.5" /> Discovery 트리거
           </Button>
         }
       />
 
-      {/* Filter band */}
-      <Card className="p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input
-              placeholder="호스트명 검색…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              className="w-56 pl-9"
-            />
-          </div>
-          <span className="ml-auto text-xs text-muted-foreground">
-            {items.length}/{data.items.length}대 · observed_at <span className="font-mono">{data.observed_at}</span>
-          </span>
-        </div>
-      </Card>
+      <Tabs value={tab} onValueChange={setTab}>
+        <ChangeMark ids={["CR-INF-03", "CR-IAAS-08"]} inline>
+        <TabsList>
+          <TabsTrigger value="servers">물리 서버 ({data.items.length})</TabsTrigger>
+          {healthVisible && <TabsTrigger value="health">자원풀 헬스체크</TabsTrigger>}
+          {storageVisible && <TabsTrigger value="storage">외부 블록스토리지 자원풀</TabsTrigger>}
+        </TabsList>
+        </ChangeMark>
 
-      {/* Server cards grid — Datadog Host Map 영감 */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {items.map((s) => (
-          <ServerCard key={s.id} server={s} onClick={() => router.push(`/infrastructure/servers/${s.id}`)} />
-        ))}
+        <TabsContent value="servers" className="mt-4 space-y-4">
+          {/* Filter band */}
+          <Card className="p-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+                <Input
+                  placeholder="호스트명 검색…"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  className="w-56 pl-9"
+                />
+              </div>
+              <span className="ml-auto text-xs text-muted-foreground">
+                {items.length}/{data.items.length}대 · observed_at <span className="font-mono">{data.observed_at}</span>
+              </span>
+            </div>
+          </Card>
+
+          {/* Server cards grid — Datadog Host Map 영감 */}
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {items.map((s) => (
+              <ServerCard key={s.id} server={s} onClick={() => router.push(`/infrastructure/servers/${s.id}`)} />
+            ))}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="health" className="mt-4">
+          <FeatureGate id="infra.health-check">
+            <PoolHealthPanel isAdmin={isAdmin} />
+          </FeatureGate>
+        </TabsContent>
+
+        <TabsContent value="storage" className="mt-4">
+          <FeatureGate id="infra.storage-pools">
+            <StoragePoolPanel isAdmin={isAdmin} />
+          </FeatureGate>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// 자원풀 헬스체크 — SFR.MNT.052 Provider Health Check ('26 신규)
+// 공급자 관리 메뉴가 삭제(260702 회의록 2.5, 단일 클러스터)되어 이 탭으로 이동
+// ─────────────────────────────────────────────────────────────
+
+const OS_SERVICES = ["Nova (compute)", "Neutron (networking)", "Cinder (block)", "Glance (image)", "Keystone (identity)", "Magnum (k8s)"];
+
+function PoolHealthPanel({ isAdmin }: { isAdmin: boolean }) {
+  const pools = api.iaas.pools() as { data: { items: Pool[] } | undefined; isLoading: boolean };
+  const [lastRun, setLastRun] = React.useState<string | null>(null);
+  if (pools.isLoading || !pools.data) return <Skeleton className="h-64" />;
+  const items = pools.data.items.filter((p) => p.type === "OpenStack");
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-brand-indigo-200 bg-brand-indigo-50/50 px-3 py-2 text-[11px] text-brand-indigo-900">
+        <strong>Provider Health Check (SFR.MNT.052)</strong> — OpenStack 제어면 서비스 API 응답·DB 연결·메시지 큐 상태를 주기 점검한다.
+        단일 클러스터 구성이라 별도 공급자 관리 메뉴 없이 헬스체크를 이 탭에서 제공한다.
       </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {items.map((p) => {
+          const cpuPct = Math.round((p.used.vcpu / p.capacity.vcpu) * 100);
+          const ramPct = Math.round((p.used.ramGb / p.capacity.ramGb) * 100);
+          const warn = p.status !== "정상";
+          return (
+            <Card key={p.id} className="p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <HeartPulse className={cn("size-4", warn ? "text-amber-600" : "text-brand-mint-600")} />
+                    <span className="font-semibold">{p.name}</span>
+                    <Badge variant="outline" className="font-mono text-[10px]">{p.type}</Badge>
+                  </div>
+                  <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{p.endpoint}</div>
+                </div>
+                <Badge variant={warn ? "warning" : "success"}>{p.status}</Badge>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]"><span className="text-muted-foreground">vCPU</span><span className="font-mono tabular-nums">{p.used.vcpu}/{p.capacity.vcpu}</span></div>
+                  <Progress value={cpuPct} indicatorClassName="bg-brand-indigo-500" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]"><span className="text-muted-foreground">RAM (GB)</span><span className="font-mono tabular-nums">{p.used.ramGb}/{p.capacity.ramGb}</span></div>
+                  <Progress value={ramPct} indicatorClassName="bg-brand-mint-500" />
+                </div>
+              </div>
+              <div className="mt-3 grid gap-1 sm:grid-cols-2">
+                {OS_SERVICES.map((svc, i) => {
+                  const slow = warn && svc.startsWith("Neutron");
+                  return (
+                    <div key={svc} className="flex items-center gap-2 rounded border border-border px-2 py-1 text-[11px]">
+                      {slow ? <AlertCircle className="size-3.5 text-amber-600" /> : <CheckCircle2 className="size-3.5 text-brand-mint-600" />}
+                      <span className="font-mono">{svc}</span>
+                      <span className="ml-auto font-mono text-muted-foreground">{slow ? "1.4s" : `${8 + i * 3}ms`}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground">
+                {isAdmin && (
+                  <Button size="sm" variant="outline" onClick={() => { setLastRun(new Date().toLocaleTimeString("ko-KR")); toast.success(`${p.name} 헬스체크 완료 — ${warn ? "Neutron API 지연 감지" : "모든 서비스 정상"}`); }}>
+                    <Activity className="size-3.5" /> 헬스체크 실행
+                  </Button>
+                )}
+                <span className="ml-auto">마지막 점검 {lastRun ?? "5분 전 (주기 5분)"}</span>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// 외부 블록스토리지 자원풀 — SFR.MNT.048 ('26 신규)
+// ─────────────────────────────────────────────────────────────
+
+type StoragePool = {
+  id: string; name: string; backend: string; protocol: string; capacityTb: number; usedTb: number;
+  volumeType: string; status: "정상" | "주의" | "점검"; endpoint: string;
+};
+
+const STORAGE_POOLS: StoragePool[] = [
+  { id: "sp-1", name: "ceph-rbd-ssd", backend: "Ceph RBD", protocol: "RBD", capacityTb: 120, usedTb: 71, volumeType: "ssd", status: "정상", endpoint: "ceph-mon-01:6789" },
+  { id: "sp-2", name: "ceph-rbd-hdd", backend: "Ceph RBD", protocol: "RBD", capacityTb: 400, usedTb: 236, volumeType: "hdd", status: "정상", endpoint: "ceph-mon-01:6789" },
+  { id: "sp-3", name: "san-nvme-01", backend: "외부 SAN (NVMe-oF)", protocol: "NVMe/TCP", capacityTb: 60, usedTb: 12, volumeType: "nvme", status: "주의", endpoint: "10.20.0.50:4420" },
+];
+
+function StoragePoolPanel({ isAdmin }: { isAdmin: boolean }) {
+  const [items, setItems] = React.useState(STORAGE_POOLS);
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="rounded-md border border-brand-indigo-200 bg-brand-indigo-50/50 px-3 py-2 text-[11px] text-brand-indigo-900">
+          <strong>외부 블록스토리지 자원풀 (SFR.MNT.048)</strong> — Cinder 백엔드로 연결된 외부 스토리지 풀을 등록·점검한다. 볼륨 타입(ssd·hdd·nvme)이 Flavor 선택 시 자동 생성되는 볼륨의 백엔드가 된다.
+        </div>
+        {isAdmin && (
+          <Button size="sm" className="ml-auto" onClick={() => { const n = { ...STORAGE_POOLS[0], id: `sp-${Date.now()}`, name: `pool-${items.length + 1}`, usedTb: 0, status: "점검" as const }; setItems((prev) => [...prev, n]); toast.success(`자원풀 ${n.name} 등록 — 연결 테스트 진행`); }}>
+            <Plus className="size-3.5" /> 자원풀 등록
+          </Button>
+        )}
+      </div>
+      <Card>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>자원풀</TableHead>
+              <TableHead>백엔드</TableHead>
+              <TableHead>프로토콜</TableHead>
+              <TableHead>볼륨 타입</TableHead>
+              <TableHead className="w-[220px]">사용량</TableHead>
+              <TableHead>상태</TableHead>
+              {isAdmin && <TableHead className="text-right">작업</TableHead>}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((p) => {
+              const pct = Math.round((p.usedTb / p.capacityTb) * 100);
+              return (
+                <TableRow key={p.id}>
+                  <TableCell>
+                    <div className="font-medium">{p.name}</div>
+                    <div className="font-mono text-[10px] text-muted-foreground">{p.endpoint}</div>
+                  </TableCell>
+                  <TableCell className="text-xs">{p.backend}</TableCell>
+                  <TableCell><Badge variant="ghost" className="font-mono text-[10px]">{p.protocol}</Badge></TableCell>
+                  <TableCell><Badge variant="outline" className="font-mono text-[10px]">{p.volumeType}</Badge></TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <Progress value={pct} className="h-1.5" indicatorClassName={pct > 80 ? "bg-rose-500" : "bg-brand-indigo-500"} />
+                      <span className="w-24 shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{p.usedTb}/{p.capacityTb} TB</span>
+                    </div>
+                  </TableCell>
+                  <TableCell><Badge variant={p.status === "정상" ? "success" : p.status === "주의" ? "warning" : "outline"}>{p.status}</Badge></TableCell>
+                  {isAdmin && (
+                    <TableCell className="text-right">
+                      <Button variant="ghost" size="sm" className="h-7 text-[11px]" onClick={() => toast.success(`${p.name} 연결 테스트 성공`)}>연결 테스트</Button>
+                      <Button variant="ghost" size="sm" className="h-7 text-[11px] text-rose-600" onClick={() => { setItems((prev) => prev.filter((x) => x.id !== p.id)); toast.success(`${p.name} 제거`); }}>제거</Button>
+                    </TableCell>
+                  )}
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </Card>
     </div>
   );
 }
@@ -146,7 +335,7 @@ function ServerCard({ server: s, onClick }: { server: Server; onClick: () => voi
 
           {/* Allocations */}
           <div className="grid grid-cols-2 gap-2 border-t border-border pt-3 text-xs">
-            <div className="flex items-center gap-1.5">
+            <ChangeMark ids={["CR-INF-01"]} inline><div className="flex items-center gap-1.5">
               <Cpu className="size-3.5 text-brand-mint-600" />
               <span>
                 <strong className="font-mono">{s.acceleratorCount}</strong>장 가속기
@@ -154,7 +343,7 @@ function ServerCard({ server: s, onClick }: { server: Server; onClick: () => voi
                   <span className="ml-1 text-muted-foreground">({s.acceleratorKinds.join(", ")})</span>
                 )}
               </span>
-            </div>
+            </div></ChangeMark>
             <div className="flex items-center gap-1.5">
               <Layers className="size-3.5 text-rose-600" />
               <span>

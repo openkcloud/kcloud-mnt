@@ -1,0 +1,1 @@
+self.__SSG_MANIFEST=new Set(["\u002Fai-accelerators\u002Fdevices\u002F[id]","\u002Fai-development\u002Fnotebooks\u002F[id]","\u002Fiaas\u002Finstances\u002F[id]","\u002Finfrastructure\u002Fservers\u002F[id]","\u002Fnotebooks\u002F[id]\u002Fide","\u002Fpaas\u002Fworkloads\u002F[id]"]);self.__SSG_MANIFEST_CB&&self.__SSG_MANIFEST_CB()

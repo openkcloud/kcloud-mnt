@@ -1,6 +1,8 @@
 "use client";
 import * as React from "react";
-import { ShieldCheck, Plus, Trash2, Save, Undo2, Sparkles } from "lucide-react";
+import { ShieldCheck, Plus, Trash2, Save, Undo2, Sparkles, Boxes, Cpu, Clock } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { ChangeMark } from "@/components/change-mark";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +46,28 @@ const ROLES = [
 ];
 
 const CATEGORY_ORDER = ["AI 인프라", "IaaS", "PaaS", "AI 개발환경", "운영"];
+
+// ── Workload 기반 접근제어 정책 (OPA) — 정량지표 접근제어 2종 중 2번째, SFR.MNT.046 (CR-IAM-03) ──
+interface WorkloadPolicy {
+  id: string;
+  name: string;
+  /** 대상 워크로드 선택자 */
+  selector: string;
+  /** 조건 — 가속기 쿼터·시간대·데이터 민감도 등 */
+  condition: string;
+  effect: "allow" | "deny";
+  priority: number;
+  enabled: boolean;
+  basis: string;
+}
+
+const INITIAL_WORKLOAD_POLICIES: WorkloadPolicy[] = [
+  { id: "wp-001", name: "학습 작업은 gpu-profile=mig-preferred 노드에만", selector: "sched.ai/intent=training", condition: "gpu-profile in [mig-preferred, exclusive] AND project.quota.accelerator.remaining >= request", effect: "allow", priority: 10, enabled: true, basis: "스케줄링 힌트 sched.ai/gpu-profile" },
+  { id: "wp-002", name: "민감 데이터 워크로드 재배치 금지", selector: "sched.ai/data-sensitivity=very-high", condition: "rescheduling == forbidden AND storage.class in [local-nvme]", effect: "allow", priority: 20, enabled: true, basis: "스케줄링 힌트 sched.ai/rescheduling" },
+  { id: "wp-003", name: "서빙 SLO 미충족 노드 배치 거부", selector: "sched.ai/intent=serving", condition: "profile.ai/slo-p99-ms < node.p99_estimate_ms", effect: "deny", priority: 30, enabled: true, basis: "profile.ai/slo-p99-ms · 서빙 지표" },
+  { id: "wp-004", name: "야간 배치 작업만 저전력 가속기 허용", selector: "sched.ai/preference=throughput", condition: "time in 22:00-06:00 AND accelerator.kind in [RNGD, ATOM]", effect: "allow", priority: 40, enabled: false, basis: "전력 비용 최적화" },
+  { id: "wp-005", name: "프로젝트 가속기 쿼터 초과 요청 거부", selector: "*", condition: "project.quota.accelerator.used + request > project.quota.accelerator.max", effect: "deny", priority: 1, enabled: true, basis: "SFR.MNT.011 자원 신청 · OPA 2차 인가" },
+];
 
 export default function RolesPage() {
   const [perms, setPerms] = React.useState<Permission[]>(INITIAL_PERMS);
@@ -91,8 +115,87 @@ export default function RolesPage() {
     groupedPerms.push({ category: "커스텀", items: customCategory });
   }
 
+  const [wps, setWps] = React.useState<WorkloadPolicy[]>(INITIAL_WORKLOAD_POLICIES);
+
   return (
     <div className="space-y-4">
+      <ChangeMark ids={["CR-IAM-03"]}>
+      <div className="rounded-md border border-brand-indigo-200 bg-brand-indigo-50/50 px-3 py-2 text-[11px] text-brand-indigo-900">
+        <strong>접근제어 2종 (정량지표 · 공인인증시험 10/15~11/10)</strong> — ① 역할 기반(RBAC): 역할 × 권한 매트릭스. ② Workload 기반: 워크로드 명세(라벨·annotation)와 프로젝트 쿼터·시간대·데이터 민감도 조건을 OPA가 2차 인가한다. API Gateway 1차 인가 → OPA 2차 인가 순.
+      </div>
+      </ChangeMark>
+
+      <Tabs defaultValue="rbac">
+        <TabsList>
+          <TabsTrigger value="rbac">① 역할 권한 매트릭스 (RBAC)</TabsTrigger>
+          <TabsTrigger value="workload">② 워크로드 정책 (OPA) · {wps.length}</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="workload" className="mt-4">
+          <ChangeMark ids={["CR-IAM-03"]}>
+          <Card>
+            <CardHeader className="flex-row items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2"><Boxes className="size-4" /> 워크로드 정책 (OPA Rego)</CardTitle>
+                <CardDescription>
+                  우선순위가 낮은 숫자부터 평가한다. 거부(deny)가 먼저 걸리면 이후 정책은 보지 않는다. 판정 결과는 감사 로그에 남는다. — SFR.MNT.016 OPA · 046 Workload 기반 인증
+                </CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => { const n: WorkloadPolicy = { id: `wp-${String(wps.length + 1).padStart(3, "0")}`, name: "새 정책", selector: "sched.ai/intent=training", condition: "request.accelerator.count <= 2", effect: "allow", priority: 50, enabled: false, basis: "사용자 정의" }; setWps((prev) => [...prev, n]); toast.success(`정책 ${n.id} 추가 — 조건을 편집한다`); }}>
+                <Plus className="size-3.5" /> 정책 추가
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-border bg-secondary/30 text-xs text-muted-foreground">
+                    <tr>
+                      <th className="w-16 px-4 py-3 text-left font-medium">순위</th>
+                      <th className="px-4 py-3 text-left font-medium">정책</th>
+                      <th className="px-4 py-3 text-left font-medium">대상 워크로드</th>
+                      <th className="px-4 py-3 text-left font-medium">조건</th>
+                      <th className="w-20 px-4 py-3 text-center font-medium">효과</th>
+                      <th className="w-20 px-4 py-3 text-center font-medium">활성</th>
+                      <th className="w-12 px-3 py-3" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...wps].sort((a, b) => a.priority - b.priority).map((p) => (
+                      <tr key={p.id} className="border-t border-border align-top">
+                        <td className="px-4 py-2.5 font-mono text-xs tabular-nums">{p.priority}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="font-medium">{p.name}</div>
+                          <div className="font-mono text-[10px] text-muted-foreground">{p.id} · {p.basis}</div>
+                        </td>
+                        <td className="px-4 py-2.5"><code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{p.selector}</code></td>
+                        <td className="px-4 py-2.5"><code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] leading-relaxed">{p.condition}</code></td>
+                        <td className="px-4 py-2.5 text-center">
+                          <Badge variant={p.effect === "allow" ? "success" : "destructive"} className="text-[10px]">{p.effect}</Badge>
+                        </td>
+                        <td className="px-4 py-2.5 text-center">
+                          <Switch checked={p.enabled} onCheckedChange={(v) => { setWps((prev) => prev.map((x) => (x.id === p.id ? { ...x, enabled: v } : x))); toast.success(`${p.id} ${v ? "활성화" : "비활성화"}`); }} />
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          <Button variant="ghost" size="icon-sm" onClick={() => { setWps((prev) => prev.filter((x) => x.id !== p.id)); toast.success(`${p.id} 삭제`); }}>
+                            <Trash2 className="size-3.5 text-rose-600" />
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="grid gap-2 border-t border-border p-4 text-[11px] text-muted-foreground md:grid-cols-3">
+                <div className="flex items-start gap-2"><Cpu className="mt-0.5 size-3.5" /> 입력: 워크로드 명세(sched.ai/·profile.ai/ annotation), 프로젝트 쿼터, 가속기 종류·상태</div>
+                <div className="flex items-start gap-2"><Clock className="mt-0.5 size-3.5" /> 평가 시점: 워크로드 생성·클러스터 신청·자원 신청 승인 요청 시. 결과와 근거는 감사 로그에 기록</div>
+                <div className="flex items-start gap-2"><ShieldCheck className="mt-0.5 size-3.5" /> 시험: 공인인증시험(10/15~11/10) 접근제어 2종 — RBAC 1종 + Workload 기반 1종</div>
+              </div>
+            </CardContent>
+          </Card>
+          </ChangeMark>
+        </TabsContent>
+
+        <TabsContent value="rbac" className="mt-4 space-y-4">
       <div className="grid gap-4 md:grid-cols-2">
         {ROLES.map((r) => {
           const grantedCount = perms.filter((p) => p[r.key]).length;
@@ -114,7 +217,8 @@ export default function RolesPage() {
         })}
       </div>
 
-      <Card>
+      <ChangeMark ids={["CR-IAM-01", "CR-IAM-02"]}>
+<Card>
         <CardHeader className="flex-row items-center justify-between">
           <div>
             <CardTitle>권한 매트릭스</CardTitle>
@@ -195,6 +299,10 @@ export default function RolesPage() {
           </div>
         </CardContent>
       </Card>
+</ChangeMark>
+
+        </TabsContent>
+      </Tabs>
 
       <AddPermissionDialog open={addOpen} onClose={() => setAddOpen(false)} onAdd={add} existingIds={perms.map((p) => p.id)} />
     </div>

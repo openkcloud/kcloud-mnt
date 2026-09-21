@@ -1,4 +1,5 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   Network as NetworkIcon,
@@ -14,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -167,6 +169,7 @@ export default function NetworksPage() {
   };
   const [selected, setSelected] = React.useState<IaasNetwork | undefined>();
   const [q, setQ] = React.useState("");
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const items = data.items.filter((n) => !q || n.name.toLowerCase().includes(q.toLowerCase()));
 
@@ -180,26 +183,28 @@ export default function NetworksPage() {
         <StatCard label="External 네트워크" value={data.items.filter((n) => n.type === "external").length} icon={Globe} accent="amber" />
       </div>
 
-      <Card className="p-4">
+      <ChangeMark ids={["CR-IAAS-02", "CR-IAAS-05"]}>
+<Card className="p-4">
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
               <Input placeholder="네트워크 이름 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
             </div>
-            <Button size="sm" variant="outline" className="ml-auto" onClick={() => toast.success("프로젝트 전용 네트워크 생성 다이얼로그 (사용자용)")}>
-              <Plus className="size-3.5" /> 프로젝트 네트워크 생성 (사용자)
-            </Button>
-            <Button size="sm" onClick={() => toast.success("공용/외부망 네트워크 생성 다이얼로그 (관리자용)")}>
-              <Plus className="size-3.5" /> 공용·외부망 생성 (관리자)
-            </Button>
+            {isAdmin && (
+              <Button size="sm" className="ml-auto" onClick={() => toast.success("네트워크 생성 다이얼로그 (관리자)")}>
+                <Plus className="size-3.5" /> 네트워크 생성
+              </Button>
+            )}
           </div>
           <div className="rounded-md border border-brand-indigo-200 bg-brand-indigo-50/50 p-2.5 text-[11px] text-brand-indigo-900">
-            <strong>생성 주체 정책:</strong> 사용자는 자신의 프로젝트 안에 격리된 <strong>내부 네트워크</strong>를 자율적으로 생성 가능하다.
-            공용 네트워크 · 외부망(Floating IP 풀) 연결은 <strong>관리자 전용</strong>이며, 사용자는 관리자가 만든 네트워크를 선택해서 사용한다.
+            <strong>생성 주체:</strong> 네트워크 생성은 <strong>관리자 기능</strong>이다. 사용자는 관리자가 만든 네트워크 중에서 선택해 자원을 신청한다.
+            Floating IP 할당·해제·회수, 라우터·보안 그룹·키페어 생성도 관리자 권한이다.
+            {!isAdmin && <span className="ml-1">현재 사용자 역할 — 조회와 선택만 가능.</span>}
           </div>
         </div>
       </Card>
+</ChangeMark>
 
       <Card>
         <Table>
@@ -261,6 +266,7 @@ export default function NetworksPage() {
 }
 
 function NetworkDetailPanel({ network, onClose }: { network: IaasNetwork; onClose: () => void }) {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
   const detail = DETAILS[network.id] ?? DETAILS["in-1"];
   const copy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -475,7 +481,7 @@ function NetworkDetailPanel({ network, onClose }: { network: IaasNetwork; onClos
                             <Button variant="ghost" size="icon-sm" onClick={() => copy(f.ip, "Floating IP")} title="IP 복사">
                               <Copy className="size-3.5" />
                             </Button>
-                            {f.status === "ACTIVE" ? (
+                            {isAdmin && (f.status === "ACTIVE" ? (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -495,22 +501,24 @@ function NetworkDetailPanel({ network, onClose }: { network: IaasNetwork; onClos
                               >
                                 할당
                               </Button>
+                            ))}
+                            {isAdmin && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-[11px] text-rose-600"
+                                onClick={() => {
+                                  if (f.status === "ACTIVE") {
+                                    toast.error(`${f.ip} 회수 거부 — 먼저 해제하기`);
+                                    return;
+                                  }
+                                  toast.success(`${f.ip} 풀로 반환됨 (release)`);
+                                }}
+                                title="Floating IP 회수 (release)"
+                              >
+                                회수
+                              </Button>
                             )}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-[11px] text-rose-600"
-                              onClick={() => {
-                                if (f.status === "ACTIVE") {
-                                  toast.error(`${f.ip} 회수 거부 — 먼저 해제하기`);
-                                  return;
-                                }
-                                toast.success(`${f.ip} 풀로 반환됨 (release)`);
-                              }}
-                              title="Floating IP 회수 (release)"
-                            >
-                              회수
-                            </Button>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -525,7 +533,7 @@ function NetworkDetailPanel({ network, onClose }: { network: IaasNetwork; onClos
         {/* Actions */}
         <div className="flex items-center gap-2 border-t border-border pt-4">
           <Button variant="outline" size="sm">서브넷 추가</Button>
-          <Button variant="outline" size="sm">FIP 할당</Button>
+          {isAdmin && <Button variant="outline" size="sm">FIP 할당</Button>}
           <Button variant="outline" size="sm">보안 그룹 편집</Button>
           <Button variant="destructive" size="sm" className="ml-auto">네트워크 삭제</Button>
         </div>

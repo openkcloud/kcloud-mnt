@@ -1,4 +1,5 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   Sparkles,
@@ -12,6 +13,8 @@ import {
   Lightbulb,
   Activity,
 } from "lucide-react";
+import { FeatureGate } from "@/components/feature-gate";
+import { useFeatureVisible } from "@/lib/scope";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -71,9 +74,18 @@ const HOTSPOTS = [
 ];
 
 export default function AIInsightsPage() {
+  const aiopsVisible = useFeatureVisible("monitoring.insights.aiops");
   return (
     <div className="space-y-4">
-      {/* Davis-style root cause alert */}
+      <ChangeMark ids={["CR-OBS-06", "CR-OBS-05", "CR-OBS-09"]}>
+<div className="rounded-md border border-violet-200 bg-violet-50/60 px-3 py-2 text-[11px] text-violet-900">
+        <strong>범위</strong> — AI 모델 분석은 단순 모니터링이 아닌 AIOps 성격의 기능이라 <strong>2차년도 시범서비스에서는 메뉴 전체를 제외</strong>한다.
+        2차년도 옵저버빌리티는 지표·로그·규칙 기반 이상감지까지이며, 이 화면은 최종 형상 설계안으로만 둔다(환경설정 › 포털 형상에서 전환). SLO는 이번 과제에서 제외해 목표 지연(1초) 기준으로 표기한다.
+      </div>
+</ChangeMark>
+
+      {/* Davis-style root cause alert — 최종 형상(AIOps) */}
+      <FeatureGate id="monitoring.insights.aiops">
       <Card className="overflow-hidden border-rose-200 bg-gradient-to-br from-rose-50 to-transparent">
         <CardContent className="p-5">
           <div className="flex items-start gap-4">
@@ -88,7 +100,7 @@ export default function AIInsightsPage() {
                   <span className="text-xs text-muted-foreground">12분 전 자동 감지</span>
                 </div>
                 <h2 className="mt-1 text-lg font-bold leading-tight">
-                  vllm-solar-10b 추론 지연 시간 P99이 SLO를 18% 초과하고 있습니다.
+                  vllm-solar-10b 추론 지연 P99이 목표 지연 1초를 18% 초과한다.
                 </h2>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Davis가 트레이스 1,240건과 호스트 메트릭 시리즈 32종을 상관 분석한 결과,
@@ -110,8 +122,8 @@ export default function AIInsightsPage() {
                   color="amber"
                 />
                 <Evidence
-                  label="비즈니스 영향"
-                  value="SLO 위반 가능"
+                  label="서비스 영향"
+                  value="목표 지연 초과"
                   detail="P99 < 1s 미달"
                   color="rose"
                 />
@@ -150,6 +162,7 @@ export default function AIInsightsPage() {
           </div>
         </CardContent>
       </Card>
+      </FeatureGate>
 
       {/* Service Flow */}
       <Card>
@@ -169,7 +182,7 @@ export default function AIInsightsPage() {
         <Card>
           <CardHeader>
             <CardTitle>응답 시간 트렌드</CardTitle>
-            <CardDescription>지난 60분 · P50 / P95 / P99 · 1초 SLO 라인</CardDescription>
+            <CardDescription>지난 60분 · P50 / P95 / P99 · 목표 지연 1초 기준선</CardDescription>
           </CardHeader>
           <CardContent>
             <ChartContainer
@@ -185,7 +198,7 @@ export default function AIInsightsPage() {
                 <XAxis dataKey="t" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}ms`} />
                 <RTooltip content={<ChartTooltipContent indicator="line" />} />
-                <ReferenceLine y={1000} stroke="#e11d48" strokeDasharray="4 4" label={{ value: "SLO 1s", fill: "#e11d48", fontSize: 10, position: "right" }} />
+                <ReferenceLine y={1000} stroke="#e11d48" strokeDasharray="4 4" label={{ value: "목표 1s", fill: "#e11d48", fontSize: 10, position: "right" }} />
                 <Line type="monotone" dataKey="p50" stroke="var(--brand-mint-500)" strokeWidth={1.5} dot={false} />
                 <Line type="monotone" dataKey="p95" stroke="var(--brand-indigo-500)" strokeWidth={2} dot={false} />
                 <Line type="monotone" dataKey="p99" stroke="#e11d48" strokeWidth={2} dot={false} />
@@ -227,7 +240,8 @@ export default function AIInsightsPage() {
       </div>
 
       {/* Hot spots + Services */}
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className={cn("grid gap-4", aiopsVisible && "lg:grid-cols-3")}>
+        <FeatureGate id="monitoring.insights.aiops" fallback="none">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>핫스팟 — Attention/FFN 부하 분석</CardTitle>
@@ -258,6 +272,7 @@ export default function AIInsightsPage() {
             </div>
           </CardContent>
         </Card>
+        </FeatureGate>
 
         <Card>
           <CardHeader>

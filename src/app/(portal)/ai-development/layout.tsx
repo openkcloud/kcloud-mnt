@@ -1,11 +1,13 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { BrainCircuit, Plus, ExternalLink } from "lucide-react";
 import { GithubIcon } from "@/components/icons";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useFeatureVisible } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -13,13 +15,16 @@ const TABS = [
   { href: "/ai-development/profiles", label: "Profiles" },
   { href: "/ai-development/notebooks", label: "Notebooks" },
   { href: "/ai-development/pipelines", label: "Pipelines" },
-  { href: "/ai-development/experiments", label: "Experiments" },
+  { href: "/ai-development/experiments", label: "Experiments", feature: "ai.experiments" },
   { href: "/ai-development/serving", label: "Serving" },
   { href: "/ai-development/model-insights", label: "병목 분석" },
 ];
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const experimentsVisible = useFeatureVisible("ai.experiments");
+  const tabs = TABS.filter((t) => t.feature !== "ai.experiments" || experimentsVisible);
   return (
     <div className="space-y-6">
       <PageHeader
@@ -42,14 +47,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 <GithubIcon className="size-3.5" /> GitHub
               </a>
             </Button>
-            <Button size="sm">
+            <Button size="sm" onClick={() => { router.push("/ai-development/notebooks"); toast.success("Notebooks에서 '새 노트북 서버'로 만든다"); }}>
               <Plus className="size-4" /> 새 노트북
             </Button>
           </>
         }
       />
       <div className="flex items-center gap-1 overflow-x-auto border-b border-border">
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const active = pathname === t.href;
           return (
             <Link

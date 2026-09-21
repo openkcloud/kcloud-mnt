@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import * as React from "react";
 import {
   Users,
@@ -72,7 +73,7 @@ export default function ProfilesPage() {
         title="Kubeflow Profiles"
         description="Profile = K8s 네임스페이스 + RBAC + ResourceQuota + PodDefault — 사용자 격리·할당 단위"
         actions={
-          <Button>
+          <Button onClick={() => toast.success("Profile 생성 — 네임스페이스·쿼터 입력")}>
             <Plus className="size-4" /> 새 Profile
           </Button>
         }
@@ -151,7 +152,7 @@ export default function ProfilesPage() {
                   <Users className="size-3" />
                   <strong>{p.members}</strong>명
                 </span>
-                <Button variant="ghost" size="sm">
+                <Button variant="ghost" size="sm" onClick={() => toast.success("편집 다이얼로그를 연다")}>
                   <Settings className="size-3" /> 편집
                 </Button>
               </div>

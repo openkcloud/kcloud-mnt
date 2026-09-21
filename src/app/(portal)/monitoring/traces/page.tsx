@@ -1,4 +1,5 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   Search,
@@ -12,6 +13,8 @@ import {
   Code2,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { FeatureGate } from "@/components/feature-gate";
+import { useFeatureVisible } from "@/lib/scope";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -156,7 +159,16 @@ const RECENT_TRACES = [
 ];
 
 export default function TracesPage() {
+  const internalVisible = useFeatureVisible("monitoring.traces.internal");
+  const [selectedTrace, setSelectedTrace] = React.useState(RECENT_TRACES[0]);
   return (
+    <div className="space-y-4">
+    <ChangeMark ids={["CR-OBS-07"]}>
+<div className="rounded-md border border-sky-200 bg-sky-50/60 px-3 py-2 text-[11px] text-sky-900">
+      <strong>범위</strong> — 분산 트레이스는 트레이스 식별자가 아직 구축되지 않았고 Tempo 연계가 3차년도 항목이라 <strong>2차년도 시범서비스에서는 메뉴 전체를 제외</strong>한다.
+      이 화면은 최종 형상 설계안으로만 두며(환경설정 › 포털 형상에서 전환), 제공 범위는 서비스 흐름 모니터링과 통합한 공통 서비스 트레이스의 기본 정보(요청·서비스·소요 시간·상태)다.
+    </div>
+</ChangeMark>
     <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
       <div className="space-y-4">
         <Card className="p-4">
@@ -172,7 +184,7 @@ export default function TracesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">모든 서비스</SelectItem>
-                  <SelectItem value="vllm">vLLM</SelectItem>
+                  {internalVisible && <SelectItem value="vllm">vLLM (내부 span)</SelectItem>}
                   <SelectItem value="stt">STT</SelectItem>
                 </SelectContent>
               </Select>
@@ -200,9 +212,11 @@ export default function TracesPage() {
               {RECENT_TRACES.map((t, i) => (
                 <button
                   key={t.id}
+                  type="button"
+                  onClick={() => setSelectedTrace(t)}
                   className={cn(
                     "block w-full px-4 py-2.5 text-left transition-colors hover:bg-secondary/30",
-                    i === 0 && "bg-secondary/40",
+                    (selectedTrace ? selectedTrace.id === t.id : i === 0) && "bg-secondary/40",
                   )}
                 >
                   <div className="flex items-center justify-between">
@@ -231,11 +245,11 @@ export default function TracesPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <span className="font-mono">tr-001</span>
-              <Badge variant="warning">WARN · P99 위반</Badge>
+              <span className="font-mono">{selectedTrace.id}</span>
+              <Badge variant={selectedTrace.status === "OK" ? "success" : "warning"}>{selectedTrace.status === "OK" ? "OK · 목표 지연 이내" : "WARN · 목표 지연 초과"}</Badge>
             </CardTitle>
             <CardDescription>
-              POST /v1/solar-10b/chat · 9개 서비스 통과 · 12개 span
+              {selectedTrace.svc} · {selectedTrace.op} · {selectedTrace.dur}ms · 9개 서비스 통과 · 12개 span
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-4">
@@ -247,6 +261,7 @@ export default function TracesPage() {
         </Card>
 
         {/* Trace waterfall */}
+        <FeatureGate id="monitoring.traces.internal">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">PurePath — 호출 트리</CardTitle>
@@ -269,7 +284,9 @@ export default function TracesPage() {
             </div>
           </CardContent>
         </Card>
+        </FeatureGate>
       </div>
+    </div>
     </div>
   );
 }
