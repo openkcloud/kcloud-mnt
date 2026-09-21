@@ -40,7 +40,7 @@ export const CURRENT_VERSION: MockupVersion = {
   id: "v2.0",
   label: "회의·워크샵 반영본",
   date: "2026-09-15",
-  commit: "작업 중",
+  commit: "8391ea5",
   status: "current",
   basis: "ETRI 검토 의견 44건(2026-06-15) · 포털 기능 검토 회의록 v1.1(2026-07-02) · 2차년도 2차 워크샵(2026-08-27~28) · 오케스트로 내부 확인(2026-09-14)",
   summary:
