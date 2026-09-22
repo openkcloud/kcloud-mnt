@@ -1,8 +1,28 @@
 "use client";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return (await res.json()) as T;
+}
+
+async function patch<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return (await res.json()) as T;
+}
+
+async function post<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return (await res.json()) as T;
 }
@@ -28,6 +48,28 @@ export const api = {
       useQuery({ queryKey: ["accelerators", "topology"], queryFn: () => get("/api/accelerators/topology") }),
   },
   iaas: {
+    requests: (q?: Record<string, string>) => {
+      const search = q ? "?" + new URLSearchParams(q).toString() : "";
+      return useQuery({
+        queryKey: ["iaas", "requests", q],
+        queryFn: () => get(`/api/iaas/requests${search}`),
+      });
+    },
+    reviewRequest: () => {
+      const qc = useQueryClient();
+      return useMutation({
+        mutationFn: ({ id, action, reason }: { id: string; action: "approve" | "reject"; reason?: string }) =>
+          patch(`/api/iaas/requests/${id}`, { action, reason }),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas", "requests"] }),
+      });
+    },
+    createRequest: () => {
+      const qc = useQueryClient();
+      return useMutation({
+        mutationFn: (payload: Record<string, unknown>) => post(`/api/iaas/requests`, payload),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas", "requests"] }),
+      });
+    },
     pools: () => useQuery({ queryKey: ["iaas", "pools"], queryFn: () => get("/api/iaas/pools") }),
     projects: () => useQuery({ queryKey: ["iaas", "projects"], queryFn: () => get("/api/iaas/projects") }),
     instances: (q?: Record<string, string>) => {

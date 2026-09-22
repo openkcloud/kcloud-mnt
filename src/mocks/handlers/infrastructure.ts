@@ -6,6 +6,7 @@ import {
   workloads,
   serviceClusters,
   vmGpuPassthroughs,
+  volumes,
   observedMeta,
 } from "../fixtures";
 
@@ -88,6 +89,8 @@ export const infrastructureHandlers = [
     const wls = vm.serviceClusterId
       ? workloads.filter((w) => w.accelerators > 0).slice(0, 4)
       : [];
+    // 부팅 시 신청한 추가 스토리지 = 이 VM에 붙은 데이터(비부팅) 볼륨
+    const dataVolumes = volumes.filter((vol) => vol.attachedVmId === vm.id && !vol.bootable);
     return HttpResponse.json({
       ...meta(),
       vm,
@@ -96,6 +99,7 @@ export const infrastructureHandlers = [
       passthroughs: pts,
       serviceCluster: svc,
       workloads: wls,
+      dataVolumes,
     });
   }),
 

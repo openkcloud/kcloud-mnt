@@ -35,6 +35,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { useAuth } from "@/lib/auth";
 import {
   Table,
   TableBody,
@@ -64,6 +65,8 @@ const MEMBERS: Record<string, { name: string; role: "admin" | "member" | "viewer
 };
 
 export default function ProjectsPage() {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
+  const myEmail = useAuth((s) => s.user?.email ?? "");
   const { data, isLoading } = api.iaas.projects() as {
     data: { items: Tenant[] } | undefined;
     isLoading: boolean;
@@ -73,7 +76,11 @@ export default function ProjectsPage() {
   const [q, setQ] = React.useState("");
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
-  const items = data.items.filter((t) => !q || t.name.toLowerCase().includes(q.toLowerCase()));
+  // 사용자는 자신이 속한 프로젝트만 (관리자는 전체)
+  const mine = isAdmin
+    ? data.items
+    : data.items.filter((t) => (MEMBERS[t.id] ?? MEMBERS.default).some((m) => m.email === myEmail));
+  const items = mine.filter((t) => !q || t.name.toLowerCase().includes(q.toLowerCase()));
 
   return (
     <div className="space-y-4">
@@ -83,9 +90,11 @@ export default function ProjectsPage() {
             <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
             <Input placeholder="프로젝트 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
           </div>
-          <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-3.5" /> 프로젝트 생성
-          </Button>
+          {isAdmin && (
+            <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-3.5" /> 프로젝트 생성
+            </Button>
+          )}
         </div>
       </Card>
 
@@ -125,7 +134,7 @@ export default function ProjectsPage() {
                   <span>생성 {t.createdAt}</span>
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     <Button variant="ghost" size="sm" onClick={() => { setSelected(t); }}>
-                      <Settings className="size-3.5" /> 관리
+                      <Settings className="size-3.5" /> {isAdmin ? "관리" : "보기"}
                     </Button>
                   </div>
                 </div>
@@ -137,7 +146,7 @@ export default function ProjectsPage() {
 
       <Sheet open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
         <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-2xl">
-          {selected && <ProjectDetailPanel project={selected} />}
+          {selected && <ProjectDetailPanel project={selected} isAdmin={isAdmin} />}
         </SheetContent>
       </Sheet>
 
@@ -146,7 +155,7 @@ export default function ProjectsPage() {
   );
 }
 
-function ProjectDetailPanel({ project: t }: { project: Tenant }) {
+function ProjectDetailPanel({ project: t, isAdmin }: { project: Tenant; isAdmin: boolean }) {
   const cpuPct = Math.round((t.usedVcpu / t.quotaVcpu) * 100);
   const ramPct = Math.round((t.usedRamGb / t.quotaRamGb) * 100);
   const accPct = t.quotaAcc ? Math.round((t.usedAcc / t.quotaAcc) * 100) : 0;
@@ -197,11 +206,13 @@ function ProjectDetailPanel({ project: t }: { project: Tenant }) {
           </TabsContent>
 
           <TabsContent value="members" className="space-y-2 pt-3">
-            <div className="flex justify-end">
-              <Button size="sm" onClick={() => toast.success(`${t.name}에 멤버 초대 다이얼로그`)}>
-                <UserPlus className="size-3.5" /> 멤버 초대
-              </Button>
-            </div>
+            {isAdmin && (
+              <div className="flex justify-end">
+                <Button size="sm" onClick={() => toast.success(`${t.name}에 멤버 초대 다이얼로그`)}>
+                  <UserPlus className="size-3.5" /> 멤버 초대
+                </Button>
+              </div>
+            )}
             <Card>
               <Table>
                 <TableHeader>
@@ -228,9 +239,11 @@ function ProjectDetailPanel({ project: t }: { project: Tenant }) {
                       </TableCell>
                       <TableCell className="font-mono text-[11px]">{m.email}</TableCell>
                       <TableCell>
-                        <Button variant="ghost" size="icon-sm" onClick={() => toast.error(`${m.name} 제거`)}>
-                          <Trash2 className="size-3.5" />
-                        </Button>
+                        {isAdmin && (
+                          <Button variant="ghost" size="icon-sm" onClick={() => toast.error(`${m.name} 제거`)}>
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -252,11 +265,13 @@ function ProjectDetailPanel({ project: t }: { project: Tenant }) {
           </TabsContent>
         </Tabs>
 
-        <div className="flex gap-2 border-t border-border pt-4">
-          <Button variant="outline" size="sm" onClick={() => toast.success(`${t.name} 편집`)}><Edit className="size-3.5" /> 편집</Button>
-          <Button variant="outline" size="sm" onClick={() => toast.success(`${t.name} 활동 로그`)}><Activity className="size-3.5" /> 감사 로그</Button>
-          <Button variant="destructive" size="sm" className="ml-auto" onClick={() => toast.error(`${t.name} 삭제 — 자원 정리 후 가능`)}><Trash2 className="size-3.5" /> 삭제</Button>
-        </div>
+        {isAdmin && (
+          <div className="flex gap-2 border-t border-border pt-4">
+            <Button variant="outline" size="sm" onClick={() => toast.success(`${t.name} 편집`)}><Edit className="size-3.5" /> 편집</Button>
+            <Button variant="outline" size="sm" onClick={() => toast.success(`${t.name} 활동 로그`)}><Activity className="size-3.5" /> 감사 로그</Button>
+            <Button variant="destructive" size="sm" className="ml-auto" onClick={() => toast.error(`${t.name} 삭제 — 자원 정리 후 가능`)}><Trash2 className="size-3.5" /> 삭제</Button>
+          </div>
+        )}
       </div>
     </>
   );

@@ -14,63 +14,18 @@ import {
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatCard } from "@/components/stat-card";
-
-interface KeyPair {
-  id: string;
-  name: string;
-  type: "SSH-RSA" | "SSH-ED25519" | "ECDSA";
-  fingerprint: string;
-  owner: string;
-  project: string;
-  createdAt: string;
-  usedBy: number;
-}
-
-const INITIAL: KeyPair[] = [
-  {
-    id: "kp-001",
-    name: "hy-yun-laptop",
-    type: "SSH-ED25519",
-    fingerprint: "SHA256:8s0k+aFzZ2GxjP9NLcv1XoQnEd8H4RmqA5oV6WuZ2t0",
-    owner: "hy.yun",
-    project: "proj-ai-research",
-    createdAt: "2026-03-15",
-    usedBy: 4,
-  },
-  {
-    id: "kp-002",
-    name: "etri-shared-01",
-    type: "SSH-RSA",
-    fingerprint: "SHA256:X9pQmR3vN2s8YkA4dLcE7BgV1oF6WuHtZjK5NqPxRxo",
-    owner: "hhchoi",
-    project: "proj-llm-serving",
-    createdAt: "2026-04-01",
-    usedBy: 12,
-  },
-  {
-    id: "kp-003",
-    name: "ci-runner-key",
-    type: "SSH-ED25519",
-    fingerprint: "SHA256:Z1kL5nM8pQrS2tU3vW4xY5zA6bC7dE8fG9hI0jK1lMn",
-    owner: "system.ci",
-    project: "proj-platform-ops",
-    createdAt: "2026-02-10",
-    usedBy: 3,
-  },
-  {
-    id: "kp-004",
-    name: "hy-yun-desktop",
-    type: "ECDSA",
-    fingerprint: "SHA256:R7qWsX8yZ9aB0cD1eF2gH3iJ4kL5mN6oP7qR8sT9uVw",
-    owner: "hy.yun",
-    project: "proj-ai-research",
-    createdAt: "2026-05-20",
-    usedBy: 1,
-  },
-];
+import { useAuth } from "@/lib/auth";
+import { keypairs as ALL_KEYPAIRS } from "@/mocks/fixtures";
+import type { KeyPair } from "@/lib/types";
 
 export default function KeyPairsPage() {
-  const [items, setItems] = React.useState<KeyPair[]>(INITIAL);
+  const user = useAuth((s) => s.user);
+  const isAdmin = user?.role === "admin";
+  const myId = user?.email?.split("@")[0] ?? "";
+
+  const base = isAdmin ? ALL_KEYPAIRS : ALL_KEYPAIRS.filter((k) => k.owner === myId);
+
+  const [items, setItems] = React.useState<KeyPair[]>(base);
   const [q, setQ] = React.useState("");
   const [createOpen, setCreateOpen] = React.useState(false);
   const [imported, setImported] = React.useState<KeyPair | null>(null);
@@ -81,7 +36,11 @@ export default function KeyPairsPage() {
     <div className="space-y-6">
       <PageHeader
         title="키페어"
-        description="OpenStack Nova SSH 키페어 — VM 접속용 공개키 등록·관리"
+        description={
+          isAdmin
+            ? "OpenStack Nova SSH 키페어 — 가상머신 접속용 공개키 등록·관리"
+            : "가상머신 SSH 접속에 사용할 키페어를 등록·관리합니다."
+        }
         actions={
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="size-4" /> 키페어 생성·업로드
@@ -92,7 +51,11 @@ export default function KeyPairsPage() {
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard label="키페어" value={items.length} unit="개" icon={Key} accent="indigo" />
         <StatCard label="적용된 인스턴스" value={items.reduce((s, x) => s + x.usedBy, 0)} unit="대" icon={Key} accent="mint" />
-        <StatCard label="등록 사용자" value={new Set(items.map((x) => x.owner)).size} unit="명" icon={Key} accent="amber" />
+        {isAdmin ? (
+          <StatCard label="등록 사용자" value={new Set(items.map((x) => x.owner)).size} unit="명" icon={Key} accent="amber" />
+        ) : (
+          <StatCard label="프로젝트" value={new Set(items.map((x) => x.project)).size} unit="개" icon={Key} accent="amber" />
+        )}
       </div>
 
       <Card className="p-4">
@@ -116,13 +79,13 @@ export default function KeyPairsPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>이름</TableHead>
-              <TableHead>타입</TableHead>
-              <TableHead>Fingerprint (SHA256)</TableHead>
-              <TableHead>소유자</TableHead>
+              <TableHead>키페어 이름</TableHead>
+              <TableHead>키 방식</TableHead>
+              <TableHead>지문 (고유 식별값)</TableHead>
+              {isAdmin && <TableHead>소유자</TableHead>}
               <TableHead>프로젝트</TableHead>
-              <TableHead className="text-center">사용 중</TableHead>
-              <TableHead>생성일</TableHead>
+              <TableHead className="text-center">적용된 가상머신</TableHead>
+              <TableHead>등록일</TableHead>
               <TableHead className="w-24" />
             </TableRow>
           </TableHeader>
@@ -155,7 +118,7 @@ export default function KeyPairsPage() {
                     </Button>
                   </div>
                 </TableCell>
-                <TableCell className="font-mono text-xs">{k.owner}</TableCell>
+                {isAdmin && <TableCell className="font-mono text-xs">{k.owner}</TableCell>}
                 <TableCell className="font-mono text-xs">{k.project}</TableCell>
                 <TableCell className="text-center font-mono">{k.usedBy}</TableCell>
                 <TableCell className="text-xs text-muted-foreground">{k.createdAt}</TableCell>
@@ -192,6 +155,7 @@ export default function KeyPairsPage() {
 
       <CreateKeyPairDialog
         open={createOpen}
+        ownerKey={myId}
         onClose={() => setCreateOpen(false)}
         onCreate={(k, isGenerated) => {
           setItems((prev) => [...prev, k]);
@@ -230,9 +194,10 @@ export default function KeyPairsPage() {
 }
 
 function CreateKeyPairDialog({
-  open, onClose, onCreate,
+  open, ownerKey, onClose, onCreate,
 }: {
   open: boolean;
+  ownerKey: string;
   onClose: () => void;
   onCreate: (k: KeyPair, isGenerated: boolean) => void;
 }) {
@@ -250,7 +215,7 @@ function CreateKeyPairDialog({
         name: name.trim(),
         type,
         fingerprint: `SHA256:${Array.from({ length: 43 }, () => "abcdefghijkmnpqrstuvwxyz023456789"[Math.floor(Date.now() % 32)]).join("")}`,
-        owner: "hy.yun",
+        owner: ownerKey,
         project,
         createdAt: new Date().toISOString().slice(0, 10),
         usedBy: 0,

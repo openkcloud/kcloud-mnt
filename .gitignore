@@ -56,3 +56,6 @@ Thumbs.db
 /out/
 *.zip
 
+
+# Local Netlify folder
+.netlify

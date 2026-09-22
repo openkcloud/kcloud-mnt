@@ -15,18 +15,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { NAV_SECTIONS } from "@/lib/nav";
+import { getNavByRole } from "@/lib/nav";
+import type { Role } from "@/lib/auth";
 
-function findCrumbs(pathname: string) {
+function findCrumbs(pathname: string, role: Role | undefined) {
   const crumbs: { label: string; href: string }[] = [];
-  for (const section of NAV_SECTIONS) {
+  if (!role) return crumbs;
+  for (const section of getNavByRole(role)) {
     for (const item of section.items) {
-      if (pathname === item.href || pathname.startsWith(item.href + "/")) {
-        crumbs.push({ label: item.label, href: item.href });
-        if (item.children) {
-          const child = item.children.find((c) => pathname === c.href);
-          if (child) crumbs.push({ label: child.label, href: child.href });
+      if (!(pathname === item.href || pathname.startsWith(item.href + "/"))) continue;
+      if (item.children?.length) {
+        // 그룹 항목은 하위가 실제로 매칭될 때만 추가 (bare 그룹 크럼 방지)
+        const child = item.children.find((c) => pathname === c.href || pathname.startsWith(c.href + "/"));
+        if (child) {
+          crumbs.push({ label: item.label, href: item.href });
+          crumbs.push({ label: child.label, href: child.href });
         }
+      } else {
+        crumbs.push({ label: item.label, href: item.href });
       }
     }
   }
@@ -37,7 +43,7 @@ export function AppHeader() {
   const router = useRouter();
   const pathname = usePathname();
   const { user, logout } = useAuth();
-  const crumbs = findCrumbs(pathname);
+  const crumbs = findCrumbs(pathname, user?.role);
 
   function handleLogout() {
     logout();

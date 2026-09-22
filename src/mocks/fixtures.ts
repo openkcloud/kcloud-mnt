@@ -12,6 +12,7 @@ import type {
   KFInferenceService,
   KFNotebook,
   KFPipeline,
+  KeyPair,
   KService,
   KWorkload,
   ManagementCluster,
@@ -20,6 +21,7 @@ import type {
   Pool,
   ResourceMapNode,
   ResourceMapRelationship,
+  ResourceRequest,
   ServiceCluster,
   Tenant,
   Volume,
@@ -267,6 +269,44 @@ for (let n = 1; n <= 2; n++) {
   );
 }
 
+// NVIDIA L40S — 1 node × 4 GPUs (PCIe · Ada Lovelace, NVLink/MIG 없음)
+{
+  const nodeId = "node-l40s-1";
+  const accIds: string[] = [];
+  for (let i = 1; i <= 4; i++) {
+    const accId = `acc-l40s-${i}`;
+    accIds.push(accId);
+    accelerators.push(
+      makeAcc({
+        id: accId,
+        name: "NVIDIA L40S 48GB",
+        vendor: "NVIDIA",
+        kind: "GPU",
+        model: "L40S-48GB",
+        memoryGb: 48,
+        nodeId,
+        poolId: "pool-2",
+        status: r() > 0.25 ? "Allocated" : "Idle",
+        sharing: r() > 0.5 ? "멀티플렉싱" : "전용",
+        multiplexing: r() > 0.5 ? "1:N" : "1:1",
+        driverVersion: "550.127.05",
+        firmwareVersion: "95.02.66.00.01",
+        powerW: intIn(240, 350),
+        pciAddress: `0000:${(0x60 + i).toString(16)}:00.0`,
+        capabilities: ["CUDA 12.4", "FP8", "BF16/FP16", "TF32", "Transformer Engine"],
+        allocatedToTenant: pick(["proj-ai-research", "proj-llm-serving"]),
+      }),
+    );
+  }
+  nodes.push(
+    buildNode(nodeId, "gpu-l40s-01.openkcloud", "pool-2", "zone-2", accIds, {
+      vcpu: 96,
+      ramGb: 768,
+      diskTb: 24,
+    }),
+  );
+}
+
 // Furiosa RNGD — 1 node × 4 NPUs
 {
   const nodeId = "node-npu-1";
@@ -363,6 +403,17 @@ for (let n = 1; n <= 2; n++) {
   nodes.push(buildNode(nodeId, "pim-node-01.openkcloud", "pool-2", "zone-2", accIds));
 }
 
+// 일반 컴퓨트 노드 (가속기 없음) — CPU 전용 VM 배치용
+for (let n = 1; n <= 3; n++) {
+  nodes.push(
+    buildNode(`node-cpu-${n}`, `cpu-node-0${n}.openkcloud`, "pool-1", "zone-1", [], {
+      vcpu: 128,
+      ramGb: 512,
+      diskTb: 20,
+    }),
+  );
+}
+
 // ─────────────────────── VMs ───────────────────────
 const vmNames = [
   "llama-trainer-01",
@@ -390,10 +441,20 @@ const vmNames = [
   "harbor-01",
   "harbor-replica",
 ];
+// ─────────────────────── KeyPairs (SSH) ───────────────────────
+// VM보다 먼저 정의 — VM.keyName이 이 목록을 참조. usedBy는 vms 생성 후 계산.
+export const keypairs: KeyPair[] = [
+  { id: "kp-001", name: "hy-yun-laptop",  type: "SSH-ED25519", fingerprint: "SHA256:8s0k+aFzZ2GxjP9NLcv1XoQnEd8H4RmqA5oV6WuZ2t0", owner: "hy.yun",    project: "proj-ai-research",   createdAt: "2026-03-15", usedBy: 0 },
+  { id: "kp-002", name: "etri-shared-01", type: "SSH-RSA",     fingerprint: "SHA256:X9pQmR3vN2s8YkA4dLcE7BgV1oF6WuHtZjK5NqPxRxo", owner: "hhchoi",    project: "proj-llm-serving",   createdAt: "2026-04-01", usedBy: 0 },
+  { id: "kp-003", name: "ci-runner-key",  type: "SSH-ED25519", fingerprint: "SHA256:Z1kL5nM8pQrS2tU3vW4xY5zA6bC7dE8fG9hI0jK1lMn", owner: "system.ci", project: "proj-platform-ops",  createdAt: "2026-02-10", usedBy: 0 },
+  { id: "kp-004", name: "hy-yun-desktop", type: "ECDSA",       fingerprint: "SHA256:R7qWsX8yZ9aB0cD1eF2gH3iJ4kL5mN6oP7qR8sT9uVw", owner: "hy.yun",    project: "proj-ai-research",   createdAt: "2026-05-20", usedBy: 0 },
+];
+
 export const vms: VM[] = vmNames.map((name, i) => {
   const tenant = pick(tenants);
   const pool = pick(pools);
   const node = pick(nodes.filter((n) => n.poolId === pool.id)) || nodes[0];
+  const kp = pick(keypairs); // 키페어 소유자 = VM 소유자 (정합성 보장)
   return {
     id: `vm-${(i + 1).toString().padStart(3, "0")}`,
     name,
@@ -407,10 +468,20 @@ export const vms: VM[] = vmNames.map((name, i) => {
     os: pick(["Ubuntu 22.04", "Ubuntu 24.04", "RHEL 9", "Rocky Linux 9"]),
     status: pick(["Running", "Running", "Running", "Running", "Stopped", "Building"]),
     ipAddresses: [`172.16.${intIn(0, 250)}.${intIn(2, 254)}`],
+    // 인터넷망+공인 IP를 신청한 일부 VM만 Floating IP(공인 대역 192.168.0.0/24) 보유
+    publicIp: i % 3 === 0 ? `192.168.0.${intIn(10, 250)}` : undefined,
+    // 부팅 시 주입된 키페어 — keypairs 목록에서 참조 (단일 소스)
+    keyName: kp.name,
+    owner: kp.owner,
     acceleratorIds: name.includes("trainer") || name.includes("vllm") || name.includes("furiosa") ? [pick(accelerators).id] : [],
     createdAt: new Date(Date.now() - intIn(2, 200) * 86400000).toISOString(),
     uptimeHours: intIn(4, 2400),
   };
+});
+
+// 키페어별 usedBy = 실제 이 키페어로 부팅된 VM 수
+keypairs.forEach((k) => {
+  k.usedBy = vms.filter((v) => v.keyName === k.name).length;
 });
 
 // ─────────────────────── Volumes ───────────────────────
@@ -764,6 +835,52 @@ passthroughCandidates.forEach((acc, i) => {
   vm.hypervisor = acc.nodeId;
 });
 
+// 데모용 — 가속기 2개(NVIDIA A100 ×2)가 패스스루된 VM 하나 명시적으로 구성
+{
+  const dualVm = vms.find((v) => v.id === "vm-001");
+  const dualAccs = ["acc-a100-1-1", "acc-a100-1-2"]
+    .map((id) => accelerators.find((a) => a.id === id))
+    .filter(Boolean) as Accelerator[];
+  if (dualVm && dualAccs.length === 2) {
+    const dualAccIds = new Set(dualAccs.map((a) => a.id));
+    // 이 VM 또는 대상 가속기에 걸린 기존 패스스루 제거(중복 방지)
+    for (let i = vmGpuPassthroughs.length - 1; i >= 0; i--) {
+      const pt = vmGpuPassthroughs[i];
+      if (pt.vmId === dualVm.id || dualAccIds.has(pt.acceleratorId)) {
+        vmGpuPassthroughs.splice(i, 1);
+      }
+    }
+    // 다른 VM의 gpuPassthrough 배열에서도 대상 가속기 참조 제거
+    vms.forEach((v) => {
+      if (v.id !== dualVm.id && v.gpuPassthrough?.length) {
+        v.gpuPassthrough = v.gpuPassthrough.filter((pt) => !dualAccIds.has(pt.acceleratorId));
+        v.acceleratorIds = v.acceleratorIds.filter((id) => !dualAccIds.has(id));
+      }
+    });
+    dualVm.acceleratorIds = dualAccs.map((a) => a.id);
+    dualVm.gpuPassthrough = [];
+    dualVm.nodeId = dualAccs[0].nodeId;
+    dualVm.hypervisor = dualAccs[0].nodeId;
+    dualVm.openstackProject = dualVm.tenantId;
+    dualVm.owner = "hy.yun";        // 사용자(hy.yun) 목록에도 노출
+    dualVm.keyName = "hy-yun-laptop";
+    dualVm.status = "Running";
+    dualAccs.forEach((acc, i) => {
+      const pt: VMGpuPassthrough = {
+        vmId: dualVm.id,
+        acceleratorId: acc.id,
+        hostPciBdf: acc.pciAddress ?? `0000:${(0x40 + i).toString(16)}:00.0`,
+        state: "allocated_to_container",
+      };
+      vmGpuPassthroughs.push(pt);
+      dualVm.gpuPassthrough!.push(pt);
+      acc.status = "Allocated";
+      acc.allocationState = "allocated";
+      acc.passthroughTo = pt;
+    });
+  }
+}
+
 // Idle accelerators get explicit allocationState
 accelerators.forEach((a) => {
   if (!a.allocationState) a.allocationState = a.status === "Allocated" ? "allocated" : "idle";
@@ -964,6 +1081,180 @@ partitions.forEach((p) => {
     kind: "partitioned_from",
   });
 });
+
+// ─────────────────────── Resource Requests ───────────────────────
+export const resourceRequests: ResourceRequest[] = [
+  // 대기중 — 현재 위저드 규칙에 맞춘 신규 신청 (가속기 GPU · 인터넷망 · 공인 IP)
+  {
+    id: "req-101",
+    type: "vm",
+    status: "pending",
+    requestedBy: "u-002",
+    requestedByName: "윤호영",
+    requestedAt: "2026-09-22T10:12:00Z",
+    projectId: "proj-llm-serving",
+    projectName: "llm-serving",
+    vmName: "vllm-serving-01",
+    flavorName: "g1.a100",
+    vcpu: 32,
+    ramGb: 128,
+    diskGb: 1000,
+    storageGb: 1024,
+    networkName: "llm-serving-public",
+    keypairName: "hy-yun-laptop",
+    floatingIp: true,
+    acceleratorKind: "GPU",
+    acceleratorCount: 1,
+  },
+  // 대기중 — 가속기 없는 일반 VM (내부망)
+  {
+    id: "req-102",
+    type: "vm",
+    status: "pending",
+    requestedBy: "u-002",
+    requestedByName: "윤호영",
+    requestedAt: "2026-09-22T09:40:00Z",
+    projectId: "proj-ai-research",
+    projectName: "ai-research",
+    vmName: "dev-box-04",
+    flavorName: "m1.large",
+    vcpu: 8,
+    ramGb: 32,
+    diskGb: 200,
+    storageGb: 0,
+    networkName: "ai-research-private",
+    keypairName: "hy-yun-desktop",
+    floatingIp: false,
+  },
+  {
+    id: "req-001",
+    type: "vm",
+    status: "pending",
+    requestedBy: "u-002",
+    requestedByName: "윤호영",
+    requestedAt: "2026-09-17T09:23:00Z",
+    projectId: "proj-ai-research",
+    projectName: "ai-research",
+    vmName: "research-trainer-01",
+    flavorName: "n1.npu-2",
+    vcpu: 16,
+    ramGb: 64,
+    storageGb: 500,
+    networkName: "DJ-Z1-Svc",
+    keypairName: "hy-yun-laptop",
+    floatingIp: true,
+    acceleratorKind: "NPU",
+    acceleratorCount: 1,
+  },
+  {
+    id: "req-002",
+    type: "cluster",
+    status: "pending",
+    requestedBy: "u-002",
+    requestedByName: "윤호영",
+    requestedAt: "2026-09-16T14:10:00Z",
+    projectId: "proj-llm-serving",
+    projectName: "llm-serving",
+    nodeCount: 3,
+    masterCount: 1,
+    vcpu: 8,
+    ramGb: 32,
+    storageGb: 100,
+    acceleratorKind: "GPU",
+    acceleratorCount: 2,
+  },
+  {
+    id: "req-003",
+    type: "vm",
+    status: "completed",
+    requestedBy: "u-003",
+    requestedByName: "김민준",
+    requestedAt: "2026-09-15T11:00:00Z",
+    projectId: "proj-edge-inference",
+    projectName: "edge-inference",
+    vmName: "inference-server-02",
+    flavorName: "g1.gpu",
+    vcpu: 32,
+    ramGb: 128,
+    storageGb: 1000,
+    networkName: "DJ-Z1-Svc",
+    keypairName: "kim-research-key",
+    floatingIp: false,
+    acceleratorKind: "GPU",
+    acceleratorCount: 1,
+    reviewedBy: "u-001",
+    reviewedByName: "최현화",
+    reviewedAt: "2026-09-15T15:30:00Z",
+  },
+  {
+    id: "req-004",
+    type: "vm",
+    status: "rejected",
+    requestedBy: "u-004",
+    requestedByName: "박지수",
+    requestedAt: "2026-09-14T09:00:00Z",
+    projectId: "proj-ai-research",
+    projectName: "ai-research",
+    vmName: "big-trainer-xlarge",
+    flavorName: "g1.gpu-4x",
+    vcpu: 64,
+    ramGb: 256,
+    storageGb: 2000,
+    networkName: "DJ-Z1-Svc",
+    keypairName: "park-dev-key",
+    floatingIp: true,
+    acceleratorKind: "GPU",
+    acceleratorCount: 4,
+    reviewedBy: "u-001",
+    reviewedByName: "최현화",
+    reviewedAt: "2026-09-14T14:00:00Z",
+    rejectReason: "프로젝트 쿼터 초과 — 가속기 최대 2개 (신청 4개)",
+  },
+  {
+    id: "req-005",
+    type: "cluster",
+    status: "completed",
+    requestedBy: "u-002",
+    requestedByName: "윤호영",
+    requestedAt: "2026-09-10T10:00:00Z",
+    projectId: "proj-ai-research",
+    projectName: "ai-research",
+    nodeCount: 5,
+    masterCount: 1,
+    vcpu: 16,
+    ramGb: 64,
+    storageGb: 200,
+    acceleratorKind: "NPU",
+    acceleratorCount: 2,
+    reviewedBy: "u-001",
+    reviewedByName: "최현화",
+    reviewedAt: "2026-09-10T16:00:00Z",
+    resultId: "svc-ai-prod",
+  },
+  {
+    id: "req-006",
+    type: "vm",
+    status: "provisioning",
+    requestedBy: "u-005",
+    requestedByName: "이준호",
+    requestedAt: "2026-09-18T08:00:00Z",
+    projectId: "proj-llm-serving",
+    projectName: "llm-serving",
+    vmName: "llm-worker-01",
+    flavorName: "n1.npu-2",
+    vcpu: 16,
+    ramGb: 64,
+    storageGb: 500,
+    networkName: "DJ-Z1-Svc",
+    keypairName: "lee-dev-key",
+    floatingIp: false,
+    acceleratorKind: "NPU",
+    acceleratorCount: 1,
+    reviewedBy: "u-001",
+    reviewedByName: "최현화",
+    reviewedAt: "2026-09-18T09:00:00Z",
+  },
+];
 
 // 5) ObservedAt — 모든 데이터의 공통 신선도 메타
 export const OBSERVED_AT_BASE = "2026-06-02T10:00:00Z";
