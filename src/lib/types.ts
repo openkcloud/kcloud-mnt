@@ -257,7 +257,10 @@ export interface VM {
   diskGb: number;
   os: string;
   status: "Running" | "Stopped" | "Paused" | "Error" | "Building" | "Migrating";
-  ipAddresses: string[];
+  ipAddresses: string[];       // 사설(고정) IP — 항상 존재
+  publicIp?: string;           // 공인 IP(Floating IP) — 인터넷망+FIP 신청 시 associate
+  keyName?: string;            // 부팅 시 주입된 키페어(key_name) — SSH 접속 키
+  owner?: string;              // 생성 사용자(= 키페어 소유자와 일치) — "내 가상서버" 필터용
   acceleratorIds: string[];
   createdAt: string;
   uptimeHours: number;
@@ -267,6 +270,17 @@ export interface VM {
   clusterRole?: "control-plane" | "worker";
   hypervisor?: string;           // 물리 호스트 노드 ID (= nodeId 와 동일)
   gpuPassthrough?: VMGpuPassthrough[];
+}
+
+export interface KeyPair {
+  id: string;
+  name: string;
+  type: "SSH-RSA" | "SSH-ED25519" | "ECDSA";
+  fingerprint: string;
+  owner: string;
+  project: string;
+  createdAt: string;
+  usedBy: number;              // 이 키페어로 부팅된 VM 수 (fixtures에서 실제 계산)
 }
 
 export interface Volume {
@@ -426,4 +440,44 @@ export interface Alert {
   source: string;
   message: string;
   acknowledged: boolean;
+}
+
+// ───────── 자원 신청 ─────────
+export type RequestType = "vm" | "cluster";
+export type RequestStatus =
+  | "pending"
+  | "provisioning"
+  | "completed"
+  | "rejected";
+
+export interface ResourceRequest {
+  id: string;
+  type: RequestType;
+  status: RequestStatus;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  projectId: string;
+  projectName: string;
+  // VM
+  vmName?: string;
+  flavorName?: string;
+  vcpu?: number;
+  ramGb?: number;
+  diskGb?: number;         // 스펙 내장 시스템(루트) 디스크
+  storageGb?: number;      // 추가 데이터 스토리지
+  networkName?: string;
+  keypairName?: string;
+  floatingIp?: boolean;
+  acceleratorKind?: string;
+  acceleratorCount?: number;
+  // Cluster
+  nodeCount?: number;
+  masterCount?: number;
+  // Review
+  reviewedBy?: string;
+  reviewedByName?: string;
+  reviewedAt?: string;
+  rejectReason?: string;
+  resultId?: string;
 }

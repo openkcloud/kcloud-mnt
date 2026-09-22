@@ -13,6 +13,10 @@ const nextConfig: NextConfig = {
   // fine; only the type-check chokes.
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
+  // 터널(cloudflared 퀵터널 등) 도메인에서 오는 dev 요청·HMR 웹소켓 허용.
+  // 없으면 Next dev가 크로스오리진으로 보고 /_next/* 요청을 거부 → cloudflared
+  // 쪽에 "malformed HTTP response Unauthorized" 에러로 나타난다. dev 전용 설정.
+  allowedDevOrigins: ["*.trycloudflare.com"],
 };
 
 export default nextConfig;

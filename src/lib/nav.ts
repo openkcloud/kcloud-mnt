@@ -13,6 +13,8 @@ import {
   Bell,
   Sparkles,
   Database,
+  ClipboardList,
+  ClipboardCheck,
   type LucideIcon,
 } from "lucide-react";
 import type { Role } from "@/lib/auth";
@@ -60,6 +62,9 @@ const SECTION_OBSERVABILITY: NavSection = {
 const SECTION_CLOUD: NavSection = {
   label: "클라우드 자원",
   items: [
+    // IaaS/PaaS와 별개로 클라우드 자원 바로 아래 배치
+    { label: "자원 요청 관리", href: "/iaas/requests", icon: ClipboardList, roles: ["user"] as Role[] },
+    { label: "신청 관리", href: "/iaas/requests", icon: ClipboardCheck, roles: ["admin"] as Role[] },
     {
       label: "IaaS (OpenStack)",
       href: "/iaas",
@@ -68,12 +73,12 @@ const SECTION_CLOUD: NavSection = {
         { label: "프로젝트", href: "/iaas/projects", icon: Server },
         { label: "가상서버", href: "/iaas/instances", icon: Server },
         { label: "네트워크", href: "/iaas/networks", icon: Server },
-        { label: "라우터", href: "/iaas/routers", icon: Server },
+        { label: "라우터", href: "/iaas/routers", icon: Server, roles: ["admin"] as Role[] },
         { label: "보안 그룹", href: "/iaas/security-groups", icon: Server },
         { label: "키페어", href: "/iaas/keypairs", icon: Server },
-        { label: "볼륨·스토리지", href: "/iaas/volumes", icon: Server },
-        { label: "이미지·플레이버", href: "/iaas/images", icon: Server },
-        { label: "공급자 관리", href: "/iaas/providers", icon: Server },
+        { label: "볼륨·스토리지", href: "/iaas/volumes", icon: Server, roles: ["admin"] as Role[] },
+        { label: "이미지·플레이버", href: "/iaas/images", icon: Server, roles: ["admin"] as Role[] },
+        { label: "공급자 관리", href: "/iaas/providers", icon: Server, roles: ["admin"] as Role[] },
       ],
     },
     {
@@ -180,12 +185,21 @@ export const NAV_SECTIONS: NavSection[] = NAV_SECTIONS_ADMIN;
 // 역할별 사이드바 조회
 // ─────────────────────────────────────────────────────────────
 
+function filterItem(item: NavItem, role: Role): NavItem | null {
+  if (item.roles && !item.roles.includes(role)) return null;
+  // 사용자에게는 인프라 벤더 용어(OpenStack) 노출하지 않음
+  const label = role === "admin" ? item.label : item.label.replace(" (OpenStack)", "");
+  if (!item.children) return { ...item, label };
+  const filtered = item.children.map((c) => filterItem(c, role)).filter(Boolean) as NavItem[];
+  return { ...item, label, children: filtered };
+}
+
 export function getNavByRole(role: Role): NavSection[] {
   const sections = role === "admin" ? NAV_SECTIONS_ADMIN : NAV_SECTIONS_USER;
   return sections
     .map((s) => ({
       ...s,
-      items: s.items.filter((i) => !i.roles || i.roles.includes(role)),
+      items: s.items.map((i) => filterItem(i, role)).filter(Boolean) as NavItem[],
     }))
     .filter((s) => s.items.length > 0);
 }

@@ -55,6 +55,11 @@ export function AppSidebar() {
   );
 }
 
+// trailingSlash:true 환경에서도 활성 판정이 되도록 경로 끝 슬래시 정규화
+function normalizePath(p: string) {
+  return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
+}
+
 function SidebarItem({
   item,
   pathname,
@@ -64,8 +69,10 @@ function SidebarItem({
   pathname: string;
   depth?: number;
 }) {
+  const here = normalizePath(pathname);
+  const target = normalizePath(item.href);
   const isActive =
-    pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+    here === target || (target !== "/" && here.startsWith(target + "/"));
   const hasChildren = !!item.children?.length;
   const [open, setOpen] = React.useState(isActive);
   React.useEffect(() => {
@@ -83,7 +90,7 @@ function SidebarItem({
           className={cn(
             "group flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors",
             "text-sidebar-foreground hover:bg-sidebar-accent hover:text-white",
-            isActive && "bg-sidebar-accent text-white",
+            isActive && "text-white",
           )}
           style={{ paddingLeft: `${0.75 + depth * 0.75}rem` }}
         >
@@ -108,13 +115,13 @@ function SidebarItem({
           <div className="mt-0.5 flex flex-col gap-0.5">
             {item.children!.map((child) => (
               <Link
-                key={child.href}
+                key={child.href + child.label}
                 href={child.href}
                 className={cn(
-                  "flex items-center gap-2.5 rounded-md py-1.5 pl-10 pr-3 text-[12.5px] transition-colors",
+                  "relative flex items-center gap-2.5 rounded-md py-1.5 pl-10 pr-3 text-[12.5px] transition-colors",
                   "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-white",
-                  pathname === child.href &&
-                    "bg-sidebar-accent text-white before:absolute relative before:left-6 before:top-1/2 before:h-1 before:w-1 before:-translate-y-1/2 before:rounded-full before:bg-sidebar-primary",
+                  normalizePath(pathname) === normalizePath(child.href) &&
+                    "bg-sidebar-accent font-semibold text-white before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-r-full before:bg-sidebar-primary",
                 )}
               >
                 {child.label}
@@ -130,9 +137,10 @@ function SidebarItem({
     <Link
       href={item.href}
       className={cn(
-        "group flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors",
+        "group relative flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors",
         "text-sidebar-foreground hover:bg-sidebar-accent hover:text-white",
-        isActive && "bg-sidebar-accent text-white",
+        isActive &&
+          "bg-sidebar-accent font-semibold text-white before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-r-full before:bg-sidebar-primary",
       )}
     >
       <Icon className="size-4 shrink-0" />

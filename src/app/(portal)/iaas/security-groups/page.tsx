@@ -111,7 +111,7 @@ export default function SecurityGroupsPage() {
     <div className="space-y-6">
       <PageHeader
         title="보안 그룹"
-        description="OpenStack Neutron 보안 그룹 — 인바운드/아웃바운드 트래픽 규칙 관리"
+        description="가상머신의 인바운드/아웃바운드 트래픽 규칙(방화벽)을 관리합니다."
         actions={
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="size-4" /> 보안 그룹 생성
