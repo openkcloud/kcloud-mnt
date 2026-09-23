@@ -472,8 +472,10 @@ export interface ResourceRequest {
   acceleratorKind?: string;
   acceleratorCount?: number;
   // Cluster
-  nodeCount?: number;
-  masterCount?: number;
+  clusterName?: string;
+  k8sVersion?: string;
+  nodeCount?: number;      // Worker 노드 수
+  masterCount?: number;    // Control Plane 노드 수
   // Review
   reviewedBy?: string;
   reviewedByName?: string;

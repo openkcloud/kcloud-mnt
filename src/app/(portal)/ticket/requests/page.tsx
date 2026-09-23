@@ -223,8 +223,11 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
           <div className="flex items-center gap-1.5 text-xs font-semibold">
             <Boxes className="size-3.5 text-brand-indigo-600" /> 클러스터 구성
           </div>
+          <Field label="클러스터 이름"><span className="font-mono">{r.clusterName ?? "—"}</span></Field>
+          <Field label="Kubernetes 버전"><span className="font-mono">{r.k8sVersion ? `v${r.k8sVersion}` : "—"}</span></Field>
           <Field label="마스터 노드">{r.masterCount ?? 0} 대</Field>
           <Field label="워커 노드">{r.nodeCount ?? 0} 대</Field>
+          <Field label="노드 Flavor"><span className="font-mono">{r.flavorName ?? "—"}</span></Field>
           <Field label="가속기">{r.acceleratorKind ? `${r.acceleratorKind} × ${r.acceleratorCount ?? 1}` : "없음"}</Field>
         </div>
       )}
@@ -447,7 +450,7 @@ function AdminView() {
   if (statusFilter !== "all") filters.status = statusFilter;
   if (typeFilter !== "all") filters.type = typeFilter;
 
-  const { data, isLoading } = api.iaas.requests(filters) as {
+  const { data, isLoading } = api.ticket.requests(filters) as {
     data: RequestsResp | undefined;
     isLoading: boolean;
   };
@@ -455,7 +458,7 @@ function AdminView() {
   // 낙관적 업데이트를 위한 로컬 오버라이드
   const [localOverrides, setLocalOverrides] = React.useState<Record<string, RequestStatus>>({});
 
-  const reviewMutation = api.iaas.reviewRequest();
+  const reviewMutation = api.ticket.reviewRequest();
 
   const [confirmDialog, setConfirmDialog] = React.useState<{
     open: boolean;
@@ -745,7 +748,7 @@ function UserView({ userId }: { userId: string }) {
   const filters: Record<string, string> = { requestedBy: userId };
   if (statusFilter !== "all") filters.status = statusFilter;
 
-  const { data, isLoading } = api.iaas.requests(filters) as {
+  const { data, isLoading } = api.ticket.requests(filters) as {
     data: RequestsResp | undefined;
     isLoading: boolean;
   };

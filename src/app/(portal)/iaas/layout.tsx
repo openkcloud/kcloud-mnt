@@ -13,7 +13,6 @@ function normalizePath(p: string) {
 
 // 자체 PageHeader를 렌더링하는 페이지 — layout 헤더는 생략(중복 방지)
 const SELF_HEADER_ROUTES = new Set([
-  "/iaas/requests",
   "/iaas/security-groups",
   "/iaas/keypairs",
   "/iaas/routers",

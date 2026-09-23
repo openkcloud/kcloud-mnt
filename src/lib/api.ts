@@ -47,29 +47,32 @@ export const api = {
     topology: () =>
       useQuery({ queryKey: ["accelerators", "topology"], queryFn: () => get("/api/accelerators/topology") }),
   },
-  iaas: {
+  // 자원 신청(티켓) — VM·서비스 클러스터 공통
+  ticket: {
     requests: (q?: Record<string, string>) => {
       const search = q ? "?" + new URLSearchParams(q).toString() : "";
       return useQuery({
-        queryKey: ["iaas", "requests", q],
-        queryFn: () => get(`/api/iaas/requests${search}`),
+        queryKey: ["ticket", "requests", q],
+        queryFn: () => get(`/api/ticket/requests${search}`),
       });
     },
     reviewRequest: () => {
       const qc = useQueryClient();
       return useMutation({
         mutationFn: ({ id, action, reason }: { id: string; action: "approve" | "reject"; reason?: string }) =>
-          patch(`/api/iaas/requests/${id}`, { action, reason }),
-        onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas", "requests"] }),
+          patch(`/api/ticket/requests/${id}`, { action, reason }),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ["ticket", "requests"] }),
       });
     },
     createRequest: () => {
       const qc = useQueryClient();
       return useMutation({
-        mutationFn: (payload: Record<string, unknown>) => post(`/api/iaas/requests`, payload),
-        onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas", "requests"] }),
+        mutationFn: (payload: Record<string, unknown>) => post(`/api/ticket/requests`, payload),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ["ticket", "requests"] }),
       });
     },
+  },
+  iaas: {
     pools: () => useQuery({ queryKey: ["iaas", "pools"], queryFn: () => get("/api/iaas/pools") }),
     projects: () => useQuery({ queryKey: ["iaas", "projects"], queryFn: () => get("/api/iaas/projects") }),
     instances: (q?: Record<string, string>) => {

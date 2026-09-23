@@ -63,8 +63,8 @@ const SECTION_CLOUD: NavSection = {
   label: "클라우드 자원",
   items: [
     // IaaS/PaaS와 별개로 클라우드 자원 바로 아래 배치
-    { label: "자원 요청 관리", href: "/iaas/requests", icon: ClipboardList, roles: ["user"] as Role[] },
-    { label: "신청 관리", href: "/iaas/requests", icon: ClipboardCheck, roles: ["admin"] as Role[] },
+    { label: "자원 요청 관리", href: "/ticket/requests", icon: ClipboardList, roles: ["user"] as Role[] },
+    { label: "신청 관리", href: "/ticket/requests", icon: ClipboardCheck, roles: ["admin"] as Role[] },
     {
       label: "IaaS (OpenStack)",
       href: "/iaas",
