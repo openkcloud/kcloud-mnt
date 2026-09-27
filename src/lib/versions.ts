@@ -40,7 +40,7 @@ export const CURRENT_VERSION: MockupVersion = {
   id: "v2.1",
   label: "AI 노트북 재편 반영본",
   date: "2026-09-27",
-  commit: "pending",
+  commit: "ca784ca",
   status: "current",
   basis: "ETRI 검토 의견 44건(2026-06-15) · 포털 기능 검토 회의록 v1.1(2026-07-02) · 2차년도 2차 워크샵(2026-08-27~28) · 4차 기관 협조 회의(2026-09-16) · 이노그리드 모니터링 API v0.2(2026-09-11) · ETRI AI 노트북 추가 피드백(2026-09-24)",
   summary:
