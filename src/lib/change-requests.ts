@@ -4,13 +4,14 @@
  *   OVW 개요 · OBS 옵저버빌리티 · NAV 메뉴·형상 · IAAS 클라우드 자원(IaaS) · PAAS 클라우드 자원(PaaS)
  *   MKT 서비스 마켓플레이스 · AID AI 개발환경 · IAM 운영(IAM) · INF AI 인프라 · DOC 문서·프로세스
  * 출처(SOURCES): ETRI-260615 검토 의견 44건 / MTG-260702 포털 기능 검토 회의록 v1.1 / WS-260828 2차 워크샵 / OKE-260914 오케스트로 내부 확인 / MTG-260916 4차 기관 협조 회의
+ *   / API-260911 이노그리드 모니터링 API / OKE-260919 내부 확인 / ETRI-260924 AI 노트북 추가 피드백 / OKE-260927 AI 노트북 메뉴안 결정
  *
  * 이 파일은 /changes 페이지, 화면 안 변경 표시(ChangeMark·ChangePanel), docs/변경요구사항_대비표.md(export 스크립트)의 단일 원천이다.
  * node --strip-types 로 읽히도록 enum·데코레이터 없이 작성한다. */
 
 export type CrStatus = "reflected" | "partial" | "pending" | "excluded" | "planned";
 export type CrArea = "OVW" | "OBS" | "NAV" | "IAAS" | "PAAS" | "MKT" | "AID" | "IAM" | "INF" | "DOC";
-export type SourceId = "ETRI-260615" | "MTG-260702" | "WS-260828" | "OKE-260914" | "MTG-260916" | "API-260911" | "OKE-260919";
+export type SourceId = "ETRI-260615" | "MTG-260702" | "WS-260828" | "OKE-260914" | "MTG-260916" | "API-260911" | "OKE-260919" | "ETRI-260924" | "OKE-260927";
 
 export interface SourceDoc {
   id: SourceId;
@@ -29,6 +30,8 @@ export const SOURCES: Record<SourceId, SourceDoc> = {
   "MTG-260916": { id: "MTG-260916", title: "2차년도 오케스트로 4차 기관 협조 회의", date: "2026-09-16", org: "ETRI·KETI·이노그리드·오케스트로AGI", kind: "회의록" },
   "API-260911": { id: "API-260911", title: "(AI반도체) 모니터링 API 명세서 v0.2 — KCloud Monitor API v2", date: "2026-09-11", org: "이노그리드", kind: "API 명세" },
   "OKE-260919": { id: "OKE-260919", title: "오케스트로 내부 확인 (마켓플레이스 범위·화면 문구)", date: "2026-09-19", org: "오케스트로", kind: "내부확인" },
+  "ETRI-260924": { id: "ETRI-260924", title: "AI 노트북 추가 피드백 (사용 시나리오·테넌트 구분)", date: "2026-09-24", org: "ETRI", kind: "검토의견" },
+  "OKE-260927": { id: "OKE-260927", title: "오케스트로 내부 확인 (AI 노트북 메뉴 구성안 C 채택)", date: "2026-09-27", org: "오케스트로", kind: "내부확인" },
 };
 
 export interface CrSource {
@@ -89,6 +92,8 @@ const O = (ref: string, said: string): CrSource => ({ doc: "OKE-260914", ref, sa
 const G = (ref: string, said: string): CrSource => ({ doc: "MTG-260916", ref, said });
 const A = (ref: string, said: string): CrSource => ({ doc: "API-260911", ref, said });
 const K = (ref: string, said: string): CrSource => ({ doc: "OKE-260919", ref, said });
+const F = (ref: string, said: string): CrSource => ({ doc: "ETRI-260924", ref, said });
+const D = (ref: string, said: string): CrSource => ({ doc: "OKE-260927", ref, said });
 
 export const CHANGE_REQUESTS: ChangeRequest[] = [
   // ── OVW 개요 ────────────────────────────────────────────────
@@ -207,11 +212,11 @@ export const CHANGE_REQUESTS: ChangeRequest[] = [
   {
     id: "CR-OBS-08", area: "OBS", title: "로그 이벤트 — 이노그리드 UI 제안 대기",
     pages: ["/monitoring/logs"],
-    sources: [E("#10", "이슈 없음"), M("§2.1 로그 이벤트", "이노그리드가 UI 기능 정의·목업 제안"), W("이노그리드 p.25", "Loki 조회 API 구현 중, 지표 이상 시각으로 범위를 좁혀 조회")],
+    sources: [E("#10", "이슈 없음"), M("§2.1 로그 이벤트", "이노그리드가 UI 기능 정의·목업 제안"), W("이노그리드 p.25", "Loki 조회 API 구현 중, 지표 이상 시각으로 범위를 좁혀 조회"), A("Logs", "로그 조회·스트리밍·내보내기·볼륨 통계 API")],
     before: "Loki LogQL 콘솔.",
-    after: "자리표시자 안내. Loki 실시간 로그 API(2차년도 옵저버빌리티 2종) 연결 예정 표기.",
-    status: "pending",
-    history: [{ date: "2026-09-14", note: "안내 반영" }],
+    after: "모니터링 API v2 로그 도메인 기준으로 화면을 구성해 대기를 해소했다(CR-OBS-13). UI 제안을 기다리지 않고 API 제공 범위를 화면 기준으로 삼는다.",
+    status: "reflected",
+    history: [{ date: "2026-09-14", note: "안내 반영" }, { date: "2026-09-19", note: "API v0.2 기준 로그 화면으로 대기 해소" }],
     decision: [14],
   },
   {
@@ -408,7 +413,17 @@ export const CHANGE_REQUESTS: ChangeRequest[] = [
     status: "reflected",
     history: [{ date: "2026-09-14", note: "탭 자리 추가" }],
     feature: "iaas.images.packaging", decision: [13],
+  },  {
+    id: "CR-IAAS-10", area: "IAAS", title: "프로젝트 상세 — AI 워크스페이스 탭",
+    pages: ["/iaas/projects"],
+    sources: [F("시나리오", "사용자가 IaaS·PaaS 자원을 할당받고, 그 위에 AI 노트북 자원을 할당받아 AI를 돌리는 흐름을 보여줄 것"), D("결정 1", "프로젝트 화면에서도 AI 자원을 보여준다")],
+    before: "프로젝트 상세 4탭(개요·쿼터·멤버·자원). AI 자원은 ‘자원’ 탭의 Profile 이름 한 줄.",
+    after: "‘AI 워크스페이스’ 탭 — 프로젝트 쿼터 대비 AI가 쓰는 가속기·디스크, 노트북·파이프라인·서비스 수, 노트북 목록, AI 개발환경으로 이동. 가속기 쿼터가 있는 프로젝트에만. AI 노트북 화면 상단 ‘프로젝트에서 보기’로 되돌아온다.",
+    status: "reflected",
+    history: [{ date: "2026-09-26", note: "메뉴안 C 구현" }, { date: "2026-09-27", note: "C안 확정" }],
+    decision: [17],
   },
+
 
   // ── PAAS ─────────────────────────────────────────────────────
   {
@@ -490,29 +505,29 @@ export const CHANGE_REQUESTS: ChangeRequest[] = [
     id: "CR-MKT-01", area: "MKT", title: "실행 대상·방식 구체화 — 시그니처 시나리오",
     pages: ["/catalog"],
     sources: [E("#29", "카드 선택 후 실행 대상·방식이 구체적이지 않음"), M("§2.3", "실행 대상·방식 구체화 필요"),
-      K("마켓플레이스 범위", "시그니처 시나리오는 2차년도 시범서비스 범위에서 제외")],
+      K("마켓플레이스 범위", "시그니처 시나리오는 2차년도 시범서비스 범위에서 제외"), K("화면 문구", "서비스 마켓플레이스에서 시그니처 시나리오 제외")],
     before: "모델 카드 33종 목록만.",
-    after: "원클릭 챗봇·이미지 생성·음성 STT/TTS 대표 시나리오 카드.",
-    status: "reflected",
-    history: [{ date: "2026-07-22", note: "시그니처", commit: "99e9cfa" }],
+    after: "대표 시나리오 카드(원클릭 챗봇·이미지 생성·음성 STT/TTS) 영역을 화면에서 뺐다. 실행 방식은 배포 위저드(CR-MKT-02)로 남는다.",
+    status: "excluded",
+    history: [{ date: "2026-07-22", note: "시그니처", commit: "99e9cfa" }, { date: "2026-09-19", note: "시그니처 시나리오 영역 제외" }],
   },
   {
     id: "CR-MKT-02", area: "MKT", title: "조합형 실행 흐름 — 카드 → 모델 → 가속기 → 인프라 → 실행",
     pages: ["/catalog"],
     sources: [E("#30", "조합형 실행 플로우"), M("§2.3", "서비스 카드 선택 → 모델 → 가속기 → 인프라 유형 → 실행")],
     before: "실행 흐름 없음.",
-    after: "4단계 배포 위저드(모델→가속기→인프라→확인·실행). 흐름 문구를 회의록과 통일.",
+    after: "4단계 배포 위저드(모델→가속기→인프라→확인·실행). 시그니처 시나리오 제외 후에는 애플리케이션 카드의 ‘배포 위저드 열기’에서 연다.",
     status: "reflected",
-    history: [{ date: "2026-07-22", note: "위저드", commit: "99e9cfa" }, { date: "2026-09-14", note: "문구 통일" }],
+    history: [{ date: "2026-07-22", note: "위저드", commit: "99e9cfa" }, { date: "2026-09-14", note: "문구 통일" }, { date: "2026-09-19", note: "진입점을 애플리케이션 카드로 이동" }],
   },
   {
     id: "CR-MKT-03", area: "MKT", title: "원클릭 LLM 챗봇 — 통합 시연, ETRI Chatbot 서비스 연계",
     pages: ["/catalog"],
-    sources: [E("#31", "원클릭 LLM 응용(챗봇) 통합 시연"), M("§2.3", "통합 시연 공간으로 활용"), W("ETRI p.7~8, 13", "Chatbot 기반 cloud service, DevDay 'Chatbot + 자원할당' 세션")],
+    sources: [E("#31", "원클릭 LLM 응용(챗봇) 통합 시연"), M("§2.3", "통합 시연 공간으로 활용"), W("ETRI p.7~8, 13", "Chatbot 기반 cloud service, DevDay 'Chatbot + 자원할당' 세션"), K("화면 문구", "서비스 마켓플레이스에서 시그니처 시나리오 제외")],
     before: "챗봇 시나리오 없음.",
-    after: "대표 카드 '원클릭 챗봇 배포' + 자동 배포 흐름. ETRI Chatbot 서비스 연계를 카드에 표기.",
-    status: "reflected",
-    history: [{ date: "2026-07-22", note: "대표 카드", commit: "99e9cfa" }, { date: "2026-09-15", note: "ETRI Chatbot 연계 표기" }],
+    after: "원클릭 챗봇 대표 카드를 시그니처 시나리오 영역과 함께 화면에서 뺐다. 챗봇 앱은 애플리케이션 레벨 카드(CR-MKT-04, 최종 형상)에 남는다.",
+    status: "excluded",
+    history: [{ date: "2026-07-22", note: "대표 카드", commit: "99e9cfa" }, { date: "2026-09-15", note: "ETRI Chatbot 연계 표기" }, { date: "2026-09-19", note: "시그니처 시나리오와 함께 제외" }],
   },
   {
     id: "CR-MKT-04", area: "MKT", title: "애플리케이션 레벨 실행(최종 형상)",
@@ -539,11 +554,11 @@ export const CHANGE_REQUESTS: ChangeRequest[] = [
   {
     id: "CR-AID-01", area: "AID", title: "Kubeflow 사용 순서 가이드",
     pages: ["/ai-development"],
-    sources: [E("#32 §6.A", "Kubeflow 사용 순서 가이드")],
+    sources: [E("#32 §6.A", "Kubeflow 사용 순서 가이드"), F("시나리오", "사용자가 IaaS·PaaS 자원을 할당받고, 그 위에 AI 노트북 자원을 할당받아 AI를 돌리는 흐름을 보여줄 것")],
     before: "메뉴 설명 카드만.",
-    after: "자원 신청 → Profile → 모델 → 노트북 → 파이프라인 → HPO → 서빙 → API 8단계 가이드, 단계별 링크.",
+    after: "개요 맨 위 자원 흐름 밴드 — 프로젝트 자원(IaaS·PaaS) → 워크스페이스 → 개발환경 → 학습 → 모델 배포 → 성능 분석. 현재 프로젝트 수치를 보여주고 번호가 화면 탭과 같다.",
     status: "reflected",
-    history: [{ date: "2026-07-22", note: "가이드", commit: "755af71" }],
+    history: [{ date: "2026-07-22", note: "8단계 가이드(자원 신청 → Profile → 모델 → 노트북 → 파이프라인 → HPO → 서빙 → API)", commit: "755af71" }, { date: "2026-09-27", note: "가이드를 자원 흐름 밴드로 대체 — 메뉴 순서(CR-AID-10)와 일치" }],
   },
   {
     id: "CR-AID-02", area: "AID", title: "Pipeline YAML 업로드",
@@ -569,9 +584,9 @@ export const CHANGE_REQUESTS: ChangeRequest[] = [
     pages: ["/ai-development/experiments"],
     sources: [E("#35", "HPO 명칭 변경")],
     before: "'Experiments' 단독 표기.",
-    after: "페이지·메뉴 'Experiments (HPO)'.",
+    after: "메뉴·페이지 이름을 ‘실험 (HPO)’로 통일. ‘학습’ 아래 서브탭(최종 형상).",
     status: "reflected",
-    history: [{ date: "2026-07-22", note: "", commit: "755af71" }],
+    history: [{ date: "2026-07-22", note: "", commit: "755af71" }, { date: "2026-09-27", note: "Experiments (HPO) → 실험 (HPO), 학습 서브탭으로 이동" }],
     feature: "ai.experiments",
   },
   {
@@ -620,7 +635,35 @@ export const CHANGE_REQUESTS: ChangeRequest[] = [
     after: "형상 안내 배너. Profiles·Notebooks·Pipelines·Serving·모델 구조 시각화는 2차년도, Experiments(HPO)·MLPerf·KV Cache·자동 진단은 최종 형상.",
     status: "reflected",
     history: [{ date: "2026-09-14", note: "태그·안내" }],
+  },  {
+    id: "CR-AID-10", area: "AID", title: "AI 노트북 메뉴를 사용 순서로 재편",
+    pages: ["/ai-development", "/ai-development/pipelines", "/ai-development/experiments"],
+    sources: [F("시나리오", "사용자가 IaaS·PaaS 자원을 할당받고, 그 위에 AI 노트북 자원을 할당받아 AI를 돌리는 흐름을 보여줄 것"), D("결정 1", "메뉴 구성안 C 채택 — 사용 순서 메뉴 + 프로젝트 쪽 진입점. 좌측 메뉴에는 번호를 붙이지 않는다")],
+    before: "Kubeflow 구성요소 이름 그대로의 메뉴(Profiles·Notebooks·Pipelines·Experiments·Serving 등).",
+    after: "워크스페이스 → 개발환경 → 학습 → 모델 배포 → 성능 분석. 파이프라인·실험(HPO)은 ‘학습’ 아래 서브탭. 화면 탭에는 ①~⑤ 번호, 좌측 메뉴는 번호 없음. 라우트는 그대로라 구현 화면을 그대로 쓴다.",
+    status: "reflected",
+    history: [{ date: "2026-09-26", note: "메뉴 구성안 A·B·C 구현 비교" }, { date: "2026-09-27", note: "C안 채택, 좌측 메뉴 번호 제거" }],
+    decision: [17],
   },
+  {
+    id: "CR-AID-11", area: "AID", title: "프로젝트(테넌트) 단위로 AI 노트북 구분",
+    pages: ["/ai-development", "/ai-development/notebooks", "/ai-development/pipelines", "/ai-development/experiments", "/ai-development/serving"],
+    sources: [F("테넌트", "AI 노트북 기능에 테넌트 단위 구분이 없다"), G("검토 의견 ①", "OpenStack 프로젝트와 Kubeflow Profile 1:1 연계, 자원 격리")],
+    before: "모든 프로젝트의 노트북·파이프라인·서빙이 한 목록에 섞여 보임. 노트북 화면에만 네임스페이스 필터.",
+    after: "헤더 프로젝트 선택기 하나로 AI 노트북 전 화면을 그 프로젝트로 거른다. 사용자는 소속 프로젝트만, 전체 보기는 관리자만. 화면별 네임스페이스 필터는 없앴다. 실제 격리(세션의 소속 프로젝트, 목록·생성 API 범위 제한)는 포털 구현 때 백엔드에 넣는다.",
+    status: "reflected",
+    history: [{ date: "2026-09-26", note: "프로젝트 선택기·화면 필터" }, { date: "2026-09-27", note: "C안 확정" }],
+  },
+  {
+    id: "CR-AID-12", area: "AID", title: "워크스페이스 = 프로젝트 1:1, 승인 시 자동 생성",
+    pages: ["/ai-development/profiles"],
+    sources: [G("검토 의견 ①", "OpenStack 프로젝트 = Kubeflow Profile 1:1인지"), F("테넌트", "AI 노트북 기능에 테넌트 단위 구분이 없다")],
+    before: "Profiles 화면에서 사용자가 Profile을 따로 생성.",
+    after: "워크스페이스 이름 = 프로젝트 이름, 프로젝트 승인 시 자동 생성(생성 버튼 → 프로젝트 자원 신청). 카드에 프로젝트 ID. 관리자는 프로젝트·조직·네임스페이스·가속기·노트북·파이프라인·서비스 전체 현황 표.",
+    status: "reflected",
+    history: [{ date: "2026-09-26", note: "자동 생성 전제·관리자 현황 표" }, { date: "2026-09-27", note: "C안 확정" }],
+  },
+
 
   // ── IAM ──────────────────────────────────────────────────────
   {

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { useProjectContext } from "@/lib/project-context";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -63,8 +64,10 @@ export default function PipelinesPage() {
   };
   const [selected, setSelected] = React.useState<string | undefined>();
   const [uploadOpen, setUploadOpen] = React.useState(false);
+  const { match } = useProjectContext();
   if (isLoading || !data) return <Skeleton className="h-96" />;
-  const active = selected ? data.items.find((p) => p.id === selected) : data.items[0];
+  const items = data.items.filter((p) => match(p.namespace));
+  const active = (selected ? items.find((p) => p.id === selected) : undefined) ?? items[0];
 
   return (
     <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
@@ -75,7 +78,7 @@ export default function PipelinesPage() {
           <CardTitle className="flex items-center justify-between text-base">
             <span>파이프라인</span>
             <div className="flex items-center gap-2">
-              <Badge variant="ghost">{data.items.length}</Badge>
+              <Badge variant="ghost">{items.length}</Badge>
               <ChangeMark ids={["CR-AID-02"]} inline><Button size="sm" onClick={() => setUploadOpen(true)}>
                 <Upload className="size-3.5" /> YAML 업로드
               </Button></ChangeMark>
@@ -87,7 +90,7 @@ export default function PipelinesPage() {
         </CardHeader>
         <CardContent className="p-0">
           <div className="divide-y divide-border">
-            {data.items.map((p) => (
+            {items.map((p) => (
               <button
                 key={p.id}
                 onClick={() => setSelected(p.id)}
@@ -276,7 +279,8 @@ function PipelineStep({
 
 function UploadPipelineDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = React.useState("");
-  const [ns, setNs] = React.useState("ai-research");
+  const { current } = useProjectContext();
+  const [ns, setNs] = React.useState(current === "all" ? "ai-research" : current);
   const [fileName, setFileName] = React.useState<string | null>(null);
   const [pastedYaml, setPastedYaml] = React.useState("");
   const [mode, setMode] = React.useState<"file" | "paste">("file");

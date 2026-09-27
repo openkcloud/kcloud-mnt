@@ -1,6 +1,7 @@
 "use client";
 import { Send, Activity, Cpu } from "lucide-react";
 import { api } from "@/lib/api";
+import { useProjectContext } from "@/lib/project-context";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,10 +13,18 @@ export default function ServingPage() {
     data: { items: KFInferenceService[] } | undefined;
     isLoading: boolean;
   };
+  const { match, isAll } = useProjectContext();
   if (isLoading || !data) return <Skeleton className="h-96" />;
+  const items = data.items.filter((x) => match(x.namespace));
+  if (!items.length)
+    return (
+      <Card>
+        <CardContent className="p-10 text-center text-sm text-muted-foreground">이 프로젝트에 배포된 모델 서비스가 없다.</CardContent>
+      </Card>
+    );
   return (
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-      {data.items.map((s) => (
+      {items.map((s) => (
         <Card key={s.id}>
           <CardContent className="space-y-4 p-5">
             <div className="flex items-start justify-between">
@@ -43,9 +52,14 @@ export default function ServingPage() {
             </div>
 
             <div className="flex items-center justify-between text-xs">
-              <Badge variant="outline" className="gap-1">
-                <Cpu className="size-3" /> {s.acceleratorKind}
-              </Badge>
+              <div className="flex items-center gap-1">
+                <Badge variant="outline" className="gap-1">
+                  <Cpu className="size-3" /> {s.acceleratorKind}
+                </Badge>
+                {isAll && s.namespace && (
+                  <Badge variant="ghost" className="font-mono text-[10px]">{s.namespace}</Badge>
+                )}
+              </div>
               <div className="flex items-center gap-1 text-muted-foreground">
                 <Activity className="size-3" />
                 실시간

@@ -138,7 +138,7 @@ function SidebarItem({
                 className={cn(
                   "flex items-center gap-2.5 rounded-md py-1.5 pl-10 pr-3 text-[12.5px] transition-colors",
                   "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-white",
-                  pathname === child.href &&
+                  (pathname === child.href || child.match?.some((m) => pathname.startsWith(m))) &&
                     "bg-sidebar-accent text-white before:absolute relative before:left-6 before:top-1/2 before:h-1 before:w-1 before:-translate-y-1/2 before:rounded-full before:bg-sidebar-primary",
                 )}
               >

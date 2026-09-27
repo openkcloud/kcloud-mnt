@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getNavByRole } from "@/lib/nav";
+import { ProjectSwitcher } from "@/components/project-switcher";
 
 function findCrumbs(pathname: string, role: Role) {
   const crumbs: { label: string; href: string }[] = [];
@@ -29,7 +30,7 @@ function findCrumbs(pathname: string, role: Role) {
       if (pathname === item.href || pathname.startsWith(item.href + "/")) {
         crumbs.push({ label: item.label, href: item.href });
         if (item.children) {
-          const child = item.children.find((c) => pathname === c.href);
+          const child = item.children.find((c) => pathname === c.href || c.match?.some((m) => pathname.startsWith(m)));
           if (child) crumbs.push({ label: child.label, href: child.href });
         }
       }
@@ -53,8 +54,9 @@ export function AppHeader() {
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-border bg-card/80 px-6 backdrop-blur supports-[backdrop-filter]:bg-card/60">
-      <div className="flex flex-1 items-center gap-3">
-        <div className="flex items-center gap-1 text-sm text-muted-foreground">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        <ProjectSwitcher />
+        <div className="flex min-w-0 items-center gap-1 truncate whitespace-nowrap text-sm text-muted-foreground">
           {crumbs.map((c, i) => (
             <React.Fragment key={c.href}>
               {i > 0 && <span className="text-border">/</span>}
@@ -70,12 +72,12 @@ export function AppHeader() {
             </React.Fragment>
           ))}
         </div>
-        <Badge variant="ghost" className="hidden gap-1 lg:inline-flex" title="KCloud Monitor API v2.0 호환">
+        <Badge variant="ghost" className="hidden shrink-0 gap-1 whitespace-nowrap 2xl:inline-flex" title="KCloud Monitor API v2.0 호환">
           <span className="size-1.5 rounded-full bg-brand-mint-500" />
           <span className="font-mono text-[10px]">KCloud v2 · observed 30s ago</span>
         </Badge>
         <Link href="/changes" title="초기 전달본 대비 변경 요구사항 대비표">
-          <Badge variant="outline" className="hidden gap-1 hover:bg-muted lg:inline-flex">
+          <Badge variant="outline" className="hidden shrink-0 gap-1 whitespace-nowrap hover:bg-muted xl:inline-flex">
             <ListChecks className="size-3 text-muted-foreground" />
             <span className="font-mono text-[10px]">목업 {CURRENT_VERSION.id} · 변경 {CHANGE_REQUESTS.length}건</span>
           </Badge>
@@ -84,7 +86,7 @@ export function AppHeader() {
           <Badge
             variant="outline"
             className={
-              "hidden gap-1 hover:bg-muted lg:inline-flex " +
+              "hidden shrink-0 gap-1 whitespace-nowrap hover:bg-muted xl:inline-flex " +
               (preset === "final"
                 ? "border-violet-200 bg-violet-50 text-violet-800"
                 : preset === "custom"
@@ -100,12 +102,12 @@ export function AppHeader() {
           </Badge>
         </Link>
       </div>
-      <div className="relative hidden lg:block">
+      <div className="relative hidden 2xl:block">
         <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
         <Input
           type="search"
           placeholder="자원·VM·파드·테넌트 검색…"
-          className="w-72 pl-9"
+          className="w-60 pl-9"
         />
         <kbd className="pointer-events-none absolute right-2 top-2 inline-flex h-5 select-none items-center gap-1 rounded border border-border bg-secondary px-1.5 text-[10px] font-medium text-muted-foreground opacity-100">
           ⌘K

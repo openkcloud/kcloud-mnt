@@ -609,22 +609,23 @@ export const notebooks: KFNotebook[] = [
 ];
 
 export const pipelines: KFPipeline[] = [
-  { id: "pl-1", name: "llama-3-finetune-pipeline", description: "데이터 전처리 → 분산 학습 → 평가 → KServe 배포", ownerId: "u-003", steps: 6, runs: 14, successRate: 0.92, lastRun: "2026-05-30", acceleratorKind: "GPU", status: "Active" },
-  { id: "pl-2", name: "stt-rebellions-pipeline", description: "음성 데이터 정제 → ATOM 양자화 → 추론 검증", ownerId: "u-003", steps: 5, runs: 8, successRate: 0.87, lastRun: "2026-05-28", acceleratorKind: "NPU", status: "Active" },
-  { id: "pl-3", name: "vllm-bench-pipeline", description: "vLLM 추론 벤치마크 자동 실행", ownerId: "u-002", steps: 4, runs: 21, successRate: 0.95, lastRun: "2026-05-31", acceleratorKind: "GPU", status: "Active" },
-  { id: "pl-4", name: "pim-gemv-experiment", description: "HBM-PIM에서 GEMV 가속 실험", ownerId: "u-003", steps: 3, runs: 6, successRate: 0.5, lastRun: "2026-05-25", acceleratorKind: "PIM", status: "Active" },
+  { id: "pl-1", name: "llama-3-finetune-pipeline", description: "데이터 전처리 → 분산 학습 → 평가 → KServe 배포", namespace: "ai-research", ownerId: "u-003", steps: 6, runs: 14, successRate: 0.92, lastRun: "2026-05-30", acceleratorKind: "GPU", status: "Active" },
+  { id: "pl-2", name: "stt-rebellions-pipeline", description: "음성 데이터 정제 → ATOM 양자화 → 추론 검증", namespace: "edge-inference", ownerId: "u-003", steps: 5, runs: 8, successRate: 0.87, lastRun: "2026-05-28", acceleratorKind: "NPU", status: "Active" },
+  { id: "pl-3", name: "vllm-bench-pipeline", description: "vLLM 추론 벤치마크 자동 실행", namespace: "llm-serving", ownerId: "u-002", steps: 4, runs: 21, successRate: 0.95, lastRun: "2026-05-31", acceleratorKind: "GPU", status: "Active" },
+  { id: "pl-4", name: "pim-gemv-experiment", description: "HBM-PIM에서 GEMV 가속 실험", namespace: "ai-research", ownerId: "u-003", steps: 3, runs: 6, successRate: 0.5, lastRun: "2026-05-25", acceleratorKind: "PIM", status: "Active" },
 ];
 
 export const experiments: KFExperiment[] = [
-  { id: "ex-1", name: "llama-lr-search", pipelineId: "pl-1", ownerId: "u-003", objective: "maximize eval_accuracy", goal: 0.88, bestMetric: 0.864, trials: 24, status: "Running", createdAt: "2026-05-22" },
-  { id: "ex-2", name: "vllm-batch-size-tune", pipelineId: "pl-3", ownerId: "u-002", objective: "minimize p95_latency_ms", goal: 80, bestMetric: 92, trials: 18, status: "Succeeded", createdAt: "2026-05-15" },
-  { id: "ex-3", name: "rbln-quant-precision", pipelineId: "pl-2", ownerId: "u-003", objective: "minimize WER", goal: 0.05, bestMetric: 0.058, trials: 12, status: "Running", createdAt: "2026-05-27" },
+  { id: "ex-1", name: "llama-lr-search", pipelineId: "pl-1", namespace: "ai-research", ownerId: "u-003", objective: "maximize eval_accuracy", goal: 0.88, bestMetric: 0.864, trials: 24, status: "Running", createdAt: "2026-05-22" },
+  { id: "ex-2", name: "vllm-batch-size-tune", pipelineId: "pl-3", namespace: "llm-serving", ownerId: "u-002", objective: "minimize p95_latency_ms", goal: 80, bestMetric: 92, trials: 18, status: "Succeeded", createdAt: "2026-05-15" },
+  { id: "ex-3", name: "rbln-quant-precision", pipelineId: "pl-2", namespace: "edge-inference", ownerId: "u-003", objective: "minimize WER", goal: 0.05, bestMetric: 0.058, trials: 12, status: "Running", createdAt: "2026-05-27" },
 ];
 
 export const inferenceServices: KFInferenceService[] = [
-  { id: "is-1", name: "solar-10b-vllm", modelName: "solar-10b-chat", modelVersion: "v1.2", ownerId: "u-002", acceleratorKind: "GPU", replicas: 3, rpsAvg: 124, p95LatencyMs: 980, status: "Ready", endpoint: "https://api.openkcloud.local/v1/solar-10b" },
-  { id: "is-2", name: "stt-rngd-prod", modelName: "korean-stt-large", modelVersion: "v3.1", ownerId: "u-002", acceleratorKind: "NPU", replicas: 2, rpsAvg: 56, p95LatencyMs: 420, status: "Ready", endpoint: "https://api.openkcloud.local/v1/stt-rngd" },
-  { id: "is-3", name: "stt-atom-edge", modelName: "korean-stt-small", modelVersion: "v2.4", ownerId: "u-003", acceleratorKind: "NPU", replicas: 4, rpsAvg: 88, p95LatencyMs: 220, status: "Ready", endpoint: "https://api.openkcloud.local/v1/stt-atom" },
+  { id: "is-1", name: "solar-10b-vllm", modelName: "solar-10b-chat", modelVersion: "v1.2", namespace: "llm-serving", ownerId: "u-002", acceleratorKind: "GPU", replicas: 3, rpsAvg: 124, p95LatencyMs: 980, status: "Ready", endpoint: "https://api.openkcloud.local/v1/solar-10b" },
+  { id: "is-2", name: "stt-rngd-prod", modelName: "korean-stt-large", modelVersion: "v3.1", namespace: "llm-serving", ownerId: "u-002", acceleratorKind: "NPU", replicas: 2, rpsAvg: 56, p95LatencyMs: 420, status: "Ready", endpoint: "https://api.openkcloud.local/v1/stt-rngd" },
+  { id: "is-3", name: "stt-atom-edge", modelName: "korean-stt-small", modelVersion: "v2.4", namespace: "edge-inference", ownerId: "u-003", acceleratorKind: "NPU", replicas: 4, rpsAvg: 88, p95LatencyMs: 220, status: "Ready", endpoint: "https://api.openkcloud.local/v1/stt-atom" },
+  { id: "is-4", name: "llama3-8b-lora-serve", modelName: "llama-3-8b-lora", modelVersion: "v0.3", namespace: "ai-research", ownerId: "u-003", acceleratorKind: "GPU", replicas: 1, rpsAvg: 18, p95LatencyMs: 640, status: "Ready", endpoint: "https://api.openkcloud.local/v1/llama3-8b-lora" },
 ];
 
 // ─────────────────────── Activities & Alerts ───────────────────────

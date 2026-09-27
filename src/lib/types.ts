@@ -378,6 +378,8 @@ export interface KFPipeline {
   description: string;
   ownerId: string;
   steps: number;
+  /** Kubeflow Profile 네임스페이스 = 프로젝트 */
+  namespace?: string;
   runs: number;
   successRate: number;
   lastRun?: string;
@@ -389,6 +391,8 @@ export interface KFExperiment {
   name: string;
   pipelineId: string;
   ownerId: string;
+  /** Kubeflow Profile 네임스페이스 = 프로젝트 */
+  namespace?: string;
   objective: string;
   goal: number;
   bestMetric: number;
@@ -402,6 +406,8 @@ export interface KFInferenceService {
   modelName: string;
   modelVersion: string;
   ownerId: string;
+  /** Kubeflow Profile 네임스페이스 = 프로젝트 */
+  namespace?: string;
   acceleratorKind: AcceleratorKind;
   replicas: number;
   rpsAvg: number;

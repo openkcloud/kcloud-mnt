@@ -2,7 +2,7 @@
 
 > **정부 R&D 과제**: AI반도체 클라우드 플랫폼 구축 및 최적화 기술 개발 (IITP)
 > **작성**: 오케스트로(주) · **연동**: ETRI · 이노그리드 · KETI · 경희대
-> **상태**: 목업 v2.0 반영본 (ETRI 260615 검토 의견 · 260702 회의록 · 2차 워크샵 반영 · 2026-09-15). 초기 전달본 v1.0(2026-06-04) 대비 변경 요구사항 59건은 `docs/변경요구사항_대비표.md`
+> **상태**: 목업 v2.1 반영본 (2026-09-27, 태그 `v2.1`) — v2.0(ETRI 260615 검토 의견 · 260702 회의록 · 2차 워크샵, 2026-09-15) 위에 4차 협조 회의(09-16)·모니터링 API v0.2 정합·ETRI AI 노트북 추가 피드백(09-24)을 반영. 초기 전달본 v1.0(2026-06-04) 대비 변경 요구사항 66건은 `docs/변경요구사항_대비표.md`
 
 이종 AI반도체(GPU·NPU·PIM·HBM-PIM)를 단일 콘솔에서 관리하는 CMP(Cloud Management Platform)의 UI 목업이다.
 OpenStack(IaaS) · Kubernetes(PaaS) · Kubeflow(AI 개발환경) · Rebellions ModelZoo(마켓플레이스)를 하나의 포탈로 통합.
@@ -41,15 +41,15 @@ deploy.bat 더블클릭
 
 로그인 `admin/admin`(관리자) · `user/user`(사용자). 두 사이트 모두 팀 yunhoyoung-okestro. 로고는 GitHub 조직(github.com/openkcloud) 아바타의 구름 K 마크(`public/logo/openkcloud-mark.png`, 파비콘 `src/app/icon.png`)를 쓴다. v1 사이트는 `4bf38da`에 로고 교체만 더한 빌드다. v2.0 갱신은 이 폴더에서 `npm run build` 후 `netlify deploy --dir=out --prod`(폴더가 v2 사이트에 링크됨). v1.0은 frozen이라 재배포하지 않는다(필요 시 `git worktree add .snapshots/v1.0-root 4bf38da` → 빌드 → `netlify deploy --site 1d360e59-a4d6-4478-b7cd-1aa618c1499c --dir=.snapshots/v1.0-root/out --prod`).
 
-## 🗂️ 산출물 구성 (2026-09-15 정리)
+## 🗂️ 산출물 구성 (2026-09-15 정리, 2026-09-27 v2.1 갱신)
 
 | # | 산출물 | 위치 |
 |---|---|---|
 | 1 | **목업 초기 전달본 v1.0** (2026-06-04, `4bf38da`) | 정적 스냅샷 `public/versions/v1.0/` — 배포 `https://openkcloud-cmp-v1.netlify.app/`, 포털 안 `/changes` 화면 비교의 왼쪽 |
-| 2 | **목업 반영본 v2.0** (2026-09-15) — ETRI 260615 검토 의견, 260702 회의록, 2차 워크샵(08-27~28), 내부 확인(09-14)을 반영 | 이 저장소 `main` 작업 트리 — 배포 `https://openkcloud-cmp-v2.netlify.app/` |
+| 2 | **목업 반영본 v2.1** (2026-09-27, 태그 `v2.1`) — v2.0(2026-09-15, `8391ea5`: ETRI 260615 검토 의견, 260702 회의록, 2차 워크샵, 내부 확인 09-14) + 4차 협조 회의(09-16)·모니터링 API v0.2(09-11)·ETRI AI 노트북 추가 피드백(09-24, 메뉴 C안) | 브랜치 `feature/mockup-v2` — 배포 `https://openkcloud-cmp-v2.netlify.app/` |
 | 3 | **변경 요구사항 대비표** — 코드(CR-영역-번호) 채번, 초기 대비 변경 내용, 출처 회의 | `docs/변경요구사항_대비표.md` (원천 `src/lib/change-requests.ts`, `node scripts/export-change-requests.mjs`로 생성) |
 | 4 | **화면 안 변경 표시 기능** — 각 화면에서 요구사항 코드·내용을 바로 확인 | 헤더 "변경 표시" 토글 + `/changes` 대비표 페이지 |
-| 5 | **변경 요구사항 반영 보고서** — 요구사항 한 건당 Before(v1.0)·After(v2.0) 캡처를 좌우 비교, 출처는 회의 날짜, 반영·부분 반영·대기·제외 절 분리 | 단일 파일 `docs/report/변경요구사항_반영보고서_20260915.html`(이미지 내장, 브라우저로 열기) · 분리본 `docs/report/index.html`(+ `img/`) — 생성 스크립트는 kcloud-code-project `docs/artifact-build/`(capture-cr.mjs · build_report.py · inline_report.py · add_marks.py) |
+| 5 | **변경 요구사항 반영 보고서** — 요구사항 한 건당 Before(v1.0)·After(v2.1) 캡처를 좌우 비교, 출처는 회의 날짜, 반영·부분 반영·대기·제외 절 분리 | 단일 파일 `docs/report/변경요구사항_반영보고서_20260927.html`(이미지 내장, 브라우저로 열기) · 분리본 `docs/report/index.html`(+ `img/`) — 생성 스크립트는 kcloud-code-project `docs/artifact-build/`(capture-cr.mjs · build_report.py · inline_report.py · add_marks.py) |
 | 6 | **IaaS·PaaS 버튼 이벤트 명세·작동 점검** — 15개 화면 743개 컨트롤의 이벤트(정적 분석)와 실행 점검(관리자·사용자) 결과, 미작동 13건과 수정·실구현 계획 | `docs/IaaS_PaaS_버튼_이벤트명세_작동점검_20260916.md` — 생성 스크립트는 kcloud-code-project `docs/artifact-build/`(extract_controls.py · qa-iaas-paas.mjs · build_button_audit.py) |
 
 ### 변경 요구사항 대비표 (`/changes`) · 화면 안 변경 표시
@@ -63,7 +63,7 @@ deploy.bat 더블클릭
 | 구성 | 위치 |
 |---|---|
 | 변경 요구사항 데이터(단일 원천) | `src/lib/change-requests.ts` (`CHANGE_REQUESTS`, `SOURCES`) |
-| 버전 메타(v1.0 초기·v2.0 반영본) | `src/lib/versions.ts` |
+| 버전 메타(v1.0 초기·v2.1 반영본, v2.0은 단계 이력) | `src/lib/versions.ts` |
 | 대비표 페이지 | `src/app/(portal)/changes/page.tsx` |
 | 변경 표시 모드 | `src/lib/change-mode.ts`, `src/components/change-mark.tsx`(ChangeMark·ChangeBadge·상세 시트), `src/components/change-panel.tsx`(헤더 토글·패널) |
 | 문서 생성 | `scripts/export-change-requests.mjs` → `docs/변경요구사항_대비표.md` |

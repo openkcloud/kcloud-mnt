@@ -4,6 +4,7 @@ import { ChangeMark } from "@/components/change-mark";
 import { FlaskConical, Target, Plus, Zap, Award, Cpu } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { useProjectContext } from "@/lib/project-context";
 import {
   Card,
   CardContent,
@@ -143,14 +144,16 @@ export default function ExperimentsPage() {
     isLoading: boolean;
   };
   const [createOpen, setCreateOpen] = React.useState(false);
+  const { match } = useProjectContext();
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
+  const items = data.items.filter((e) => match(e.namespace));
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Experiments — Hyperparameter Optimization (HPO)"
-        description="Katib 기반 HPO 실험 + 하드웨어·모델 벤치마크"
+        title="실험 (HPO)"
+        description="Katib 기반 하이퍼파라미터 최적화 실험 + 하드웨어·모델 벤치마크"
         actions={
           <ChangeMark ids={["CR-AID-03"]} inline>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -164,7 +167,7 @@ export default function ExperimentsPage() {
         <ChangeMark ids={["CR-AID-04", "CR-AID-05"]} inline>
           <TabsList>
             <TabsTrigger value="hpo">
-              HPO 실험 ({data.items.length})
+              HPO 실험 ({items.length})
             </TabsTrigger>
             <TabsTrigger value="hw">하드웨어 벤치마크 (MLPerf)</TabsTrigger>
             <TabsTrigger value="model">모델 성능 벤치마크</TabsTrigger>
@@ -186,7 +189,7 @@ export default function ExperimentsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.items.map((e) => {
+                {items.map((e) => {
                   const isMax = e.objective.includes("maximize");
                   const progress = isMax
                     ? Math.min(100, Math.round((e.bestMetric / e.goal) * 100))

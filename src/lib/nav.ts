@@ -32,6 +32,8 @@ export interface NavItem {
   badge?: string;
   /** src/lib/scope.ts FEATURES.id — 형상에서 숨기면 이 항목도 숨긴다 */
   feature?: string;
+  /** 이 경로들에서도 활성으로 표시 (한 메뉴 아래 묶인 서브탭 경로) */
+  match?: string[];
 }
 
 export interface NavSection {
@@ -151,20 +153,22 @@ const SECTION_MARKETPLACE: NavSection = {
   ],
 };
 
+// AI 노트북 — 사용 순서대로: 워크스페이스 → 개발환경 → 학습 → 모델 배포 → 성능 분석.
+// 학습은 파이프라인·실험(HPO)을 서브탭으로 묶는다. 사이드바에는 번호를 붙이지 않는다(화면 안 탭에만).
+const AI = "/ai-development";
 const SECTION_AI_DEV: NavSection = {
   label: "AI 개발환경",
   items: [
     {
       label: "AI 노트북",
-      href: "/ai-development",
+      href: AI,
       icon: BrainCircuit,
       children: [
-        { label: "Profiles (워크스페이스)", href: "/ai-development/profiles", icon: BrainCircuit },
-        { label: "Notebooks (개발환경)", href: "/ai-development/notebooks", icon: BrainCircuit },
-        { label: "Pipelines (워크플로우)", href: "/ai-development/pipelines", icon: BrainCircuit },
-        { label: "Experiments (HPO)", href: "/ai-development/experiments", icon: BrainCircuit, feature: "ai.experiments" },
-        { label: "Serving (모델 배포)", href: "/ai-development/serving", icon: BrainCircuit },
-        { label: "워크플로우 병목 분석", href: "/ai-development/model-insights", icon: BrainCircuit },
+        { label: "워크스페이스", href: `${AI}/profiles`, icon: BrainCircuit },
+        { label: "개발환경", href: `${AI}/notebooks`, icon: BrainCircuit },
+        { label: "학습", href: `${AI}/pipelines`, icon: BrainCircuit, match: [`${AI}/experiments`] },
+        { label: "모델 배포", href: `${AI}/serving`, icon: BrainCircuit },
+        { label: "성능 분석", href: `${AI}/model-insights`, icon: BrainCircuit },
       ],
     },
   ],

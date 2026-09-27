@@ -12,6 +12,7 @@ import {
   Plus,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { ChangeMark } from "@/components/change-mark";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -35,6 +36,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { useRouter } from "next/navigation";
+import { useProjectContext } from "@/lib/project-context";
+import { useFeatureVisible } from "@/lib/scope";
+import { notebooks as NB, pipelines as PL, experiments as EX, inferenceServices as SV } from "@/mocks/fixtures";
 import {
   Table,
   TableBody,
@@ -69,8 +74,21 @@ export default function ProjectsPage() {
     isLoading: boolean;
   };
   const [selected, setSelected] = React.useState<Tenant | undefined>();
+  const [initialTab, setInitialTab] = React.useState("overview");
   const [createOpen, setCreateOpen] = React.useState(false);
   const [q, setQ] = React.useState("");
+
+  // ?open=<프로젝트 ID>&tab=<탭> 으로 상세 시트를 바로 연다 (AI 노트북 화면에서 넘어올 때). 가속기 쿼터가 없으면 AI 탭이 없다
+  React.useEffect(() => {
+    if (!data) return;
+    const sp = new URLSearchParams(window.location.search);
+    const t = data.items.find((x) => x.id === sp.get("open"));
+    if (t) {
+      const tab = sp.get("tab");
+      setInitialTab(tab === "ai" && !t.quotaAcc ? "resources" : tab ?? "overview");
+      setSelected(t);
+    }
+  }, [data]);
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const items = data.items.filter((t) => !q || t.name.toLowerCase().includes(q.toLowerCase()));
@@ -95,7 +113,7 @@ export default function ProjectsPage() {
           const ramPct = Math.round((t.usedRamGb / t.quotaRamGb) * 100);
           const accPct = t.quotaAcc ? Math.round((t.usedAcc / t.quotaAcc) * 100) : 0;
           return (
-            <Card key={t.id} className="cursor-pointer overflow-hidden transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md" onClick={() => setSelected(t)}>
+            <Card key={t.id} className="cursor-pointer overflow-hidden transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md" onClick={() => { setInitialTab("overview"); setSelected(t); }}>
               <CardContent className="space-y-4 p-5">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3">
@@ -124,7 +142,7 @@ export default function ProjectsPage() {
                   </span>
                   <span>생성 {t.createdAt}</span>
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    <Button variant="ghost" size="sm" onClick={() => { setSelected(t); }}>
+                    <Button variant="ghost" size="sm" onClick={() => { setInitialTab("overview"); setSelected(t); }}>
                       <Settings className="size-3.5" /> 관리
                     </Button>
                   </div>
@@ -137,7 +155,7 @@ export default function ProjectsPage() {
 
       <Sheet open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
         <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-2xl">
-          {selected && <ProjectDetailPanel project={selected} />}
+          {selected && <ProjectDetailPanel key={selected.id + initialTab} project={selected} initialTab={initialTab} />}
         </SheetContent>
       </Sheet>
 
@@ -146,7 +164,7 @@ export default function ProjectsPage() {
   );
 }
 
-function ProjectDetailPanel({ project: t }: { project: Tenant }) {
+function ProjectDetailPanel({ project: t, initialTab = "overview" }: { project: Tenant; initialTab?: string }) {
   const cpuPct = Math.round((t.usedVcpu / t.quotaVcpu) * 100);
   const ramPct = Math.round((t.usedRamGb / t.quotaRamGb) * 100);
   const accPct = t.quotaAcc ? Math.round((t.usedAcc / t.quotaAcc) * 100) : 0;
@@ -165,13 +183,22 @@ function ProjectDetailPanel({ project: t }: { project: Tenant }) {
         </div>
       </SheetHeader>
       <div className="space-y-4 p-6">
-        <Tabs defaultValue="overview">
+        <Tabs defaultValue={initialTab}>
           <TabsList>
             <TabsTrigger value="overview">개요</TabsTrigger>
             <TabsTrigger value="quota">쿼터</TabsTrigger>
             <TabsTrigger value="members">멤버 ({t.members})</TabsTrigger>
             <TabsTrigger value="resources">자원</TabsTrigger>
+            {t.quotaAcc > 0 && <TabsTrigger value="ai">AI 워크스페이스</TabsTrigger>}
           </TabsList>
+
+          {t.quotaAcc > 0 && (
+            <TabsContent value="ai" className="space-y-3 pt-3">
+              <ChangeMark ids={["CR-IAAS-10"]}>
+                <ProjectAIWorkspace project={t} />
+              </ChangeMark>
+            </TabsContent>
+          )}
 
           <TabsContent value="overview" className="space-y-2 pt-3">
             <Card className="space-y-2 p-4 text-xs">
@@ -349,5 +376,67 @@ function KV({ label, value, mono }: { label: string; value: string; mono?: boole
       <span className="text-muted-foreground">{label}</span>
       <span className={mono ? "font-mono text-right" : "text-right"}>{value}</span>
     </div>
+  );
+}
+
+/** 프로젝트가 받은 자원 안에서 AI 노트북이 쓰는 몫을 한 화면에서 보여준다 */
+function ProjectAIWorkspace({ project: t }: { project: Tenant }) {
+  const router = useRouter();
+  const { setCurrent } = useProjectContext();
+  const nbs = NB.filter((n) => n.namespace === t.name);
+  const pls = PL.filter((n) => n.namespace === t.name);
+  const exs = EX.filter((n) => n.namespace === t.name);
+  const svs = SV.filter((n) => n.namespace === t.name);
+  const accInAI = nbs.reduce((a, n) => a + n.acceleratorCount, 0) + svs.length;
+  const experimentsOn = useFeatureVisible("ai.experiments");
+  const storageGb = nbs.reduce((a, n) => a + n.storageGb, 0);
+  function open(path = "/ai-development") {
+    setCurrent(t.name);
+    router.push(path);
+  }
+  return (
+    <>
+      <Card className="space-y-3 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">워크스페이스 <span className="font-mono">{t.name}</span></div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground">
+              Kubeflow Profile · 네임스페이스 <span className="font-mono">{t.name}</span> · 라벨{" "}
+              <span className="font-mono">openkcloud.io/project-id={t.id}</span>
+            </div>
+          </div>
+          <Badge variant="success" className="shrink-0">Active</Badge>
+        </div>
+        <div className={`grid gap-2 rounded-lg bg-secondary/40 p-3 ${experimentsOn ? "grid-cols-4" : "grid-cols-3"}`}>
+          <Stat label="노트북" value={`${nbs.length}`} />
+          <Stat label="파이프라인" value={`${pls.length}`} />
+          {experimentsOn && <Stat label="실험" value={`${exs.length}`} />}
+          <Stat label="서비스" value={`${svs.length}`} />
+        </div>
+        <div className="space-y-2.5">
+          <QuotaRow label="AI가 쓰는 가속기 (프로젝트 쿼터 대비)" used={Math.min(accInAI, t.quotaAcc)} max={t.quotaAcc} pct={Math.round((Math.min(accInAI, t.quotaAcc) / t.quotaAcc) * 100)} unit="장" />
+          <QuotaRow label="노트북 볼륨 (프로젝트 디스크 대비)" used={Math.round(storageGb / 100) / 10} max={t.quotaDiskTb} pct={Math.round((storageGb / 1000 / t.quotaDiskTb) * 100)} unit="TB" />
+        </div>
+      </Card>
+      <Card className="p-0">
+        <div className="border-b border-border px-4 py-2.5 text-xs font-semibold">개발환경</div>
+        <div className="divide-y divide-border">
+          {nbs.map((n) => (
+            <button key={n.id} type="button" onClick={() => open(`/ai-development/notebooks/${n.id}`)} className="flex w-full items-center justify-between gap-2 px-4 py-2 text-left text-xs hover:bg-secondary/40">
+              <span className="font-mono">{n.name}</span>
+              <span className="flex items-center gap-2 text-muted-foreground">
+                {n.acceleratorCount > 0 ? `${n.acceleratorKind} ${n.acceleratorCount}` : "CPU"}
+                <Badge variant={n.status === "Running" ? "success" : n.status === "Stopped" ? "outline" : "warning"} className="text-[10px]">{n.status}</Badge>
+              </span>
+            </button>
+          ))}
+          {!nbs.length && <div className="px-4 py-3 text-xs text-muted-foreground">노트북이 없다.</div>}
+        </div>
+      </Card>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" onClick={() => open()}>AI 개발환경에서 열기</Button>
+        <Button size="sm" variant="outline" onClick={() => open("/ai-development/notebooks")}>새 노트북</Button>
+      </div>
+    </>
   );
 }

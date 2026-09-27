@@ -10,7 +10,11 @@ import {
   Cpu,
   CheckCircle2,
 } from "lucide-react";
+import Link from "next/link";
+import { ChangeMark } from "@/components/change-mark";
 import { PageHeader } from "@/components/page-header";
+import { useProjectContext, AI_PROJECTS } from "@/lib/project-context";
+import { notebooks as NB, pipelines as PL, inferenceServices as SV } from "@/mocks/fixtures";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -67,17 +71,27 @@ const PROFILES = [
 ];
 
 export default function ProfilesPage() {
+  const { match, isAdmin } = useProjectContext();
+  const profiles = PROFILES.filter((p) => match(p.name));
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Kubeflow Profiles"
-        description="Profile = K8s 네임스페이스 + RBAC + ResourceQuota + PodDefault — 사용자 격리·할당 단위"
+        title="워크스페이스"
+        description="프로젝트가 승인되면 같은 이름으로 자동 생성된다 — Kubeflow Profile = 네임스페이스 + RBAC + ResourceQuota + PodDefault"
         actions={
-          <Button onClick={() => toast.success("Profile 생성 — 네임스페이스·쿼터 입력")}>
-            <Plus className="size-4" /> 새 Profile
+          <Button variant="outline" asChild>
+            <Link href="/iaas/projects">
+              <Plus className="size-4" /> 프로젝트 자원 신청
+            </Link>
           </Button>
         }
       />
+
+      {isAdmin && (
+        <ChangeMark ids={["CR-AID-12"]}>
+          <AllWorkspacesTable />
+        </ChangeMark>
+      )}
 
       {/* Kubeflow concept callout */}
       <Card className="border-brand-indigo-200 bg-gradient-to-br from-brand-indigo-50 to-transparent">
@@ -98,7 +112,7 @@ export default function ProfilesPage() {
       </Card>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {PROFILES.map((p) => (
+        {profiles.map((p) => (
           <Card key={p.name} className="overflow-hidden">
             <CardContent className="space-y-4 p-5">
               <div className="flex items-start justify-between">
@@ -112,6 +126,9 @@ export default function ProfilesPage() {
                     <div className="font-mono font-semibold leading-tight">{p.name}</div>
                     <div className="text-xs text-muted-foreground">
                       Owner: <span className="font-mono">{p.owner}</span>
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      프로젝트 <span className="font-mono text-foreground">proj-{p.name}</span>
                     </div>
                   </div>
                 </div>
@@ -227,5 +244,49 @@ function Stat({ label, value }: { label: string; value: number }) {
       <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
       <div className="font-mono text-base font-bold tabular-nums">{value}</div>
     </div>
+  );
+}
+
+/** 관리자: 프로젝트↔워크스페이스 전체 현황 (프로젝트 선택과 무관하게 전부) */
+function AllWorkspacesTable() {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">전체 워크스페이스 (관리자)</CardTitle>
+        <CardDescription>프로젝트 1개 = 워크스페이스 1개. 네임스페이스 라벨 openkcloud.io/project-id 로 묶인다.</CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>프로젝트</TableHead>
+              <TableHead>조직</TableHead>
+              <TableHead>워크스페이스 · 네임스페이스</TableHead>
+              <TableHead className="text-right">가속기</TableHead>
+              <TableHead className="text-right">노트북</TableHead>
+              <TableHead className="text-right">파이프라인</TableHead>
+              <TableHead className="text-right">서비스</TableHead>
+              <TableHead>상태</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {AI_PROJECTS.map((p) => (
+              <TableRow key={p.id}>
+                <TableCell>
+                  <Link href={`/iaas/projects?open=${p.id}&tab=ai`} className="font-mono text-xs font-semibold hover:text-primary">{p.id}</Link>
+                </TableCell>
+                <TableCell className="font-mono text-[11px] text-muted-foreground">{p.orgId}</TableCell>
+                <TableCell className="font-mono text-xs">{p.name}</TableCell>
+                <TableCell className="text-right font-mono text-xs tabular-nums">{p.tenant.usedAcc}/{p.tenant.quotaAcc}</TableCell>
+                <TableCell className="text-right font-mono text-xs tabular-nums">{NB.filter((n) => n.namespace === p.name).length}</TableCell>
+                <TableCell className="text-right font-mono text-xs tabular-nums">{PL.filter((n) => n.namespace === p.name).length}</TableCell>
+                <TableCell className="text-right font-mono text-xs tabular-nums">{SV.filter((n) => n.namespace === p.name).length}</TableCell>
+                <TableCell><Badge variant="success" className="text-[10px]">Active</Badge></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
