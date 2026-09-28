@@ -1,54 +1,60 @@
 "use client";
-import Link from "next/link";
+import * as React from "react";
 import { usePathname } from "next/navigation";
-import { Boxes, Plus, RefreshCw } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 
-const TABS = [
-  { href: "/paas/clusters", label: "클러스터" },
-  { href: "/paas/workloads", label: "워크로드" },
-  { href: "/paas/services", label: "서비스·인그레스" },
-  { href: "/paas/storage", label: "스토리지" },
-  { href: "/paas/config", label: "설정 관리" },
-];
+// 끝 슬래시(trailingSlash:true) 정규화
+function normalizePath(p: string) {
+  return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
+}
+
+// 자체 PageHeader를 렌더링하는 페이지 — layout 헤더는 생략(중복 방지)
+const SELF_HEADER_ROUTES = new Set(["/paas/workloads"]);
+
+// 자체 헤더가 없는 페이지 — layout이 메뉴명으로 헤더 렌더링
+const PAGE_META: Record<string, { title: string; description: string; userDescription?: string }> = {
+  "/paas/clusters": {
+    title: "클러스터",
+    description: "서비스 클러스터(Magnum) 목록과 상태를 확인·관리합니다.",
+    userDescription: "접근 가능한 서비스 클러스터를 확인하거나 생성을 요청합니다.",
+  },
+  "/paas/services": { title: "서비스·인그레스", description: "K8s 서비스·인그레스 구성을 확인합니다." },
+  "/paas/storage": { title: "스토리지", description: "PVC·PV·StorageClass를 확인합니다." },
+  "/paas/config": { title: "설정 관리", description: "ConfigMap·Secret을 관리합니다." },
+};
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
+
+  const here = normalizePath(pathname);
+  const meta = SELF_HEADER_ROUTES.has(here) ? null : PAGE_META[here];
+
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="PaaS (Kubernetes) 자원 관리"
-        description="멀티 클러스터·이종 K8s 환경 통합 운영 — VIOLA/OCP/EKS 호환"
-        actions={
-          <>
-            <Button variant="outline" size="sm">
-              <RefreshCw className="size-4" /> 동기화
-            </Button>
-            <Button size="sm">
-              <Plus className="size-4" /> 클러스터 등록
-            </Button>
-          </>
-        }
-      />
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-border">
-        {TABS.map((t) => {
-          const active = pathname === t.href;
-          return (
-            <Link
-              key={t.href}
-              href={t.href}
-              className={cn(
-                "relative -mb-px shrink-0 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
-                active ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {t.label}
-            </Link>
-          );
-        })}
-      </div>
+      {meta && (
+        <PageHeader
+          title={meta.title}
+          description={!isAdmin && meta.userDescription ? meta.userDescription : meta.description}
+          actions={
+            here === "/paas/clusters" ? (
+              <>
+                <Button variant="outline" size="sm">
+                  <RefreshCw className="size-4" /> 동기화
+                </Button>
+                {isAdmin && (
+                  <Button size="sm">
+                    <Plus className="size-4" /> 클러스터 등록
+                  </Button>
+                )}
+              </>
+            ) : null
+          }
+        />
+      )}
       {children}
     </div>
   );
