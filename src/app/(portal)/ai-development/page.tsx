@@ -21,7 +21,7 @@ const MENUS = [
     color: "bg-brand-mint-50 text-brand-mint-700",
     title: "Profiles",
     subtitle: "워크스페이스 격리",
-    desc: "사용자/팀별 K8s Namespace + RBAC + ResourceQuota + IAP 정책 묶음. 1 Profile = 1 OpenStack 프로젝트 = 과금 단위.",
+    desc: "사용자/팀별 K8s Namespace + RBAC + ResourceQuota + IAP 정책 묶음. 1 Profile = 1 K8s 네임스페이스(자원 격리·할당 단위).",
     example: "ai-research 팀에 vCPU 256 / GPU 8장 / 30TB 스토리지 할당",
   },
   {
@@ -83,8 +83,8 @@ export default function AIDevHomePage() {
             <div className="font-semibold">AI 노트북이란?</div>
             <p className="text-sm text-muted-foreground">
               <strong className="text-foreground">Kubeflow</strong>는 K8s 위에서 ML 워크플로우 전 주기(데이터→학습→배포→모니터링)를 운영하는 오픈소스 플랫폼이다.
-              openKcloud는 Kubeflow를 통합하여 <strong className="text-foreground">OpenStack 프로젝트 = Kubeflow Profile</strong> 매핑으로
-              과금·격리·자원할당을 한 번에 처리한다.
+              AI 노트북은 <strong className="text-foreground">Kubeflow Profile = K8s 네임스페이스</strong> 단위로
+              격리·자원할당을 처리한다. openKcloud 프로젝트와의 연결 방식은 통합 단계에서 협의 예정이다.
             </p>
           </div>
         </CardContent>

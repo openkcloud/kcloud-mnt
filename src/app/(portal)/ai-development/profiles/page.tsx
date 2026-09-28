@@ -116,7 +116,7 @@ export default function ProfilesPage() {
               <code className="rounded bg-card px-1 py-0.5 font-mono text-[11px]">kubeflow.org/v1 Profile</code> CRD가 생성되면
               {" "}<code className="rounded bg-card px-1 py-0.5 font-mono text-[11px]">profiles-controller</code>가 자동으로
               {" "}namespace · RoleBinding · ResourceQuota · ServiceAccount · IAP 정책을 프로비저닝합니다.
-              각 Profile은 OpenStack 프로젝트(과금 단위)와 1:1 매핑됩니다.
+              각 Profile은 K8s 네임스페이스 하나에 대응하며, openKcloud 프로젝트와의 연결 방식은 통합 단계에서 협의 예정입니다.
             </p>
           </div>
         </CardContent>
