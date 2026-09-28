@@ -33,7 +33,7 @@ export function ProfileCreateDialog({
   const create = useMutation({
     mutationFn: createProfile,
     onSuccess: () => {
-      toast.success(`Profile "${name}" 생성 — 네임스페이스·쿼터 프로비저닝 중`);
+      toast.success(`워크스페이스 "${name}" 생성 — 네임스페이스·쿼터 프로비저닝 중`);
       qc.invalidateQueries({ queryKey: ["kf", "profiles"] });
       onOpenChange(false);
       setName("");
@@ -64,14 +64,14 @@ export function ProfileCreateDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>새 Profile</DialogTitle>
+          <DialogTitle>새 워크스페이스 (관리자)</DialogTitle>
           <DialogDescription>
-            Profile CRD 생성 → 컨트롤러가 Namespace·ResourceQuota·RBAC를 자동 프로비저닝
+            프로젝트와 같은 이름으로 만든다. Kubeflow Profile 생성 → Namespace·ResourceQuota·RBAC 자동 프로비저닝
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1.5">
-            <Label htmlFor="pf-name">Profile 이름</Label>
+            <Label htmlFor="pf-name">워크스페이스 이름 (= 프로젝트 이름)</Label>
             <Input
               id="pf-name"
               placeholder="예: ai-research-2 (소문자·숫자·하이픈)"
