@@ -159,6 +159,8 @@ interface ProfileResult {
 interface ProfileState {
   running: boolean; at: string | null; error: string | null;
   result: ProfileResult | null; kernelLevel: boolean; kernelNote: string;
+  /** auto = 1분 주기 자동 샘플링 결과, manual = 버튼으로 측정한 결과 */
+  mode?: "auto" | "manual" | null; auto?: boolean; intervalSec?: number;
 }
 
 interface InsightItem {
@@ -450,7 +452,7 @@ function LiveInsights() {
   );
 }
 
-/** 실측 핫스팟 — vLLM 내장 torch profiler를 필요할 때만 켜서 연산별 시간 측정 */
+/** 실측 핫스팟 — 화면을 열어 둔 동안 1분 주기로 추론 1회를 짧게 추적(샘플링), 버튼은 3회 즉시 측정 */
 function LiveHotspots() {
   const svc = useLlm();
   const qc = useQueryClient();
@@ -463,6 +465,8 @@ function LiveHotspots() {
     },
     enabled: KF_ENABLED,
     retry: false,
+    // 조회하는 동안에만 백엔드가 1분 주기 샘플링을 이어간다 — 새 결과도 이 주기로 받아온다
+    refetchInterval: 15000,
   });
   const run = useMutation({
     mutationFn: async () => {
@@ -478,7 +482,8 @@ function LiveHotspots() {
   });
 
   if (!KF_ENABLED) return null;
-  const r = run.data ?? st?.result ?? null;
+  // 최신 결과는 백엔드 상태가 들고 있다(수동 측정 후에도 invalidate로 갱신) — 자동 샘플이 오면 그걸로 바뀐다
+  const r = st?.result ?? run.data ?? null;
   const max = r?.hotspots?.[0]?.ms || 1;
 
   return (
@@ -491,12 +496,12 @@ function LiveHotspots() {
               <Badge variant="success" className="text-[10px]">실측</Badge>
             </CardTitle>
             <CardDescription>
-              추론을 실제로 3회 실행하면서 어떤 연산이 시간을 쓰는지 측정합니다.
-              프로파일러는 추론을 느리게 만들기 때문에 <b>누를 때만</b> 동작합니다.
+              이 화면을 열어 두면 <b>1분 주기로 샘플링</b>합니다 — 추론 1회를 짧게 추적해 어떤 연산이 시간을 쓰는지 봅니다
+              (실시간 아님, 추론 오버헤드 최소화). 화면을 닫으면 멈춥니다. 더 정확히 보려면 버튼으로 3회 측정합니다.
             </CardDescription>
           </div>
           <Button size="sm" onClick={() => run.mutate()} disabled={run.isPending}>
-            {run.isPending ? "측정 중… (약 40초)" : r ? "다시 측정" : "프로파일링 실행"}
+            {run.isPending ? "측정 중… (약 40초)" : "지금 3회 측정"}
           </Button>
         </div>
       </CardHeader>
@@ -508,14 +513,15 @@ function LiveHotspots() {
         )}
         {!r && !run.isPending && (
           <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
-            아직 측정 기록이 없습니다 — 위 버튼을 누르면 실제 추론을 추적해 결과를 보여줍니다.
+            {st?.running ? "첫 샘플을 측정하는 중입니다 — 잠시 후 결과가 나타납니다." : "아직 측정 기록이 없습니다 — 1분 안에 자동으로 첫 샘플을 측정합니다. 바로 보려면 버튼을 누르세요."}
           </div>
         )}
         {r && (
           <>
             <div className="pb-1 text-[11px] text-muted-foreground">
+              {st?.mode === "auto" ? `자동 샘플링(${Math.round((st.intervalSec ?? 60) / 60)}분 주기)` : "수동 측정"} ·
               샘플 {r.samples}회 · 최대 {r.maxTokens}토큰 · 추적 이벤트 {r.events.toLocaleString()}건 ·
-              합계 {r.totalMs}ms{st?.at ? ` · 측정 시각 ${st.at}` : ""}
+              합계 {r.totalMs}ms{st?.at ? ` · 측정 시각 ${st.at}` : ""}{st?.running ? " · 새 샘플 측정 중…" : ""}
             </div>
             {r.hotspots.map((h, i) => (
               <div key={h.component} className="flex items-center gap-3 rounded-lg border border-border p-3">
