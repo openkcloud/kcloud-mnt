@@ -1,8 +1,10 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import { Key, Plus, Search, Trash2, Download, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
+import { useAuth } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -70,6 +72,7 @@ const INITIAL: KeyPair[] = [
 ];
 
 export default function KeyPairsPage() {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
   const [items, setItems] = React.useState<KeyPair[]>(INITIAL);
   const [q, setQ] = React.useState("");
   const [createOpen, setCreateOpen] = React.useState(false);
@@ -79,15 +82,17 @@ export default function KeyPairsPage() {
 
   return (
     <div className="space-y-6">
+      <ChangeMark ids={["CR-IAAS-04"]}>
       <PageHeader
         title="키페어"
-        description="OpenStack Nova SSH 키페어 — VM 접속용 공개키 등록·관리"
+        description={isAdmin ? "OpenStack Nova SSH 키페어 — 생성·업로드·삭제는 관리자 권한" : "OpenStack Nova SSH 키페어 — 관리자가 등록한 키페어를 VM 신청 시 선택한다. 생성·삭제는 관리자 권한"}
         actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          isAdmin && <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="size-4" /> 키페어 생성·업로드
           </Button>
         }
       />
+      </ChangeMark>
 
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard label="키페어" value={items.length} unit="개" icon={Key} accent="indigo" />
@@ -168,20 +173,22 @@ export default function KeyPairsPage() {
                     >
                       <Download className="size-3.5" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => {
-                        if (k.usedBy > 0) {
-                          toast.error(`삭제 거부 — ${k.usedBy}개 인스턴스가 사용 중`);
-                          return;
-                        }
-                        setItems((prev) => prev.filter((x) => x.id !== k.id));
-                        toast.success(`${k.name} 삭제됨`);
-                      }}
-                    >
-                      <Trash2 className="size-3.5 text-rose-600" />
-                    </Button>
+                    {isAdmin && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => {
+                          if (k.usedBy > 0) {
+                            toast.error(`삭제 거부 — ${k.usedBy}개 인스턴스가 사용 중`);
+                            return;
+                          }
+                          setItems((prev) => prev.filter((x) => x.id !== k.id));
+                          toast.success(`${k.name} 삭제됨`);
+                        }}
+                      >
+                        <Trash2 className="size-3.5 text-rose-600" />
+                      </Button>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>

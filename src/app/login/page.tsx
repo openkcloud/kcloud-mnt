@@ -50,8 +50,8 @@ export default function LoginPage() {
         <div className="absolute inset-0 bg-[linear-gradient(to_right,_rgba(255,255,255,0.03)_1px,_transparent_1px),_linear-gradient(to_bottom,_rgba(255,255,255,0.03)_1px,_transparent_1px)] bg-[size:40px_40px]" />
         <div className="relative z-10 flex h-full flex-col justify-between p-12 text-white">
           <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-brand-mint-400 to-brand-indigo-400 font-bold shadow-lg">
-              K
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-white/95 p-1 shadow-lg">
+              <img src="/logo/openkcloud-mark.png" alt="openKcloud" className="size-full object-contain" />
             </div>
             <div>
               <div className="text-lg font-semibold">openKcloud</div>

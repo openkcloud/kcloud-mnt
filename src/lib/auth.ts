@@ -39,7 +39,7 @@ export const MOCK_USERS: Record<string, { password: string; user: User }> = {
       email: "hy.yun@okestro.com",
       org: "오케스트로(주)",
       role: "user",
-      projects: ["*"],
+      projects: ["ai-research", "llm-serving"],
     },
   },
 };

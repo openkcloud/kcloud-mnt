@@ -1,6 +1,6 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
-import Link from "next/link";
 import {
   Search,
   ExternalLink,
@@ -8,11 +8,7 @@ import {
   Sparkles,
   ShoppingBag,
   Boxes,
-  Globe,
-  Zap,
   MessageSquare,
-  ImageIcon,
-  Mic,
   ArrowRight,
   Check,
   Rocket,
@@ -23,13 +19,7 @@ import { Label } from "@/components/ui/label";
 import { GithubIcon } from "@/components/icons";
 import { BrandLogo } from "@/components/brand-logo";
 import { PageHeader } from "@/components/page-header";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { FeatureGate } from "@/components/feature-gate";
 import {
   REBELLIONS_MODELS,
   modelStats,
@@ -92,43 +83,19 @@ export default function CatalogPage() {
     <div className="space-y-6">
       <PageHeader
         title="서비스 마켓플레이스"
-        description={
-          <span className="inline-flex items-center gap-1.5">
-            Rebellions ModelZoo 연동 — {stats.total}개 모델 즉시 배포
-            <Badge variant="outline" className="text-[10px]">
-              powered by Rebellions
-            </Badge>
-          </span>
-        }
+        description={`${stats.total}개 모델 · 가속기를 골라 바로 배포`}
         actions={
-          <>
-            <Button variant="outline" size="sm" asChild>
-              <a
-                href="https://github.com/rebellions-sw/rbln-model-zoo"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <GithubIcon className="size-3.5" /> rbln-model-zoo
-              </a>
-            </Button>
-            <Button variant="outline" size="sm" asChild>
-              <a
-                href="https://rebellions.ai/developers/model-zoo/"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <Globe className="size-3.5" /> 공식 페이지
-              </a>
-            </Button>
-            <Button size="sm">
-              <ShoppingBag className="size-3.5" /> 내 구독
-            </Button>
-          </>
+          <Button size="sm" onClick={() => toast.success("구독 중인 서비스 3건 — 구독 관리 화면은 최종 형상")}>
+            <ShoppingBag className="size-3.5" /> 내 구독
+          </Button>
         }
       />
 
-      {/* 시그니처 시나리오 — ETRI 260615 §5 반영 */}
-      <SignatureShowcase onLaunch={(s) => setWizard(s)} />
+      <ChangeMark ids={["CR-MKT-04"]}>
+      <FeatureGate id="catalog.apps">
+        <ApplicationShowcase onLaunch={setWizard} />
+      </FeatureGate>
+      </ChangeMark>
 
       <DeploymentWizard scenario={wizard} onClose={() => setWizard(null)} />
 
@@ -371,7 +338,11 @@ function categoryBarColor(c: ModelCategory) {
 // ─────────────────────────────────────────────────────────────
 
 type SignatureScenario = {
-  id: "chatbot" | "image" | "voice";
+  id: "chatbot" | "image" | "voice" | "app-chat-ui" | "app-rag" | "app-code";
+  /** application: 모델 위에서 구동하는 애플리케이션 레벨 카드 (260702 회의록 2.3, 최종 형상) */
+  layer?: "model" | "application";
+  appOptions?: string[];
+  defaultApp?: string;
   title: string;
   subtitle: string;
   desc: string;
@@ -386,114 +357,63 @@ type SignatureScenario = {
   featured?: boolean;
 };
 
-const SCENARIOS: SignatureScenario[] = [
+const APP_SCENARIOS: SignatureScenario[] = [
   {
-    id: "chatbot",
-    title: "원클릭 챗봇 배포",
-    subtitle: "LLM + vLLM + Web UI",
-    desc: "모델 · 가속기 · 인프라를 조합해 30초 안에 챗봇 API + 데모 웹을 배포",
-    icon: MessageSquare,
-    accent: "bg-gradient-to-br from-brand-indigo-500 to-brand-mint-500 text-white",
-    ringAccent: "border-primary shadow-lg shadow-primary/20",
-    defaultModel: "Llama-3.1-8B-Instruct",
-    modelOptions: [
-      "Llama-3.1-8B-Instruct",
-      "Llama-3.1-70B-Instruct",
-      "Qwen2.5-14B-Instruct",
-      "Solar-10.7B",
-      "Mistral-7B-v0.3",
-    ],
-    defaultHardware: "Rebellions ATOM+ × 4",
-    hardwareOptions: [
-      "Rebellions ATOM+ × 4",
-      "Rebellions REBEL Quad × 1",
-      "NVIDIA A100 40GB × 1",
-      "NVIDIA H100 80GB × 1",
-      "Furiosa RNGD × 2",
-    ],
-    defaultInfra: "Container",
-    featured: true,
-  },
-  {
-    id: "image",
-    title: "이미지 생성 서비스",
-    subtitle: "Stable Diffusion + Gradio",
-    desc: "Diffusion 모델 카드에서 가속기 · 인프라 선택 후 원클릭 배포",
-    icon: ImageIcon,
-    accent: "bg-gradient-to-br from-violet-500 to-rose-500 text-white",
-    ringAccent: "border-violet-400",
-    defaultModel: "Stable Diffusion 3.5 Large",
-    modelOptions: [
-      "Stable Diffusion 3.5 Large",
-      "Stable Diffusion XL 1.0",
-      "FLUX.1 [schnell]",
-    ],
-    defaultHardware: "NVIDIA A100 40GB × 1",
-    hardwareOptions: [
-      "NVIDIA A100 40GB × 1",
-      "NVIDIA H100 80GB × 1",
-      "Rebellions REBEL Quad × 1",
-    ],
+    id: "app-chat-ui", layer: "application",
+    title: "챗봇 웹 애플리케이션", subtitle: "Open WebUI · 대화 이력 · 멀티 유저",
+    desc: "선택한 LLM 서빙 위에 대화형 웹 앱을 올려 최종 사용자 서비스로 배포",
+    icon: MessageSquare, accent: "bg-gradient-to-br from-brand-indigo-600 to-violet-500 text-white", ringAccent: "border-violet-300",
+    defaultApp: "Open WebUI", appOptions: ["Open WebUI", "Chainlit", "Gradio ChatInterface"],
+    defaultModel: "Llama-3.1-8B-Instruct", modelOptions: ["Llama-3.1-8B-Instruct", "Qwen2.5-14B-Instruct", "Solar-10.7B"],
+    defaultHardware: "Rebellions ATOM+ × 4", hardwareOptions: ["Rebellions ATOM+ × 4", "NVIDIA A100 40GB × 1", "Furiosa RNGD × 2"],
     defaultInfra: "Container",
   },
   {
-    id: "voice",
-    title: "음성 STT · TTS",
-    subtitle: "Whisper + XTTS",
-    desc: "음성 인식(STT) + 음성 합성(TTS) 서비스를 함께 배포",
-    icon: Mic,
-    accent: "bg-gradient-to-br from-amber-500 to-rose-400 text-white",
-    ringAccent: "border-amber-300",
-    defaultModel: "Whisper-Large-v3 + XTTS-v2",
-    modelOptions: [
-      "Whisper-Large-v3 + XTTS-v2",
-      "Whisper-Medium + Coqui XTTS",
-    ],
-    defaultHardware: "Furiosa RNGD × 2",
-    hardwareOptions: [
-      "Furiosa RNGD × 2",
-      "NVIDIA A100 40GB × 1",
-      "Rebellions ATOM+ × 4",
-    ],
+    id: "app-rag", layer: "application",
+    title: "문서 QA (RAG)", subtitle: "임베딩 + 벡터DB + LLM",
+    desc: "사내 문서를 색인해 근거와 함께 답하는 RAG 애플리케이션을 조합 배포",
+    icon: Sparkles, accent: "bg-gradient-to-br from-brand-mint-600 to-sky-500 text-white", ringAccent: "border-sky-300",
+    defaultApp: "RAGFlow", appOptions: ["RAGFlow", "LangChain 템플릿", "Dify"],
+    defaultModel: "Qwen2.5-14B-Instruct + bge-m3", modelOptions: ["Qwen2.5-14B-Instruct + bge-m3", "Llama-3.1-8B + e5-large"],
+    defaultHardware: "NVIDIA A100 40GB × 1", hardwareOptions: ["NVIDIA A100 40GB × 1", "Rebellions REBEL Quad × 1"],
+    defaultInfra: "Container",
+  },
+  {
+    id: "app-code", layer: "application",
+    title: "코드 어시스턴트", subtitle: "IDE 플러그인 연동",
+    desc: "코드 모델 서빙 위에 code-server 플러그인을 붙여 개발환경에서 바로 사용",
+    icon: Boxes, accent: "bg-gradient-to-br from-amber-500 to-rose-400 text-white", ringAccent: "border-amber-300",
+    defaultApp: "Continue (code-server 플러그인)", appOptions: ["Continue (code-server 플러그인)", "Tabby"],
+    defaultModel: "Qwen2.5-Coder-7B", modelOptions: ["Qwen2.5-Coder-7B", "DeepSeek-Coder-V2-Lite"],
+    defaultHardware: "Furiosa RNGD × 2", hardwareOptions: ["Furiosa RNGD × 2", "NVIDIA A100 40GB × 1"],
     defaultInfra: "Container",
   },
 ];
 
-function SignatureShowcase({ onLaunch }: { onLaunch: (s: SignatureScenario) => void }) {
+function ApplicationShowcase({ onLaunch }: { onLaunch: (s: SignatureScenario) => void }) {
   return (
     <div className="space-y-3">
       <div className="flex items-baseline justify-between">
         <div>
           <div className="flex items-center gap-2 text-sm font-semibold">
-            <Zap className="size-4 text-brand-mint-600" />
-            openKcloud 시그니처 시나리오
+            <Boxes className="size-4 text-violet-600" />
+            애플리케이션 레벨 실행
+            <Badge variant="outline" className="border-violet-200 bg-violet-50 text-[10px] text-violet-700">최종 형상</Badge>
           </div>
           <p className="text-xs text-muted-foreground">
-            카드 → 모델 → 가속기 → 인프라 4단계로 이종 AI반도체 위에서 서비스를 조합·배포한다.
+            LLM 모델 구동만이 아니라 모델 위에서 구동하는 애플리케이션까지 실행한다. 카드 → 앱 → 모델 → 가속기 → 인프라 → 실행.
           </p>
         </div>
-        <Badge variant="ghost" className="font-mono text-[10px]">
-          통합 시연용
-        </Badge>
+        <Badge variant="ghost" className="font-mono text-[10px]">신규 과제(모델 허브) 연계</Badge>
       </div>
       <div className="grid gap-3 md:grid-cols-3">
-        {SCENARIOS.map((s) => (
+        {APP_SCENARIOS.map((s) => (
           <button
             key={s.id}
             type="button"
             onClick={() => onLaunch(s)}
-            className={cn(
-              "relative overflow-hidden rounded-xl border-2 p-4 text-left transition-all hover:-translate-y-0.5",
-              s.featured ? s.ringAccent : "border-border hover:border-primary/40",
-            )}
+            className="relative overflow-hidden rounded-xl border-2 border-border p-4 text-left transition-all hover:-translate-y-0.5 hover:border-violet-300"
           >
-            {s.featured && (
-              <div className="absolute right-3 top-3">
-                <Badge variant="default" className="gap-1 text-[10px]">
-                  <Rocket className="size-2.5" /> 대표
-                </Badge>
-              </div>
-            )}
             <div className={cn("mb-3 flex size-11 items-center justify-center rounded-lg", s.accent)}>
               <s.icon className="size-5" />
             </div>
@@ -502,7 +422,8 @@ function SignatureShowcase({ onLaunch }: { onLaunch: (s: SignatureScenario) => v
               <div className="text-xs text-muted-foreground">{s.subtitle}</div>
             </div>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{s.desc}</p>
-            <div className="mt-3 flex items-center gap-1.5 text-[11px] font-medium text-primary">
+            <div className="mt-2 font-mono text-[10px] text-muted-foreground">기본 모델 · {s.defaultModel}</div>
+            <div className="mt-3 flex items-center gap-1.5 text-[11px] font-medium text-violet-700">
               배포 위저드 열기 <ArrowRight className="size-3" />
             </div>
           </button>
@@ -512,10 +433,6 @@ function SignatureShowcase({ onLaunch }: { onLaunch: (s: SignatureScenario) => v
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// 배포 위저드 — 4단계 (모델 → 가속기 → 인프라 → 확인·실행)
-// ─────────────────────────────────────────────────────────────
-
 function DeploymentWizard({
   scenario, onClose,
 }: {
@@ -523,14 +440,19 @@ function DeploymentWizard({
   onClose: () => void;
 }) {
   const [step, setStep] = React.useState(1);
+  const [app, setApp] = React.useState("");
   const [model, setModel] = React.useState("");
   const [hardware, setHardware] = React.useState("");
   const [infra, setInfra] = React.useState<"VM" | "Container">("Container");
   const [name, setName] = React.useState("");
+  const isApp = scenario?.layer === "application";
+  // 애플리케이션 카드는 앱 선택 단계가 앞에 붙는다 (0: 앱, 1: 모델, 2: 가속기, 3: 인프라, 4: 확인)
+  const first = isApp ? 0 : 1;
 
   React.useEffect(() => {
     if (scenario) {
-      setStep(1);
+      setStep(scenario.layer === "application" ? 0 : 1);
+      setApp(scenario.defaultApp ?? "");
       setModel(scenario.defaultModel);
       setHardware(scenario.defaultHardware);
       setInfra(scenario.defaultInfra);
@@ -541,6 +463,7 @@ function DeploymentWizard({
   if (!scenario) return null;
 
   const STEPS = [
+    ...(isApp ? [{ n: 0, label: "애플리케이션", icon: Boxes }] : []),
     { n: 1, label: "모델", icon: Sparkles },
     { n: 2, label: "가속기", icon: Cpu },
     { n: 3, label: "인프라", icon: Boxes },
@@ -549,7 +472,7 @@ function DeploymentWizard({
 
   const submit = () => {
     toast.success(`${scenario.title} 배포 시작 — ${name}`, {
-      description: `${model} · ${hardware} · ${infra}`,
+      description: `${isApp ? `${app} · ` : ""}${model} · ${hardware} · ${infra}`,
     });
     onClose();
   };
@@ -564,7 +487,7 @@ function DeploymentWizard({
             </div>
             <div>
               <DialogTitle>{scenario.title}</DialogTitle>
-              <DialogDescription>{scenario.subtitle} — 4단계 배포 위저드</DialogDescription>
+              <DialogDescription>{scenario.subtitle} — {STEPS.length}단계 배포 위저드{isApp ? " · 애플리케이션 레벨(최종 형상)" : ""}</DialogDescription>
             </div>
           </div>
         </DialogHeader>
@@ -604,6 +527,29 @@ function DeploymentWizard({
 
         {/* Step content */}
         <div className="min-h-[180px] space-y-3 py-2">
+          {step === 0 && isApp && (
+            <div className="space-y-2">
+              <Label>애플리케이션 선택</Label>
+              <p className="text-[11px] text-muted-foreground">모델 위에서 구동할 애플리케이션이다. 다음 단계에서 그 아래에 올릴 모델을 고른다.</p>
+              <div className="space-y-1.5">
+                {(scenario.appOptions ?? []).map((a) => (
+                  <button
+                    key={a}
+                    type="button"
+                    onClick={() => setApp(a)}
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                      app === a ? "border-primary bg-primary/5 text-foreground" : "border-border text-muted-foreground hover:border-primary/50",
+                    )}
+                  >
+                    <span className="font-mono text-xs">{a}</span>
+                    {app === a && <Check className="size-4 text-primary" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {step === 1 && (
             <div className="space-y-2">
               <Label>모델 선택</Label>
@@ -710,6 +656,12 @@ function DeploymentWizard({
                 <dl className="grid grid-cols-3 gap-y-3 text-xs">
                   <dt className="text-muted-foreground">시나리오</dt>
                   <dd className="col-span-2 font-medium">{scenario.title}</dd>
+                  {isApp && (
+                    <>
+                      <dt className="text-muted-foreground">애플리케이션</dt>
+                      <dd className="col-span-2 font-mono">{app}</dd>
+                    </>
+                  )}
                   <dt className="text-muted-foreground">모델</dt>
                   <dd className="col-span-2 font-mono">{model}</dd>
                   <dt className="text-muted-foreground">가속기</dt>
@@ -731,7 +683,7 @@ function DeploymentWizard({
         </div>
 
         <DialogFooter>
-          {step > 1 && (
+          {step > first && (
             <Button variant="outline" onClick={() => setStep(step - 1)} className="mr-auto">
               이전
             </Button>

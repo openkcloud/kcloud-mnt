@@ -378,6 +378,8 @@ export interface KFPipeline {
   description: string;
   ownerId: string;
   steps: number;
+  /** Kubeflow Profile 네임스페이스 = 프로젝트 */
+  namespace?: string;
   runs: number;
   successRate: number;
   lastRun?: string;
@@ -389,14 +391,14 @@ export interface KFExperiment {
   name: string;
   pipelineId: string;
   ownerId: string;
+  /** Kubeflow Profile 네임스페이스 = 프로젝트 */
+  namespace?: string;
   objective: string;
   goal: number;
   bestMetric: number;
   trials: number;
   status: "Running" | "Succeeded" | "Failed";
   createdAt: string;
-  /** 실백엔드에서만 내려온다 (mock 데이터에는 없음) */
-  namespace?: string;
   /** HPO가 찾아낸 최적 설정값 — 이 값을 학습 코드에 반영해서 쓴다 */
   bestParams?: { name: string; value: string }[];
   bestTrial?: string;
@@ -423,6 +425,8 @@ export interface KFInferenceService extends KFInferenceServiceResources {
   modelName: string;
   modelVersion: string;
   ownerId: string;
+  /** Kubeflow Profile 네임스페이스 = 프로젝트 */
+  namespace?: string;
   acceleratorKind: AcceleratorKind;
   replicas: number;
   rpsAvg: number;

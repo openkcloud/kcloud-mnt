@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ShieldCheck, Plus } from "lucide-react";
@@ -25,7 +26,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </span>
         }
         actions={
-          <Button size="sm">
+          <Button size="sm" onClick={() => toast.success("사용자 초대 — Keycloak 계정 생성 다이얼로그")}>
             <Plus className="size-4" /> 새 사용자
           </Button>
         }

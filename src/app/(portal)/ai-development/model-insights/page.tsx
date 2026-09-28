@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { ChangeMark } from "@/components/change-mark";
 import Link from "next/link";
 import {
   Sparkles,
@@ -20,7 +21,14 @@ import {
   Tooltip as RTooltip,
   ReferenceLine,
 } from "recharts";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { FeatureGate } from "@/components/feature-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -1098,7 +1106,9 @@ function Evidence({
     <div className={cn("rounded-lg border p-3", map[color])}>
       <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
       <div className="mt-0.5 text-sm font-semibold">{value}</div>
-      <div className="font-mono text-[11px] text-muted-foreground">{detail}</div>
+      <div className="font-mono text-[11px] text-muted-foreground">
+        {detail}
+      </div>
     </div>
   );
 }

@@ -59,3 +59,8 @@ Thumbs.db
 
 # 개발 서버 로그 (로컬 전용)
 dev.log
+# version snapshot worktrees (scripts/build-version-snapshot.sh)
+/.snapshots/
+
+# Local Netlify folder
+.netlify

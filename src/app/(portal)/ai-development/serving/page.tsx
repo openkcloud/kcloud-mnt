@@ -9,6 +9,7 @@ import { ServingCreateDialog } from "@/components/serving-create-dialog";
 import { ServingResourceDialog } from "@/components/serving-resource-dialog";
 import { KF_BASE } from "@/lib/kf";
 import { api } from "@/lib/api";
+import { useProjectContext } from "@/lib/project-context";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -75,7 +76,9 @@ export default function ServingPage() {
     }
   }
 
+  const { match, isAll } = useProjectContext();
   if (isLoading || !data) return <Skeleton className="h-96" />;
+  const items = data.items.filter((x) => match(x.namespace));
   return (
     <div className="space-y-4">
       <ServingCreateDialog open={createOpen} onClose={() => setCreateOpen(false)} />
@@ -98,16 +101,16 @@ export default function ServingPage() {
         }
       />
 
-      {data.items.length === 0 && (
+      {items.length === 0 && (
         <Card>
           <CardContent className="p-10 text-center text-sm text-muted-foreground">
-            배포된 서비스가 없습니다 — 오른쪽 위 &quot;서비스 배포&quot;로 시작하세요
+            이 프로젝트에 배포된 서비스가 없습니다 — 오른쪽 위 &quot;서비스 배포&quot;로 시작하세요
           </CardContent>
         </Card>
       )}
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-      {data.items.map((s) => (
+      {items.map((s) => (
         <Card key={s.id}>
           <CardContent className="space-y-4 p-5">
             <div className="flex items-start justify-between">

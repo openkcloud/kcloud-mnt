@@ -1,4 +1,5 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   Boxes,
@@ -55,7 +56,7 @@ import {
 import { toast } from "sonner";
 import type { KCluster, KWorkload } from "@/lib/types";
 
-function WorkloadActions({ name, kind, replicas }: { name: string; kind: string; replicas: number }) {
+function WorkloadActions({ id, name, kind, replicas }: { id: string; name: string; kind: string; replicas: number }) {
   const [scaleOpen, setScaleOpen] = React.useState(false);
   const [newReplicas, setNewReplicas] = React.useState(replicas.toString());
   return (
@@ -67,7 +68,7 @@ function WorkloadActions({ name, kind, replicas }: { name: string; kind: string;
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => window.location.assign(`/paas/workloads/${name}`)}>
+          <DropdownMenuItem onClick={() => window.location.assign(`/paas/workloads/${id}`)}>
             <Activity className="size-3.5" /> 상세 보기
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => setScaleOpen(true)}>
@@ -147,9 +148,9 @@ export default function WorkloadsPage() {
         title="워크로드"
         description="Deployment · StatefulSet · DaemonSet · Job · CronJob 통합 관리"
         actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <ChangeMark ids={["CR-PAAS-05"]} inline><Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="size-4" /> 워크로드 생성
-          </Button>
+          </Button></ChangeMark>
         }
       />
       <Card className="p-4">
@@ -262,7 +263,7 @@ export default function WorkloadsPage() {
                     </Badge>
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
-                    <WorkloadActions name={w.name} kind={w.kind} replicas={w.replicas} />
+                    <WorkloadActions id={w.id} name={w.name} kind={w.kind} replicas={w.replicas} />
                   </TableCell>
                 </TableRow>
               ))}
@@ -311,6 +312,16 @@ function CreateWorkloadDialog({
   const [gpuCount, setGpuCount] = React.useState("0");
   const [gpuKind, setGpuKind] = React.useState("NVIDIA A100");
   const [schedule, setSchedule] = React.useState("0 2 * * *");
+  // 스케줄링 힌트 — KETI 명세(sched.ai/*, profile.ai/*), 이노그리드가 kube_pod_labels·annotations로 수집 (CR-PAAS-07)
+  const [hintIntent, setHintIntent] = React.useState("training");
+  const [hintPref, setHintPref] = React.useState("throughput");
+  const [hintProfile, setHintProfile] = React.useState("mig-preferred");
+  const [hintResched, setHintResched] = React.useState("free");
+  const [hintModel, setHintModel] = React.useState("");
+  const [hintPrecision, setHintPrecision] = React.useState("bf16");
+  const [hintBatch, setHintBatch] = React.useState("16");
+  const [hintContext, setHintContext] = React.useState("8192");
+  const [hintSlo, setHintSlo] = React.useState("200");
 
   const reset = () => {
     setStep(1);
@@ -457,6 +468,70 @@ function CreateWorkloadDialog({
                 가속기 개수 &gt; 0 지정 시 nodeSelector·tolerations가 자동 주입됨
               </p>
             </div>
+            <ChangeMark ids={["CR-PAAS-07"]}>
+            <div className="space-y-2 rounded-lg border border-dashed border-brand-indigo-200 bg-brand-indigo-50/30 p-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-medium">스케줄링 힌트 (선택) — 비용 최적 스케줄러용 라벨·어노테이션</div>
+                <span className="font-mono text-[10px] text-muted-foreground">metadata.annotations</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                <div>
+                  <Label className="text-[11px]">sched.ai/intent</Label>
+                  <Select value={hintIntent} onValueChange={setHintIntent}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="training">training</SelectItem><SelectItem value="serving">serving</SelectItem><SelectItem value="preprocess">preprocess</SelectItem></SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-[11px]">sched.ai/preference</Label>
+                  <Select value={hintPref} onValueChange={setHintPref}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="throughput">throughput</SelectItem><SelectItem value="latency">latency</SelectItem><SelectItem value="energy">energy</SelectItem></SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-[11px]">sched.ai/gpu-profile</Label>
+                  <Select value={hintProfile} onValueChange={setHintProfile}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="mig-preferred">mig-preferred</SelectItem><SelectItem value="exclusive">exclusive</SelectItem><SelectItem value="shared">shared</SelectItem></SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-[11px]">sched.ai/rescheduling</Label>
+                  <Select value={hintResched} onValueChange={setHintResched}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="free">free</SelectItem><SelectItem value="forbidden">forbidden</SelectItem></SelectContent>
+                  </Select>
+                </div>
+                <div className="col-span-2">
+                  <Label className="text-[11px]">profile.ai/model</Label>
+                  <Input value={hintModel} onChange={(e) => setHintModel(e.target.value)} placeholder="llm-70b" className="h-8 font-mono text-xs" />
+                </div>
+                <div>
+                  <Label className="text-[11px]">profile.ai/precision</Label>
+                  <Select value={hintPrecision} onValueChange={setHintPrecision}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="bf16">bf16</SelectItem><SelectItem value="fp16">fp16</SelectItem><SelectItem value="int8">int8</SelectItem><SelectItem value="int4">int4</SelectItem></SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-[11px]">profile.ai/batch</Label>
+                  <Input value={hintBatch} onChange={(e) => setHintBatch(e.target.value)} className="h-8 font-mono text-xs" />
+                </div>
+                <div>
+                  <Label className="text-[11px]">profile.ai/context</Label>
+                  <Input value={hintContext} onChange={(e) => setHintContext(e.target.value)} className="h-8 font-mono text-xs" />
+                </div>
+                <div>
+                  <Label className="text-[11px]">profile.ai/slo-p99-ms</Label>
+                  <Input value={hintSlo} onChange={(e) => setHintSlo(e.target.value)} className="h-8 font-mono text-xs" />
+                </div>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                힌트가 없으면 보수적으로 배치한다. sched.ai/·profile.ai/ 접두사의 라벨·어노테이션을 모니터링이 수집하고, 스케줄러가 점유시간·전력·비용 산출과 배치 점수에 쓴다.
+              </p>
+            </div>
+            </ChangeMark>
           </div>
         )}
 

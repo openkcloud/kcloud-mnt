@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { ChangeMark } from "@/components/change-mark";
 import {
   Database,
   HardDrive,
@@ -221,9 +222,9 @@ export default function PaasStoragePage() {
             <div className="text-xs text-muted-foreground">
               PersistentVolume은 보통 StorageClass가 자동 프로비저닝하지만, 관리자가 직접 등록할 수도 있다.
             </div>
-            <Button size="sm" onClick={() => setCreatePvOpen(true)}>
+            <ChangeMark ids={["CR-PAAS-04", "CR-DOC-03"]} inline><Button size="sm" onClick={() => setCreatePvOpen(true)}>
               <Plus className="size-3.5" /> PV 생성 (관리자)
-            </Button>
+            </Button></ChangeMark>
           </div>
           <Card>
             <Table>
@@ -272,9 +273,9 @@ export default function PaasStoragePage() {
             <div className="text-xs text-muted-foreground">
               StorageClass는 관리자만 생성·수정할 수 있다. 사용자는 PVC 생성 시 선택만 가능.
             </div>
-            <Button size="sm" onClick={() => setCreateScOpen(true)}>
+            <ChangeMark ids={["CR-PAAS-04", "CR-DOC-03"]} inline><Button size="sm" onClick={() => setCreateScOpen(true)}>
               <Plus className="size-3.5" /> StorageClass 생성 (관리자)
-            </Button>
+            </Button></ChangeMark>
           </div>
           <Card>
             <Table>

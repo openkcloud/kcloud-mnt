@@ -1,5 +1,6 @@
 "use client";
-import * as React from "react";
+import { ChangeMark } from "@/components/change-mark";
+import { useFeatureVisible } from "@/lib/scope";
 import Link from "next/link";
 import {
   BookOpen,
@@ -12,7 +13,11 @@ import {
   Activity,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Server, Boxes } from "lucide-react";
+import { api } from "@/lib/api";
+import { useProjectContext } from "@/lib/project-context";
+import { KF_ENABLED } from "@/lib/kf";
+import type { KFNotebook, KFPipeline, KFExperiment, KFInferenceService } from "@/lib/types";
 
 const MENUS = [
   {
@@ -21,6 +26,7 @@ const MENUS = [
     color: "bg-brand-mint-50 text-brand-mint-700",
     title: "Profiles",
     subtitle: "워크스페이스 격리",
+    label: "① 워크스페이스",
     desc: "사용자/팀별 K8s Namespace + RBAC + ResourceQuota + IAP 정책 묶음. 1 워크스페이스(Profile) = 1 프로젝트, 프로젝트 승인 시 자동 생성.",
     example: "ai-research 팀에 vCPU 256 / GPU 8장 / 30TB 스토리지 할당",
   },
@@ -30,6 +36,7 @@ const MENUS = [
     color: "bg-brand-indigo-100 text-brand-indigo-700",
     title: "Notebooks",
     subtitle: "AI 노트북 (개발환경)",
+    label: "② 개발환경",
     desc: "컨테이너 기반 IDE (VSCode Code Server). GPU/NPU/PIM 자원 직접 할당. 영구 저장소 PVC 마운트.",
     example: "research-llama-finetune 노트북 — GPU 2장 + 500GB 볼륨",
   },
@@ -39,6 +46,7 @@ const MENUS = [
     color: "bg-violet-100 text-violet-700",
     title: "Pipelines",
     subtitle: "ML 워크플로우",
+    label: "③ 학습 · 파이프라인",
     desc: "데이터 → 학습 → 평가 → 배포를 DAG로 정의. 수동/Cron/Git 트리거. 각 단계 컨테이너 격리, 아티팩트 자동 보관.",
     example: "llama-3 finetune: 데이터 로드 → 토큰화 → LoRA 학습 → 평가 → KServe 배포 (6단계)",
   },
@@ -48,6 +56,7 @@ const MENUS = [
     color: "bg-amber-100 text-amber-700",
     title: "Experiments",
     subtitle: "하이퍼파라미터 탐색 (Katib)",
+    label: "③ 학습 · 실험 (HPO)",
     desc: "Grid/Random/Bayesian/TPE 알고리즘으로 수십~수백 trial 자동 실행. 최적 학습률·배치 크기 발견.",
     example: "llama-lr-search: lr=1e-5~1e-3 × batch=8~64, 30 trials, 목표 eval_accuracy > 0.88",
   },
@@ -57,6 +66,7 @@ const MENUS = [
     color: "bg-rose-100 text-rose-700",
     title: "Serving",
     subtitle: "모델 배포 (KServe)",
+    label: "④ 모델 배포",
     desc: "학습된 모델을 REST/gRPC API로 배포. Auto-scaling (0→N), Canary 배포, A/B 테스트.",
     example: "solar-10b-vllm: 3 레플리카 · 평균 124 RPS · P95 980ms",
   },
@@ -66,14 +76,21 @@ const MENUS = [
     color: "bg-sky-100 text-sky-700",
     title: "병목 분석",
     subtitle: "워크플로우 성능 분석",
+    label: "⑤ 성능 분석",
     desc: "ML 파이프라인 각 단계의 시간 비중·자원 사용·재실행 빈도 분석. 추론 단계별 latency breakdown.",
     example: "Attention Layer 22/28에서 KV cache 미스율 41% — 정상치 8% 대비 5배",
   },
 ];
 
 export default function AIDevHomePage() {
+  const experimentsOn = useFeatureVisible("ai.experiments");
+  const menus = MENUS.filter((m) => experimentsOn || !m.href.endsWith("/experiments"));
   return (
     <div className="space-y-6">
+      <ChangeMark ids={["CR-AID-01", "CR-AID-10"]}>
+        <ProjectFlowBand />
+      </ChangeMark>
+
       <Card className="border-brand-indigo-200 bg-gradient-to-br from-brand-indigo-50 to-transparent">
         <CardContent className="flex items-start gap-3 p-5">
           <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-brand-indigo-100 text-brand-indigo-700">
@@ -90,12 +107,13 @@ export default function AIDevHomePage() {
         </CardContent>
       </Card>
 
-      {/* 전체 흐름 가이드 — ETRI 260615 §6.A 반영 */}
-      <WorkflowGuide />
+      <ChangeMark ids={["CR-AID-09"]}>
+        <ScopeNote />
+      </ChangeMark>
 
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {MENUS.map((m) => (
+        {menus.map((m) => (
           <Link key={m.href} href={m.href}>
             <Card className="group h-full transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg">
               <CardContent className="space-y-3 p-5">
@@ -105,8 +123,8 @@ export default function AIDevHomePage() {
                   </div>
                 </div>
                 <div>
-                  <div className="text-base font-bold leading-tight">{m.title}</div>
-                  <div className="text-xs text-muted-foreground">{m.subtitle}</div>
+                  <div className="text-base font-bold leading-tight">{m.label}</div>
+                  <div className="text-xs text-muted-foreground">{m.title} · {m.subtitle}</div>
                 </div>
                 <p className="text-xs leading-relaxed text-muted-foreground">{m.desc}</p>
                 <div className="rounded-md border border-dashed border-border bg-secondary/30 p-2 text-[11px] text-muted-foreground">
@@ -124,78 +142,99 @@ export default function AIDevHomePage() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// 전체 흐름 가이드 — ETRI 260615 §6.A 반영
-// 자원 신청 → Profile → 모델 선택 → Notebook → 템플릿 → GPU 프리셋 →
-// Pipeline → Katib HPO → Serving → API 호출
-// ─────────────────────────────────────────────────────────────
-
-const WORKFLOW_STEPS = [
-  { n: 1, label: "자원 신청", desc: "IaaS 프로젝트 · CPU·메모리·가속기 쿼터", href: "/iaas/projects", color: "bg-brand-indigo-100 text-brand-indigo-700" },
-  { n: 2, label: "Profile 생성", desc: "네임스페이스 분리 · 팀별 워크스페이스", href: "/ai-development/profiles", color: "bg-violet-100 text-violet-700" },
-  { n: 3, label: "모델 선택", desc: "마켓플레이스에서 사전 학습 모델 확보", href: "/catalog", color: "bg-brand-mint-100 text-brand-mint-700" },
-  { n: 4, label: "Notebook 생성", desc: "CUDA Training 템플릿 · GPU 2장 프리셋", href: "/ai-development/notebooks", color: "bg-sky-100 text-sky-700" },
-  { n: 5, label: "Pipeline", desc: "학습 워크플로우 DAG 정의 · 제출", href: "/ai-development/pipelines", color: "bg-amber-100 text-amber-700" },
-  { n: 6, label: "Experiments (HPO)", desc: "Katib · 하이퍼파라미터 최적화", href: "/ai-development/experiments", color: "bg-rose-100 text-rose-700" },
-  { n: 7, label: "Serving", desc: "KServe · 모델 배포 · Auto-scale 0→N", href: "/ai-development/serving", color: "bg-brand-indigo-100 text-brand-indigo-700" },
-  { n: 8, label: "API 호출", desc: "endpoint URL로 서비스 운영 확인", href: "/ai-development/serving", color: "bg-brand-mint-100 text-brand-mint-700" },
-];
-
-function WorkflowGuide() {
-  const [open, setOpen] = React.useState(true);
+// 260702 회의록 2.4: 전체 지원 기능과 2차년도 개발 기능을 구분해 포털에 반영한다
+function ScopeNote() {
   return (
-    <Card className="border-brand-mint-200 bg-gradient-to-br from-brand-mint-50/60 to-transparent">
-      <CardContent className="p-5">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className="mb-3 flex w-full items-center justify-between text-left"
-        >
-          <div className="flex items-center gap-2">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-brand-mint-100 text-brand-mint-700">
-              <ArrowRight className="size-4" />
-            </div>
-            <div>
-              <div className="font-semibold">전체 흐름 가이드 (Kubeflow 8단계)</div>
-              <div className="text-xs text-muted-foreground">
-                처음 사용하시면 이 순서로 진행하기 — 각 단계 클릭 시 해당 페이지로 이동
-              </div>
-            </div>
-          </div>
-          <Badge variant="ghost" className="text-[10px]">
-            {open ? "접기" : "펼치기"}
-          </Badge>
-        </button>
+    <div className="rounded-md border border-violet-200 bg-violet-50/60 px-3 py-2 text-[11px] text-violet-900">
+      <strong>형상</strong> — 2차년도 개발 기능(워크스페이스·개발환경(code-server)·학습 파이프라인·모델 배포·모델 구조 시각화)은 시범서비스 형상에 두고,
+      실험(HPO)·MLPerf 벤치마크·KV Cache 미스율 같은 과업 외 항목은 최종 형상 설계안에만 둔다. 환경설정 › 포털 형상에서 전환한다.
+    </div>
+  );
+}
 
-        {open && (
-          <div className="grid gap-2 md:grid-cols-4 lg:grid-cols-8">
-            {WORKFLOW_STEPS.map((s, i) => (
-              <React.Fragment key={s.n}>
-                <Link
-                  href={s.href}
-                  className="group flex flex-col items-center gap-1.5 rounded-lg border border-border bg-card p-2.5 transition-all hover:-translate-y-0.5 hover:border-primary/40"
-                >
-                  <div className="relative">
-                    <div className={`flex size-9 items-center justify-center rounded-full ${s.color}`}>
-                      <span className="text-sm font-bold">{s.n}</span>
-                    </div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-[11px] font-semibold leading-tight">{s.label}</div>
-                    <div className="mt-0.5 text-[9px] leading-tight text-muted-foreground">{s.desc}</div>
-                  </div>
-                </Link>
-                {i < WORKFLOW_STEPS.length - 1 && (
-                  <div className="hidden items-center justify-center text-muted-foreground lg:flex" style={{ marginLeft: "-6px", marginRight: "-6px" }}>
-                    <ArrowRight className="size-3" />
-                  </div>
-                )}
-              </React.Fragment>
+// ─────────────────────────────────────────────────────────────
+// 자원 흐름 밴드 — 프로젝트가 받은 IaaS·PaaS 자원 위에 AI 노트북 자원을 올리는 흐름.
+// 현재 프로젝트 컨텍스트의 실제 수치를 보여준다. 번호는 화면 탭 번호와 같다.
+// ─────────────────────────────────────────────────────────────
+function ProjectFlowBand() {
+  const { match, project, isAll, label, projects } = useProjectContext();
+  const nb = (api.kubeflow.notebooks() as { data?: { items: KFNotebook[] } }).data?.items ?? [];
+  const pl = (api.kubeflow.pipelines() as { data?: { items: KFPipeline[] } }).data?.items ?? [];
+  const ex = (api.kubeflow.experiments() as { data?: { items: KFExperiment[] } }).data?.items ?? [];
+  const sv = (api.kubeflow.serving() as { data?: { items: KFInferenceService[] } }).data?.items ?? [];
+  const experimentsOn = useFeatureVisible("ai.experiments");
+
+  const tenants = isAll ? projects.map((p) => p.tenant) : project ? [project.tenant] : [];
+  const sum = (f: (t: (typeof tenants)[number]) => number) => tenants.reduce((a, t) => a + f(t), 0);
+  const myNb = nb.filter((n) => match(n.namespace));
+  const mySv = sv.filter((x) => match(x.namespace));
+  const projectHref = !isAll && project ? `/iaas/projects?open=${project.id}&tab=ai` : "/iaas/projects";
+
+  const steps = [
+    { n: 1, label: "워크스페이스", href: "/ai-development/profiles", value: isAll ? `${tenants.length}개` : "active", sub: isAll ? "프로젝트마다 1개" : `ns ${label}` },
+    { n: 2, label: "개발환경", href: "/ai-development/notebooks", value: `${myNb.length}개`, sub: `실행 ${myNb.filter((n) => n.status === "Running").length} · 가속기 ${myNb.reduce((a, n) => a + (n.acceleratorCount ?? 0), 0)}장` },
+    {
+      n: 3,
+      label: "학습",
+      href: "/ai-development/pipelines",
+      value: `${pl.filter((p) => match(p.namespace)).length}개`,
+      sub: experimentsOn ? `파이프라인 · 실험 ${ex.filter((e) => match(e.namespace)).length}` : "파이프라인",
+    },
+    { n: 4, label: "모델 배포", href: "/ai-development/serving", value: `${mySv.length}개`, sub: `평균 ${+mySv.reduce((a, x) => a + (x.rpsAvg ?? 0), 0).toFixed(1)} RPS` },
+    { n: 5, label: "성능 분석", href: "/ai-development/model-insights", value: "GPU", sub: "실측·병목" },
+  ];
+
+  return (
+    <Card className="overflow-hidden">
+      <CardContent className="p-0">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border px-5 py-3">
+          <div className="text-sm font-semibold">
+            {isAll ? "전체 프로젝트" : <span className="font-mono">{label}</span>}
+            <span className="font-normal text-muted-foreground"> — 받은 클라우드 자원 위에서 AI를 돌리는 흐름</span>
+          </div>
+          <span className="text-[11px] text-muted-foreground">번호는 위 탭 순서와 같다</span>
+        </div>
+        <div className="grid gap-0 lg:grid-cols-[minmax(220px,1fr)_auto_minmax(0,3.2fr)]">
+          {/* 클라우드 자원 (IaaS·PaaS) */}
+          <Link href={projectHref} className="group space-y-2.5 bg-brand-indigo-50/60 p-4 transition-colors hover:bg-brand-indigo-50">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-brand-indigo-700">프로젝트 자원 · IaaS·PaaS</div>
+            {KF_ENABLED ? (
+              // 실백엔드: IaaS·PaaS 연동 전이라 가상서버·클러스터 수는 없다. 워크스페이스 ResourceQuota 실측만 보여준다
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="flex items-center gap-1.5"><Server className="size-3.5 text-brand-indigo-600" /> 메모리 <strong className="font-mono">{+sum((t) => t.usedRamGb).toFixed(1)}/{sum((t) => t.quotaRamGb)}GB</strong></div>
+                <div className="flex items-center gap-1.5"><Boxes className="size-3.5 text-brand-indigo-600" /> 워크스페이스 <strong className="font-mono">{tenants.length}</strong></div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="flex items-center gap-1.5"><Server className="size-3.5 text-brand-indigo-600" /> 가상서버 <strong className="font-mono">{sum((t) => Math.round(t.usedVcpu / 8))}</strong></div>
+                <div className="flex items-center gap-1.5"><Boxes className="size-3.5 text-brand-indigo-600" /> 클러스터 <strong className="font-mono">{tenants.length}</strong></div>
+              </div>
+            )}
+            <div className="space-y-1 text-[11px] text-muted-foreground">
+              <div className="flex justify-between"><span>가속기 쿼터</span><span className="font-mono text-foreground">{sum((t) => t.usedAcc)} / {sum((t) => t.quotaAcc)}장</span></div>
+              <div className="flex justify-between"><span>vCPU 쿼터</span><span className="font-mono text-foreground">{+sum((t) => t.usedVcpu).toFixed(1)} / {sum((t) => t.quotaVcpu)}</span></div>
+            </div>
+            <div className="text-[11px] font-medium text-brand-indigo-700 group-hover:underline">프로젝트 보기 →</div>
+          </Link>
+          <div className="hidden flex-col items-center justify-center gap-1 px-2 text-[10px] text-muted-foreground lg:flex">
+            <ArrowRight className="size-4" />
+            <span className="whitespace-nowrap">위에 올림</span>
+          </div>
+          {/* AI 노트북 단계 */}
+          <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3 md:grid-cols-5">
+            {steps.map((s) => (
+              <Link key={s.n} href={s.href} className="group flex flex-col gap-1 bg-card p-3.5 transition-colors hover:bg-secondary/40">
+                <div className="flex items-center gap-1.5 text-xs font-semibold">
+                  <span className="inline-flex size-[18px] items-center justify-center rounded-full bg-primary font-mono text-[10px] font-bold text-primary-foreground">{s.n}</span>
+                  {s.label}
+                </div>
+                <div className="font-mono text-lg font-bold tabular-nums leading-tight">{s.value}</div>
+                <div className="text-[11px] text-muted-foreground">{s.sub}</div>
+              </Link>
             ))}
           </div>
-        )}
+        </div>
       </CardContent>
     </Card>
   );
 }
-

@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import * as React from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -78,13 +79,13 @@ export default function WorkloadDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("레플리카 조정 다이얼로그")}>
             <Scale className="size-3.5" /> 스케일
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("매니페스트 편집기를 연다")}>
             <Settings className="size-3.5" /> 매니페스트 편집
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("kubectl rollout restart 실행")}>
             <RefreshCw className="size-3.5" /> 롤아웃 재시작
           </Button>
         </div>

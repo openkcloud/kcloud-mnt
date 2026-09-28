@@ -1,26 +1,48 @@
 "use client";
 import * as React from "react";
+import { ChangeMark } from "@/components/change-mark";
 import { FlaskConical, Target, Plus, Zap, Award, Cpu, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useProjectContext } from "@/lib/project-context";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from "@/components/ui/table";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/page-header";
 import { ExperimentDetailDialog } from "@/components/experiment-detail-dialog";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select";
 import type { KFExperiment } from "@/lib/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -63,12 +85,48 @@ const HW_BENCHMARKS = [
 ];
 
 const MODEL_BENCHMARKS = [
-  { model: "Llama-3.1 70B", bench: "MMLU (5-shot)", score: 82.3, unit: "%", target: 80 },
-  { model: "Llama-3.1 70B", bench: "HumanEval", score: 78.4, unit: "%", target: 75 },
-  { model: "Llama-3.1 70B", bench: "GSM8K", score: 87.1, unit: "%", target: 85 },
-  { model: "Solar-10.7B", bench: "MMLU (5-shot)", score: 66.2, unit: "%", target: 65 },
-  { model: "Qwen2.5-14B", bench: "MMLU (5-shot)", score: 72.1, unit: "%", target: 70 },
-  { model: "Qwen2.5-14B", bench: "HumanEval", score: 71.8, unit: "%", target: 70 },
+  {
+    model: "Llama-3.1 70B",
+    bench: "MMLU (5-shot)",
+    score: 82.3,
+    unit: "%",
+    target: 80,
+  },
+  {
+    model: "Llama-3.1 70B",
+    bench: "HumanEval",
+    score: 78.4,
+    unit: "%",
+    target: 75,
+  },
+  {
+    model: "Llama-3.1 70B",
+    bench: "GSM8K",
+    score: 87.1,
+    unit: "%",
+    target: 85,
+  },
+  {
+    model: "Solar-10.7B",
+    bench: "MMLU (5-shot)",
+    score: 66.2,
+    unit: "%",
+    target: 65,
+  },
+  {
+    model: "Qwen2.5-14B",
+    bench: "MMLU (5-shot)",
+    score: 72.1,
+    unit: "%",
+    target: 70,
+  },
+  {
+    model: "Qwen2.5-14B",
+    bench: "HumanEval",
+    score: 71.8,
+    unit: "%",
+    target: 70,
+  },
 ];
 
 export default function ExperimentsPage() {
@@ -105,28 +163,36 @@ export default function ExperimentsPage() {
       setBusy(null);
     }
   }
+  const { match } = useProjectContext();
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
+  const items = data.items.filter((e) => match(e.namespace));
 
   return (
     <div className="space-y-4">
       <ExperimentDetailDialog experiment={detail} onClose={() => setDetail(null)} />
       <PageHeader
-        title="Experiments — Hyperparameter Optimization (HPO)"
-        description="Katib 기반 HPO 실험 + 하드웨어·모델 벤치마크"
+        title="실험 (HPO)"
+        description="Katib 기반 하이퍼파라미터 최적화 실험 + 하드웨어·모델 벤치마크"
         actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" /> 실험 정의
-          </Button>
+          <ChangeMark ids={["CR-AID-03"]} inline>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" /> 실험 정의
+            </Button>
+          </ChangeMark>
         }
       />
 
       <Tabs defaultValue="hpo">
-        <TabsList>
-          <TabsTrigger value="hpo">HPO 실험 ({data.items.length})</TabsTrigger>
-          <TabsTrigger value="hw">하드웨어 벤치마크 (MLPerf)</TabsTrigger>
-          <TabsTrigger value="model">모델 성능 벤치마크</TabsTrigger>
-        </TabsList>
+        <ChangeMark ids={["CR-AID-04", "CR-AID-05"]} inline>
+          <TabsList>
+            <TabsTrigger value="hpo">
+              HPO 실험 ({items.length})
+            </TabsTrigger>
+            <TabsTrigger value="hw">하드웨어 벤치마크 (MLPerf)</TabsTrigger>
+            <TabsTrigger value="model">모델 성능 벤치마크</TabsTrigger>
+          </TabsList>
+        </ChangeMark>
 
         <TabsContent value="hpo">
           <Card>
@@ -145,7 +211,7 @@ export default function ExperimentsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.items.map((e) => {
+                {items.map((e) => {
                   const isMax = e.objective.includes("maximize");
                   const progress = isMax
                     ? Math.min(100, Math.round((e.bestMetric / e.goal) * 100))
@@ -180,10 +246,17 @@ export default function ExperimentsPage() {
                         <div className="flex items-center gap-1.5">
                           <Target className="size-3.5 text-muted-foreground" />
                           <span className="text-xs">{e.objective}</span>
-                          <Badge variant="outline" className="font-mono text-[10px]">{e.goal}</Badge>
+                          <Badge
+                            variant="outline"
+                            className="font-mono text-[10px]"
+                          >
+                            {e.goal}
+                          </Badge>
                         </div>
                       </TableCell>
-                      <TableCell className="font-mono tabular-nums">{e.bestMetric}</TableCell>
+                      <TableCell className="font-mono tabular-nums">
+                        {e.bestMetric}
+                      </TableCell>
                       <TableCell>
                         {/* HPO의 진짜 결과물 — 이 값을 학습 코드에 넣으면 된다 */}
                         {e.bestParams?.length ? (
@@ -204,14 +277,28 @@ export default function ExperimentsPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <Progress value={progress} className="w-24" indicatorClassName="bg-amber-500" />
-                          <span className="font-mono text-xs tabular-nums">{progress}%</span>
+                          <Progress
+                            value={progress}
+                            className="w-24"
+                            indicatorClassName="bg-amber-500"
+                          />
+                          <span className="font-mono text-xs tabular-nums">
+                            {progress}%
+                          </span>
                         </div>
                       </TableCell>
-                      <TableCell className="font-mono tabular-nums">{e.trials}</TableCell>
+                      <TableCell className="font-mono tabular-nums">
+                        {e.trials}
+                      </TableCell>
                       <TableCell>
                         <Badge
-                          variant={e.status === "Succeeded" ? "success" : e.status === "Failed" ? "destructive" : "warning"}
+                          variant={
+                            e.status === "Succeeded"
+                              ? "success"
+                              : e.status === "Failed"
+                                ? "destructive"
+                                : "warning"
+                          }
                         >
                           {e.status}
                         </Badge>
@@ -236,6 +323,7 @@ export default function ExperimentsPage() {
         </TabsContent>
 
         <TabsContent value="hw" className="space-y-4">
+          <ChangeMark ids={["CR-AID-05"]}>
           <LiveHwBenchmark />
           <Card>
             <CardHeader>
@@ -292,6 +380,7 @@ export default function ExperimentsPage() {
               </Table>
             </CardContent>
           </Card>
+          </ChangeMark>
         </TabsContent>
 
         <TabsContent value="model" className="space-y-4">
@@ -319,20 +408,30 @@ export default function ExperimentsPage() {
                 <TableBody>
                   {MODEL_BENCHMARKS.map((b, i) => (
                     <TableRow key={i}>
-                      <TableCell className="font-mono text-xs">{b.model}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {b.model}
+                      </TableCell>
                       <TableCell className="text-xs">{b.bench}</TableCell>
                       <TableCell className="text-right font-mono tabular-nums font-semibold">
-                        {b.score}{b.unit}
+                        {b.score}
+                        {b.unit}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Progress
                             value={Math.min(100, (b.score / b.target) * 100)}
                             className="w-24"
-                            indicatorClassName={b.score >= b.target ? "bg-brand-mint-500" : "bg-amber-500"}
+                            indicatorClassName={
+                              b.score >= b.target
+                                ? "bg-brand-mint-500"
+                                : "bg-amber-500"
+                            }
                           />
-                          <span className={`font-mono text-[10px] tabular-nums ${b.score >= b.target ? "text-brand-mint-700" : "text-amber-600"}`}>
-                            목표 {b.target}{b.unit}
+                          <span
+                            className={`font-mono text-[10px] tabular-nums ${b.score >= b.target ? "text-brand-mint-700" : "text-amber-600"}`}
+                          >
+                            목표 {b.target}
+                            {b.unit}
                           </span>
                         </div>
                       </TableCell>
@@ -345,7 +444,10 @@ export default function ExperimentsPage() {
         </TabsContent>
       </Tabs>
 
-      <CreateExperimentDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+      <CreateExperimentDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+      />
     </div>
   );
 }
@@ -568,7 +670,13 @@ function LiveModelBenchmark() {
 // ─────────────────────────────────────────────────────────────
 // 실험 정의 다이얼로그 — ETRI 260615 §6.C.i 반영
 // ─────────────────────────────────────────────────────────────
-function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+function CreateExperimentDialog({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
   const [name, setName] = React.useState("");
   const [workspace, setWorkspace] = React.useState("ai-research");
   const { data: wsData } = api.kubeflow.profiles() as {
@@ -579,7 +687,9 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
   const [metric, setMetric] = React.useState("accuracy");
   const [goal, setGoal] = React.useState("0.95");
   const [maxTrials, setMaxTrials] = React.useState("50");
-  const [algorithm, setAlgorithm] = React.useState<"random" | "bayesian" | "grid" | "hyperband" | "tpe">("bayesian");
+  const [algorithm, setAlgorithm] = React.useState<
+    "random" | "bayesian" | "grid" | "hyperband" | "tpe"
+  >("bayesian");
 
   const qc = useQueryClient();
   const [busy, setBusy] = React.useState(false);
@@ -644,7 +754,8 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
         <DialogHeader>
           <DialogTitle>실험 정의 (Hyperparameter Optimization)</DialogTitle>
           <DialogDescription>
-            Katib 기반 HPO 실험을 새로 정의한다. 파이프라인의 파라미터 공간을 탐색해 최적값을 찾음.
+            Katib 기반 HPO 실험을 새로 정의한다. 파이프라인의 파라미터 공간을
+            탐색해 최적값을 찾음.
           </DialogDescription>
         </DialogHeader>
 
@@ -679,11 +790,20 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>탐색 알고리즘</Label>
-              <Select value={algorithm} onValueChange={(v) => setAlgorithm(v as typeof algorithm)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select
+                value={algorithm}
+                onValueChange={(v) => setAlgorithm(v as typeof algorithm)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="bayesian">Bayesian Optimization</SelectItem>
-                  <SelectItem value="tpe">TPE (Tree-structured Parzen)</SelectItem>
+                  <SelectItem value="bayesian">
+                    Bayesian Optimization
+                  </SelectItem>
+                  <SelectItem value="tpe">
+                    TPE (Tree-structured Parzen)
+                  </SelectItem>
                   <SelectItem value="random">Random Search</SelectItem>
                   <SelectItem value="grid">Grid Search</SelectItem>
                   <SelectItem value="hyperband">Hyperband</SelectItem>
@@ -692,14 +812,26 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
             </div>
             <div>
               <Label>최대 시도 횟수</Label>
-              <Input type="number" value={maxTrials} onChange={(e) => setMaxTrials(e.target.value)} min="1" />
+              <Input
+                type="number"
+                value={maxTrials}
+                onChange={(e) => setMaxTrials(e.target.value)}
+                min="1"
+              />
             </div>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div>
               <Label>목표 유형</Label>
-              <Select value={objective} onValueChange={(v) => setObjective(v as "maximize" | "minimize")}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select
+                value={objective}
+                onValueChange={(v) =>
+                  setObjective(v as "maximize" | "minimize")
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="maximize">Maximize</SelectItem>
                   <SelectItem value="minimize">Minimize</SelectItem>
@@ -729,7 +861,11 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
             </div>
             <div>
               <Label>목표값</Label>
-              <Input value={goal} onChange={(e) => setGoal(e.target.value)} className="font-mono text-xs" />
+              <Input
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+                className="font-mono text-xs"
+              />
             </div>
           </div>
           {!METRIC_PRESETS.some((m) => m.value === metric) && (
@@ -744,7 +880,8 @@ function CreateExperimentDialog({ open, onClose }: { open: boolean; onClose: () 
             </div>
           )}
           <div className="rounded-md border border-amber-200 bg-amber-50/60 p-2 text-[11px] text-amber-900">
-            파라미터 공간(learning rate, batch size 등)은 다음 단계에서 지정한다 — 여기선 실험 뼈대만 등록.
+            파라미터 공간(learning rate, batch size 등)은 다음 단계에서 지정한다
+            — 여기선 실험 뼈대만 등록.
           </div>
         </div>
 

@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import * as React from "react";
 import {
   Building2,
@@ -58,9 +59,9 @@ export default function ResourceMapPage() {
     <div className="space-y-6">
       <PageHeader
         title="리소스 현황"
-        description="이노그리드 KCloud Monitor v2 — 6계층 자원 모델 (L0→L5 + LA)로 모든 리소스 관계 추적"
+        description="KCloud Monitor v2 — 6계층 자원 모델 (L0→L5 + LA)로 모든 리소스 관계 추적"
         actions={
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => toast.success("Discovery 실행 — 물리 서버·가속기 재탐색")}>
             <Network className="size-3.5" /> Discovery 트리거
           </Button>
         }

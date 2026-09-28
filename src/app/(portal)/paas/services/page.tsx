@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { ChangeMark } from "@/components/change-mark";
 import {
   Network,
   Search,
@@ -233,7 +234,7 @@ function ServiceDetailPanel({ svc }: { svc: KService }) {
           <TabsList>
             <TabsTrigger value="ports">포트 ({svc.ports.length})</TabsTrigger>
             <TabsTrigger value="endpoints">엔드포인트 ({svc.endpoints})</TabsTrigger>
-            <TabsTrigger value="ingress">Ingress</TabsTrigger>
+            <ChangeMark ids={["CR-PAAS-02"]} inline><TabsTrigger value="ingress">Ingress</TabsTrigger></ChangeMark>
             <TabsTrigger value="selector">셀렉터</TabsTrigger>
             <TabsTrigger value="yaml">YAML</TabsTrigger>
           </TabsList>
@@ -284,7 +285,7 @@ function ServiceDetailPanel({ svc }: { svc: KService }) {
           </TabsContent>
 
           <TabsContent value="ingress" className="space-y-3 pt-3">
-            <IngressRelationView svc={svc} />
+            <ChangeMark ids={["CR-PAAS-02"]}><IngressRelationView svc={svc} /></ChangeMark>
           </TabsContent>
 
           <TabsContent value="selector" className="space-y-2 pt-3">

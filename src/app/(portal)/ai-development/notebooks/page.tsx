@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import * as React from "react";
 import Link from "next/link";
 import {
@@ -17,6 +18,7 @@ import {
   HardDrive,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useProjectContext } from "@/lib/project-context";
 import {
   Card,
   CardContent,
@@ -28,13 +30,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -54,7 +49,6 @@ import { MoreHorizontal } from "lucide-react";
 import { cn, relativeTime } from "@/lib/utils";
 import type { KFNotebook } from "@/lib/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { notebookAction, KF_API } from "@/lib/notebook-api";
 
 /** 볼륨 칸 — 총 용량 + 실사용량(du 실측, 60초 갱신, Running일 때만) */
@@ -93,17 +87,16 @@ import { SnapshotDialog, ResizeDialog } from "@/components/notebook-manage-dialo
 
 export default function NotebooksPage() {
   const [q, setQ] = React.useState("");
-  const [ns, setNs] = React.useState("all");
   const [createOpen, setCreateOpen] = React.useState(false);
   const [preset, setPreset] = React.useState<NotebookPreset | undefined>();
   const [snapOpen, setSnapOpen] = React.useState(false);
   const [resizeOpen, setResizeOpen] = React.useState(false);
   const [target, setTarget] = React.useState<KFNotebook | null>(null);
   const qc = useQueryClient();
-  const { data: profileData } = api.kubeflow.profiles() as {
-    data: { items: { name: string }[] } | undefined;
-  };
-  const profileNamespaces = profileData?.items.map((p) => p.name) ?? ["ai-research"];
+  // 네임스페이스 = 헤더에서 고른 프로젝트 (화면별 네임스페이스 선택은 두지 않는다)
+  const { match, label, isAll, current, allowed } = useProjectContext();
+  // 새 노트북은 지금 프로젝트에 만든다. 전체 보기면 허용된 프로젝트 중에서 고른다
+  const profileNamespaces = isAll ? allowed : [current, ...allowed.filter((n) => n !== current)];
   const { data, isLoading } = api.kubeflow.notebooks() as {
     data: { items: KFNotebook[] } | undefined;
     isLoading: boolean;
@@ -134,17 +127,13 @@ export default function NotebooksPage() {
   }
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
-  const items = data.items.filter(
-    (n) =>
-      (!q || n.name.toLowerCase().includes(q.toLowerCase())) &&
-      (ns === "all" || n.namespace === ns),
-  );
-  const namespaces = Array.from(new Set(data.items.map((n) => n.namespace)));
+  const mine = data.items.filter((n) => match(n.namespace));
+  const items = mine.filter((n) => !q || n.name.toLowerCase().includes(q.toLowerCase()));
 
   const counts = {
-    running: data.items.filter((n) => n.status === "Running").length,
-    starting: data.items.filter((n) => n.status === "Starting").length,
-    stopped: data.items.filter((n) => n.status === "Stopped").length,
+    running: mine.filter((n) => n.status === "Running").length,
+    starting: mine.filter((n) => n.status === "Starting").length,
+    stopped: mine.filter((n) => n.status === "Stopped").length,
   };
 
   return (
@@ -164,7 +153,7 @@ export default function NotebooksPage() {
         <StatChip label="정지" value={counts.stopped} accent="slate" hint="유휴" />
         <StatChip
           label="총 가속기 할당"
-          value={data.items.reduce((s, n) => s + n.acceleratorCount, 0)}
+          value={mine.reduce((s, n) => s + n.acceleratorCount, 0)}
           accent="indigo"
           hint="GPU·NPU·PIM"
         />
@@ -182,19 +171,9 @@ export default function NotebooksPage() {
               className="w-56 pl-9"
             />
           </div>
-          <Select value={ns} onValueChange={setNs}>
-            <SelectTrigger className="w-48">
-              <SelectValue placeholder="네임스페이스" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">전체 네임스페이스</SelectItem>
-              {namespaces.map((n) => (
-                <SelectItem key={n} value={n}>
-                  {n}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Badge variant="outline" className="h-9 gap-1.5 px-3 text-xs font-normal" title="헤더의 프로젝트 선택을 따른다">
+            네임스페이스 <span className="font-mono font-semibold">{isAll ? "전체" : label}</span>
+          </Badge>
           <span className="ml-auto text-xs text-muted-foreground">{items.length}개 서버</span>
         </div>
       </Card>
@@ -345,8 +324,7 @@ export default function NotebooksPage() {
                   tpl.preset
                     ? "hover:border-primary/40 hover:bg-secondary/30"
                     : "cursor-not-allowed opacity-55",
-                )}
-              >
+                )}>
                 <div
                   className={cn(
                     "flex size-10 shrink-0 items-center justify-center rounded-lg",

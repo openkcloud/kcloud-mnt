@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { ChangeMark } from "@/components/change-mark";
 import {
   GitBranch,
   Play,
@@ -17,6 +18,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { uploadPipeline } from "@/lib/notebook-api";
+import { useProjectContext } from "@/lib/project-context";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -77,9 +79,10 @@ export default function PipelinesPage() {
   const [selected, setSelected] = React.useState<string | undefined>();
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const qc = useQueryClient();
-  const active = selected
-    ? data?.items.find((p) => p.id === selected)
-    : data?.items[0];
+  // 헤더에서 고른 프로젝트의 파이프라인만. 실백엔드의 KFP 등록본은 네임스페이스가 없어 공용으로 보인다
+  const { match } = useProjectContext();
+  const items = (data?.items ?? []).filter((p) => match(p.namespace));
+  const active = (selected ? items.find((p) => p.id === selected) : undefined) ?? items[0];
 
   // 업로드된 정의에서 추출한 실제 단계 그래프
   const { data: dagData } = useQuery({
@@ -246,10 +249,10 @@ export default function PipelinesPage() {
           <CardTitle className="flex items-center justify-between text-base">
             <span>파이프라인</span>
             <div className="flex items-center gap-2">
-              <Badge variant="ghost">{data.items.length}</Badge>
-              <Button size="sm" onClick={() => setUploadOpen(true)}>
+              <Badge variant="ghost">{items.length}</Badge>
+              <ChangeMark ids={["CR-AID-02"]} inline><Button size="sm" onClick={() => setUploadOpen(true)}>
                 <Upload className="size-3.5" /> YAML 업로드
-              </Button>
+              </Button></ChangeMark>
             </div>
           </CardTitle>
           <CardDescription className="text-[11px]">
@@ -258,7 +261,7 @@ export default function PipelinesPage() {
         </CardHeader>
         <CardContent className="p-0">
           <div className="divide-y divide-border">
-            {data.items.map((p) => (
+            {items.map((p) => (
               <button
                 key={p.id}
                 onClick={() => setSelected(p.id)}

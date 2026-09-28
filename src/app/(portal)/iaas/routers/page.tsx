@@ -1,8 +1,10 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import { Router as RouterIcon, Plus, Trash2, Edit, Globe, Network } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
+import { useAuth } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -92,6 +94,7 @@ const INITIAL: RouterEntity[] = [
 ];
 
 export default function RoutersPage() {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
   const [items, setItems] = React.useState<RouterEntity[]>(INITIAL);
   const [selected, setSelected] = React.useState<RouterEntity | null>(null);
   const [createOpen, setCreateOpen] = React.useState(false);
@@ -104,15 +107,17 @@ export default function RoutersPage() {
 
   return (
     <div className="space-y-6">
+      <ChangeMark ids={["CR-IAAS-04"]}>
       <PageHeader
         title="라우터"
-        description="OpenStack Neutron L3 라우터 — 서브넷 간 라우팅과 외부망 연결 관리"
+        description="OpenStack Neutron L3 라우터 — 서브넷 간 라우팅과 외부망 연결. 관리자 권한 기능"
         actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          isAdmin && <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="size-4" /> 라우터 생성
           </Button>
         }
       />
+      </ChangeMark>
 
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard label="라우터" value={totals.total} unit="개" icon={RouterIcon} accent="indigo" />
@@ -153,6 +158,7 @@ export default function RoutersPage() {
                   </Badge>
                 </TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
+                  {isAdmin && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="icon-sm">
@@ -182,6 +188,7 @@ export default function RoutersPage() {
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                  )}
                 </TableCell>
               </TableRow>
             ))}

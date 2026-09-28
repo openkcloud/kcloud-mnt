@@ -20,6 +20,15 @@ const nextConfig: NextConfig = {
   // fine; only the type-check chokes.
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
+  // dev 전용: 이전 버전 스냅샷(public/versions/<id>/…/) 디렉터리 경로를 index.html로 연결.
+  // 정적 호스팅(Netlify)은 디렉터리 인덱스를 알아서 처리하므로 빌드에는 rewrite를 넣지 않는다.
+  async rewrites() {
+    if (process.env.NODE_ENV !== "development") return [];
+    return [
+      { source: "/versions/:id/", destination: "/versions/:id/index.html" },
+      { source: "/versions/:id/:path*/", destination: "/versions/:id/:path*/index.html" },
+    ];
+  },
 };
 
 export default nextConfig;

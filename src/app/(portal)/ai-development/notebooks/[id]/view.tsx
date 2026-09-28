@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import * as React from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -34,7 +35,6 @@ import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
 import { relativeTime } from "@/lib/utils";
 import type { KFNotebook } from "@/lib/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { notebookAction } from "@/lib/notebook-api";
 import { KF_BASE } from "@/lib/kf";
 

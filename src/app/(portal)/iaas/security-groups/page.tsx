@@ -1,10 +1,12 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   Shield, Plus, Search, MoreVertical, Trash2, Edit, Copy, Download, ArrowDown, ArrowUp,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
+import { useAuth } from "@/lib/auth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -94,6 +96,7 @@ const INITIAL: SecurityGroup[] = [
 ];
 
 export default function SecurityGroupsPage() {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
   const [items, setItems] = React.useState<SecurityGroup[]>(INITIAL);
   const [q, setQ] = React.useState("");
   const [selected, setSelected] = React.useState<SecurityGroup | null>(null);
@@ -109,15 +112,17 @@ export default function SecurityGroupsPage() {
 
   return (
     <div className="space-y-6">
+      <ChangeMark ids={["CR-IAAS-06"]}>
       <PageHeader
         title="보안 그룹"
-        description="OpenStack Neutron 보안 그룹 — 인바운드/아웃바운드 트래픽 규칙 관리"
+        description={isAdmin ? "OpenStack Neutron 보안 그룹 — 규칙 생성·수정·삭제는 관리자 권한" : "OpenStack Neutron 보안 그룹 — 관리자가 만든 보안 그룹을 VM 신청 시 선택한다. 생성·수정은 관리자 권한"}
         actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          isAdmin && <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="size-4" /> 보안 그룹 생성
           </Button>
         }
       />
+      </ChangeMark>
 
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard label="보안 그룹" value={totals.total} unit="개" icon={Shield} accent="indigo" />
@@ -177,6 +182,7 @@ export default function SecurityGroupsPage() {
                 <TableCell className="text-center font-mono">{sg.attachedTo}</TableCell>
                 <TableCell className="text-xs text-muted-foreground">{sg.createdAt}</TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
+                  {isAdmin && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="icon-sm">
@@ -215,6 +221,7 @@ export default function SecurityGroupsPage() {
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
