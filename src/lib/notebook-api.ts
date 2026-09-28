@@ -226,7 +226,7 @@ const MOCK_NOTEBOOKS: Record<string, NotebookResource> = {
  *     kind: Notebook
  *     metadata:
  *       name: research-llama-finetune
- *       namespace: ai-research            # = Kubeflow Profile = K8s 네임스페이스
+ *       namespace: ai-research            # = 워크스페이스(Kubeflow Profile) = 프로젝트 1:1
  *     spec:
  *       template:
  *         spec:
