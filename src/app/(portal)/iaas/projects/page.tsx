@@ -39,7 +39,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useRouter } from "next/navigation";
 import { useProjectContext } from "@/lib/project-context";
 import { useFeatureVisible } from "@/lib/scope";
-import { notebooks as NB, pipelines as PL, experiments as EX, inferenceServices as SV } from "@/mocks/fixtures";
+import { useProjectAIData } from "@/lib/project-ai-data";
 import {
   Table,
   TableBody,
@@ -383,13 +383,11 @@ function KV({ label, value, mono }: { label: string; value: string; mono?: boole
 function ProjectAIWorkspace({ project: t }: { project: Tenant }) {
   const router = useRouter();
   const { setCurrent } = useProjectContext();
-  const nbs = NB.filter((n) => n.namespace === t.name);
-  const pls = PL.filter((n) => n.namespace === t.name);
-  const exs = EX.filter((n) => n.namespace === t.name);
-  const svs = SV.filter((n) => n.namespace === t.name);
-  const accInAI = nbs.reduce((a, n) => a + n.acceleratorCount, 0) + svs.length;
+  // AI 노트북 자원 요약 — 실백엔드면 실제 워크스페이스 값 (src/lib/project-ai-data.ts)
+  const ai = useProjectAIData(t);
+  const nbs = ai.notebooks;
   const experimentsOn = useFeatureVisible("ai.experiments");
-  const storageGb = nbs.reduce((a, n) => a + n.storageGb, 0);
+  const pct = (u: number, m: number) => (m > 0 ? Math.round((u / m) * 100) : 0);
   function open(path = "/ai-development") {
     setCurrent(t.name);
     router.push(path);
@@ -405,17 +403,22 @@ function ProjectAIWorkspace({ project: t }: { project: Tenant }) {
               <span className="font-mono">openkcloud.io/project-id={t.id}</span>
             </div>
           </div>
-          <Badge variant="success" className="shrink-0">Active</Badge>
+          <Badge variant={ai.missing ? "outline" : "success"} className="shrink-0">{ai.missing ? "미생성" : ai.status}</Badge>
         </div>
         <div className={`grid gap-2 rounded-lg bg-secondary/40 p-3 ${experimentsOn ? "grid-cols-4" : "grid-cols-3"}`}>
           <Stat label="노트북" value={`${nbs.length}`} />
-          <Stat label="파이프라인" value={`${pls.length}`} />
-          {experimentsOn && <Stat label="실험" value={`${exs.length}`} />}
-          <Stat label="서비스" value={`${svs.length}`} />
+          <Stat label="파이프라인" value={`${ai.pipelines}`} />
+          {experimentsOn && <Stat label="실험" value={`${ai.experiments}`} />}
+          <Stat label="서비스" value={`${ai.services}`} />
         </div>
         <div className="space-y-2.5">
-          <QuotaRow label="AI가 쓰는 가속기 (프로젝트 쿼터 대비)" used={Math.min(accInAI, t.quotaAcc)} max={t.quotaAcc} pct={Math.round((Math.min(accInAI, t.quotaAcc) / t.quotaAcc) * 100)} unit="장" />
-          <QuotaRow label="노트북 볼륨 (프로젝트 디스크 대비)" used={Math.round(storageGb / 100) / 10} max={t.quotaDiskTb} pct={Math.round((storageGb / 1000 / t.quotaDiskTb) * 100)} unit="TB" />
+          <QuotaRow label={`AI가 쓰는 가속기 (${ai.accBasis} 대비)`} used={ai.accUsed} max={ai.accMax} pct={pct(ai.accUsed, ai.accMax)} unit="장" />
+          <QuotaRow label={ai.real ? "스토리지 (워크스페이스 쿼터 대비)" : "노트북 볼륨 (프로젝트 디스크 대비)"} used={ai.storageUsedTb} max={ai.storageMaxTb} pct={pct(ai.storageUsedTb, ai.storageMaxTb)} unit="TB" />
+          {ai.missing && (
+            <p className="text-[11px] text-muted-foreground">
+              이 프로젝트 이름의 워크스페이스가 아직 없다. 프로젝트 승인 연동 전까지는 AI 노트북 › 워크스페이스에서 관리자가 만든다.
+            </p>
+          )}
         </div>
       </Card>
       <Card className="p-0">
