@@ -5,6 +5,7 @@
  *   - "auto:8000"            → 브라우저가 접속한 호스트의 8000 포트 (권장)
  *                              localhost로 들어오면 localhost:8000,
  *                              192.168.x.x로 들어오면 그 IP:8000 → 사내 다른 PC 접속 지원
+ *   - "same-origin"          → 포털과 같은 주소 (클러스터 배포용, Ingress가 /api·/notebook 분기)
  *   - "http://host:8000"     → 고정 주소
  *   - 미설정                  → mock 모드
  */
@@ -14,6 +15,11 @@ export const KF_ENABLED = RAW !== "";
 
 export const KF_BASE = (() => {
   if (!RAW) return "";
+  // "same-origin" → 포털과 같은 주소로 호출 (클러스터 배포: Ingress가 /api·/notebook을 백엔드로 넘김)
+  if (RAW === "same-origin") {
+    if (typeof window === "undefined") return "";
+    return window.location.origin;
+  }
   if (RAW.startsWith("auto:")) {
     if (typeof window === "undefined") return ""; // SSR 시점에는 호출 안 함
     // https로 들어왔다면 외부 터널(단일 입구 리버스 프록시) 경유다 —
