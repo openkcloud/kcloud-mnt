@@ -714,7 +714,9 @@ function LiveCacheQueueSection() {
           <Badge variant="success" className="text-[10px]">실측</Badge>
         </CardTitle>
         <CardDescription>
-          vLLM이 제공하는 표준 지표입니다 — 요청당 평균 출력 {d.throughput.avgOutputTokens} 토큰
+          vLLM이 제공하는 표준 지표입니다 — 요청당 평균 출력 {d.throughput.avgOutputTokens} 토큰.
+          캐시 부족 판단은 vLLM 표준 메트릭 <code className="font-mono text-[11px]">gpu_cache_usage_perc</code>(사용률)와{" "}
+          <code className="font-mono text-[11px]">num_preemptions_total</code>(선점 횟수)를 함께 본다 — 사용률이 높고 선점이 늘면 캐시가 모자란 것이다.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -820,10 +822,21 @@ function InferenceLlmSection() {
       </Card>
 
       <LiveLlmCard only={current} />
-      <LiveLatencySection />
-      <LiveCacheQueueSection />
-      <LiveInsights />
-      <LiveHotspots />
+      <ChangeMark ids={["CR-AID-08"]}>
+        <LiveLatencySection />
+      </ChangeMark>
+      <ChangeMark ids={["CR-AID-07"]}>
+        <LiveCacheQueueSection />
+      </ChangeMark>
+      {/* 자동 진단·핫스팟 프로파일링은 최종 형상 (CR-AID-09, scope ai.model-insights.aiops) */}
+      <FeatureGate id="ai.model-insights.aiops">
+        <LiveInsights />
+      </FeatureGate>
+      <FeatureGate id="ai.model-insights.aiops" fallback="none">
+        <ChangeMark ids={["CR-AID-06"]}>
+          <LiveHotspots />
+        </ChangeMark>
+      </FeatureGate>
     </LlmCtx.Provider>
   );
 }
@@ -1079,7 +1092,9 @@ export default function ModelInsightsPage() {
         <TabsContent value="pipeline" className="mt-4 space-y-4">
           <LivePipelineBottleneck />
           <LiveRunHistory />
-          <LivePipelineInsight />
+          <FeatureGate id="ai.model-insights.aiops">
+            <LivePipelineInsight />
+          </FeatureGate>
         </TabsContent>
       </Tabs>
     </div>
