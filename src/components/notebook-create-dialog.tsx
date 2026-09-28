@@ -219,7 +219,7 @@ export function NotebookCreateDialog({ open, onOpenChange, namespaces, preset }:
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Profile (네임스페이스)</Label>
+              <Label>워크스페이스 (프로젝트)</Label>
               <Select value={namespace} onValueChange={setNamespace}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>

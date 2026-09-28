@@ -200,9 +200,9 @@ function ProjectFlowBand() {
             <div className="text-[11px] font-semibold uppercase tracking-wide text-brand-indigo-700">프로젝트 자원 · IaaS·PaaS</div>
             {KF_ENABLED ? (
               // 실백엔드: IaaS·PaaS 연동 전이라 가상서버·클러스터 수는 없다. 워크스페이스 ResourceQuota 실측만 보여준다
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="flex items-center gap-1.5"><Server className="size-3.5 text-brand-indigo-600" /> 메모리 <strong className="font-mono">{+sum((t) => t.usedRamGb).toFixed(1)}/{sum((t) => t.quotaRamGb)}GB</strong></div>
-                <div className="flex items-center gap-1.5"><Boxes className="size-3.5 text-brand-indigo-600" /> 워크스페이스 <strong className="font-mono">{tenants.length}</strong></div>
+              <div className="space-y-1 text-xs">
+                <div className="flex items-center gap-1.5 whitespace-nowrap"><Boxes className="size-3.5 text-brand-indigo-600" /> 워크스페이스 <strong className="font-mono">{tenants.length}</strong></div>
+                <div className="flex items-center gap-1.5 whitespace-nowrap"><Server className="size-3.5 text-brand-indigo-600" /> 메모리 <strong className="font-mono">{+sum((t) => t.usedRamGb).toFixed(1)} / {sum((t) => t.quotaRamGb)}GB</strong></div>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-2 text-xs">

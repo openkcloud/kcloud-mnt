@@ -241,7 +241,7 @@ export default function PipelinesPage() {
   if (isLoading || !data) return <Skeleton className="h-96" />;
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
+    <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
       <UploadPipelineDialog open={uploadOpen} onClose={() => setUploadOpen(false)} />
       {/* Pipeline list */}
       <Card>
@@ -297,7 +297,7 @@ export default function PipelinesPage() {
 
       {/* Active pipeline DAG */}
       {active && (
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <Card>
             <CardHeader className="flex-row items-center justify-between">
               <div>
