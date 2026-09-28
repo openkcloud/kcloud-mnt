@@ -24,6 +24,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { api } from "@/lib/api";
 import { ProfileCreateDialog } from "@/components/profile-create-dialog";
 import { ProfileEditDialog, type EditableProfile } from "@/components/profile-edit-dialog";
+import { WorkspaceRequestDialog, WorkspaceRequestsPanel } from "@/components/workspace-requests";
 import { KF_ENABLED } from "@/lib/kf";
 
 /* Kubeflow Profile = namespace + RBAC + ResourceQuota + PodDefault 묶음.
@@ -95,6 +96,7 @@ export default function ProfilesPage() {
   const { match, isAdmin } = useProjectContext();
   const profiles = allProfiles.filter((p) => match(p.name));
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [requestOpen, setRequestOpen] = React.useState(false);
   const [editOpen, setEditOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<EditableProfile | null>(null);
   return (
@@ -104,6 +106,12 @@ export default function ProfilesPage() {
         description="프로젝트가 승인되면 같은 이름으로 자동 생성된다 — Kubeflow Profile = 네임스페이스 + RBAC + ResourceQuota + PodDefault"
         actions={
           <>
+            {/* 일반 사용자: 워크스페이스 신청 → 관리자 승인 시 자동 생성 (포털 정식 자원 요청 연동 전 임시 창구) */}
+            {!isAdmin && KF_ENABLED && (
+              <Button onClick={() => setRequestOpen(true)}>
+                <Plus className="size-4" /> 워크스페이스 신청
+              </Button>
+            )}
             <Button variant="outline" asChild>
               <Link href="/iaas/projects">
                 <Plus className="size-4" /> 프로젝트 자원 신청
@@ -116,10 +124,15 @@ export default function ProfilesPage() {
               </Button>
             )}
             <ProfileCreateDialog open={createOpen} onOpenChange={setCreateOpen} />
+            <WorkspaceRequestDialog open={requestOpen} onOpenChange={setRequestOpen} />
             <ProfileEditDialog profile={editTarget} open={editOpen} onOpenChange={setEditOpen} />
           </>
         }
       />
+
+      <ChangeMark ids={["CR-AID-12"]}>
+        <WorkspaceRequestsPanel isAdmin={isAdmin} />
+      </ChangeMark>
 
       {isAdmin && (
         <ChangeMark ids={["CR-AID-12"]}>

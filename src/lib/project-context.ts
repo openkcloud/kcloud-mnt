@@ -5,9 +5,10 @@
  * 쿼터·사용량도 Profile의 ResourceQuota 실측값이다. 목업 모드는 fixtures의 tenants를 쓴다. */
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { useAuth, type User } from "@/lib/auth";
+import { useQuery } from "@tanstack/react-query";
+import { useAuth, ensureBackendSession, type User } from "@/lib/auth";
 import { api } from "@/lib/api";
-import { KF_ENABLED } from "@/lib/kf";
+import { KF_BASE, KF_ENABLED } from "@/lib/kf";
 import { tenants } from "@/mocks/fixtures";
 import type { Tenant } from "@/lib/types";
 
@@ -79,11 +80,29 @@ export function useAIProjects(): AIProject[] {
 /** 사용자 계정이 소속된 프로젝트 (목업 기본값) */
 const DEFAULT_USER_PROJECTS = ["ai-research", "llm-serving"];
 
-export function allowedProjects(user: User | null, projects: AIProject[] = AI_PROJECTS): string[] {
+/** 워크스페이스 신청이 승인되어 소속된 프로젝트 — 백엔드 /auth/me (일반 사용자만) */
+function useApprovedProjects(user: User | null): string[] {
+  const { data } = useQuery({
+    queryKey: ["auth", "me", user?.username],
+    queryFn: async () => {
+      await ensureBackendSession();
+      const res = await fetch(`${KF_BASE}/api/v1/auth/me`, { credentials: "include" });
+      if (!res.ok) return { projects: [] as string[] };
+      return (await res.json()) as { projects?: string[] };
+    },
+    enabled: KF_ENABLED && !!user && user.role !== "admin",
+    refetchInterval: 30000,
+    retry: false,
+  });
+  return data?.projects ?? [];
+}
+
+export function allowedProjects(user: User | null, projects: AIProject[] = AI_PROJECTS, extra: string[] = []): string[] {
   if (!user) return [];
   const all = projects.map((p) => p.name);
   if (user.role === "admin") return all;
-  const mine = user.projects.includes("*") ? DEFAULT_USER_PROJECTS : user.projects;
+  const base = user.projects.includes("*") ? DEFAULT_USER_PROJECTS : user.projects;
+  const mine = [...base, ...extra];
   return all.filter((n) => mine.includes(n));
 }
 
@@ -103,8 +122,9 @@ export function useProjectContext() {
   const stored = useProjectCtxStore((s) => s.current);
   const setCurrent = useProjectCtxStore((s) => s.setCurrent);
   const projects = useAIProjects();
+  const approved = useApprovedProjects(user);
   const isAdmin = user?.role === "admin";
-  const allowed = allowedProjects(user, projects);
+  const allowed = allowedProjects(user, projects, approved);
   // 실백엔드 목록이 아직 안 왔으면 저장된 선택을 그대로 둔다(첫 렌더에서 엉뚱한 프로젝트로 튀지 않게)
   const loading = KF_ENABLED && projects.length === 0;
   const fallback = isAdmin ? ALL : (allowed[0] ?? ALL);
