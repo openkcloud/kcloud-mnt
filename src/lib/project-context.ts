@@ -88,12 +88,14 @@ export function allowedProjects(user: User | null, projects: AIProject[] = AI_PR
 }
 
 interface ProjectCtxState {
-  current: string;
+  /** 사용자가 직접 고른 프로젝트. 아직 안 골랐으면 null — 관리자는 전체, 사용자는 첫 소속 프로젝트로 시작한다 */
+  current: string | null;
   setCurrent: (p: string) => void;
 }
 
+// 저장 키를 v2로 바꿔, 예전 기본값(ai-research)이 남아 있는 브라우저도 관리자 기본 '전체'로 다시 시작하게 한다
 const useProjectCtxStore = create<ProjectCtxState>()(
-  persist((set) => ({ current: "ai-research", setCurrent: (current) => set({ current }) }), { name: "openkcloud-project" }),
+  persist((set) => ({ current: null, setCurrent: (current) => set({ current }) }), { name: "openkcloud-project-v2" }),
 );
 
 export function useProjectContext() {
@@ -105,8 +107,9 @@ export function useProjectContext() {
   const allowed = allowedProjects(user, projects);
   // 실백엔드 목록이 아직 안 왔으면 저장된 선택을 그대로 둔다(첫 렌더에서 엉뚱한 프로젝트로 튀지 않게)
   const loading = KF_ENABLED && projects.length === 0;
-  let current = stored;
-  if (!loading && (current === ALL ? !isAdmin : !allowed.includes(current))) current = allowed[0] ?? ALL;
+  const fallback = isAdmin ? ALL : (allowed[0] ?? ALL);
+  let current = stored ?? fallback;
+  if (!loading && (current === ALL ? !isAdmin : !allowed.includes(current))) current = fallback;
   const project = projects.find((p) => p.name === current);
   return {
     current,
