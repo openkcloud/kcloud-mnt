@@ -1,0 +1,121 @@
+"use client";
+/**
+ * MNT-CORE 메뉴 API 연동 — 사이드바(LNB)를 DB 원장(mnu_menu·mnu_role_menu)에서 받는다.
+ *
+ * 주소 결정(NEXT_PUBLIC_CORE_API):
+ *   - 미설정          → http://localhost:8000 (로컬 dev, MNT-CORE 직접 호출 — CORS 허용됨)
+ *   - ""(빈 문자열)   → same-origin 상대경로 (게이트웨이가 /api/core 라우팅하는 운영 구성)
+ *   - "http://..."    → 고정 주소
+ *
+ * 실패 시 정적 nav.ts 로 폴백 — 백엔드가 없어도 목업은 기존대로 동작한다.
+ */
+import { useQuery } from "@tanstack/react-query";
+import {
+  LayoutDashboard,
+  Server,
+  Boxes,
+  BrainCircuit,
+  ShoppingBag,
+  Activity,
+  ShieldCheck,
+  Settings,
+  Layers,
+  GitBranch,
+  ScrollText,
+  Bell,
+  Sparkles,
+  Database,
+  Network,
+  Route,
+  KeyRound,
+  HardDrive,
+  Globe,
+  ClipboardList,
+  ClipboardCheck,
+  Disc,
+  Cpu,
+  CircleDot,
+  type LucideIcon,
+} from "lucide-react";
+import type { Role } from "@/lib/auth";
+import type { NavItem, NavSection } from "@/lib/nav";
+
+const RAW = process.env.NEXT_PUBLIC_CORE_API;
+export const CORE_BASE = RAW === undefined ? "http://localhost:8000" : RAW;
+
+// DB(icon 컬럼, lucide 이름 문자열) → 컴포넌트 매핑
+const ICON_MAP: Record<string, LucideIcon> = {
+  LayoutDashboard,
+  Server,
+  Boxes,
+  BrainCircuit,
+  ShoppingBag,
+  Activity,
+  ShieldCheck,
+  Settings,
+  Layers,
+  GitBranch,
+  ScrollText,
+  Bell,
+  Sparkles,
+  Database,
+  Network,
+  Route,
+  KeyRound,
+  HardDrive,
+  Globe,
+  ClipboardList,
+  ClipboardCheck,
+  Disc,
+  Cpu,
+};
+
+// DB에 없는 프론트 전용 활성판정 보강 — 한 메뉴가 다른 경로의 화면도 대표할 때
+const MATCH_RULES: Record<string, string[]> = {
+  "/ai-development/pipelines": ["/ai-development/experiments"], // 학습 = 파이프라인 + 실험(HPO)
+};
+
+interface ApiMenuNode {
+  code: string;
+  label: string;
+  path: string | null;
+  icon: string | null;
+  menu_type: "section" | "menu" | "submenu";
+  children?: ApiMenuNode[];
+}
+
+interface ApiMenusResponse {
+  role: string;
+  sections: ApiMenuNode[];
+}
+
+function toNavItem(node: ApiMenuNode): NavItem {
+  return {
+    label: node.label,
+    href: node.path ?? "#",
+    icon: (node.icon && ICON_MAP[node.icon]) || CircleDot,
+    ...(node.path && MATCH_RULES[node.path] ? { match: MATCH_RULES[node.path] } : {}),
+    ...(node.children?.length ? { children: node.children.map(toNavItem) } : {}),
+  };
+}
+
+function toSections(data: ApiMenusResponse): NavSection[] {
+  return data.sections
+    .filter((s) => s.menu_type === "section")
+    .map((s) => ({ label: s.label, items: (s.children ?? []).map(toNavItem) }));
+}
+
+/** 역할별 메뉴 — 성공 시 DB 메뉴, 실패 시 undefined(호출측이 정적 nav 폴백). */
+export function useMenusFromCore(role: Role | undefined) {
+  return useQuery({
+    queryKey: ["core-menus", role],
+    queryFn: async (): Promise<NavSection[]> => {
+      const res = await fetch(`${CORE_BASE}/api/core/menus?role=${role}`);
+      if (!res.ok) throw new Error(`menus API ${res.status}`);
+      return toSections((await res.json()) as ApiMenusResponse);
+    },
+    enabled: !!role,
+    staleTime: 5 * 60 * 1000, // 메뉴는 자주 안 바뀜
+    retry: 1,
+  });
+}
