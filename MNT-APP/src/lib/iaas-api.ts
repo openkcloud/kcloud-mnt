@@ -21,7 +21,8 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** 프로젝트 — MNT-IAAS(실 OpenStack) 우선, 실패 시 MSW 목업 폴백. */
+/** 프로젝트 목록(경량, 쿼터 미포함) — MNT-IAAS 우선, 실패 시 MSW 목업 폴백.
+ *  쿼터는 N+1 방지를 위해 목록에 넣지 않고, 상세(useProject)에서 on-demand 조회한다. */
 export function useProjects() {
   return useQuery({
     queryKey: ["iaas-projects"],
@@ -30,7 +31,6 @@ export function useProjects() {
         const d = await fetchJson<{ items: Tenant[] }>(`${IAAS_BASE}/api/iaas/projects`);
         return { items: d.items, live: true };
       } catch {
-        // 폴백: 프론트 same-origin MSW 목업
         const d = await fetchJson<{ items: Tenant[] }>(`/api/iaas/projects`);
         return { items: d.items, live: false };
       }
@@ -38,4 +38,21 @@ export function useProjects() {
     staleTime: 30 * 1000,
     retry: 0,
   });
+}
+
+/** 단일 프로젝트 상세(+쿼터) — 신청 화면 등에서 특정 프로젝트 남은 쿼터 표시용. */
+export function useProject(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-project", projectId],
+    enabled: !!projectId,
+    queryFn: async (): Promise<Tenant> =>
+      fetchJson<Tenant>(`${IAAS_BASE}/api/iaas/projects/${projectId}`),
+    staleTime: 30 * 1000,
+    retry: 0,
+  });
+}
+
+/** 남은 쿼터 = 한도 - 사용량 (음수 방지). 신청 화면에서 "남은 양" 표시 공통 유틸. */
+export function remaining(quota: number, used: number): number {
+  return Math.max(0, (quota ?? 0) - (used ?? 0));
 }
