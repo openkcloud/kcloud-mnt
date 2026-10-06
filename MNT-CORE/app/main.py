@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .db import engine
-from .routers import codes, menus
+from .routers import codes, menus, ssh_keys
 
 app = FastAPI(title="MNT-CORE", version="0.1.0")
 
@@ -42,3 +42,4 @@ def healthz():
 
 app.include_router(menus.router, prefix=settings.api_prefix)
 app.include_router(codes.router, prefix=settings.api_prefix)
+app.include_router(ssh_keys.router, prefix=settings.api_prefix)
