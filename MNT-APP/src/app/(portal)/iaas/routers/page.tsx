@@ -368,7 +368,7 @@ function CreateRouterDialog({ open, onClose, projects }: { open: boolean; onClos
             <Select value={projectId} onValueChange={setProjectId}>
               <SelectTrigger><SelectValue placeholder="프로젝트 선택" /></SelectTrigger>
               <SelectContent>
-                {projects.map((p) => (
+                {projects.filter((p) => p.enabled !== false).map((p) => (
                   <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                 ))}
               </SelectContent>

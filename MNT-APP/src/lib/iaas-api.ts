@@ -435,3 +435,95 @@ export function useRouterInterface(routerId: string) {
     },
   });
 }
+
+// ────── 볼륨·스토리지 (Cinder, 백엔드 Ceph) ──────
+export interface VolumeAttachment { serverId: string | null; device: string | null }
+export interface VolumeSummary {
+  id: string; name: string; tenantId: string; size: number; type: string;
+  status: string; bootable: boolean; attachments: VolumeAttachment[]; description: string; createdAt: string;
+}
+export interface VolumeSnapshot { id: string; name: string; size: number; status: string; createdAt: string }
+export interface VolumeDetail extends VolumeSummary { snapshots: VolumeSnapshot[] }
+export interface StoragePool { name: string; backend: string; protocol: string; totalGb: number; freeGb: number }
+export interface VolumeTypeOpt { id: string; name: string }
+
+// Cinder 전이(진행 중) 상태 — 이 상태가 하나라도 있으면 자동 폴링, 안정되면 중단.
+const VOLUME_SETTLED = new Set(["available", "in-use", "error", "error_deleting", "error_extending", "error_restoring"]);
+const isTransitional = (status: string) => !VOLUME_SETTLED.has(status);
+
+export function useVolumes() {
+  return useQuery({
+    queryKey: ["iaas-volumes"],
+    queryFn: async (): Promise<VolumeSummary[]> =>
+      (await fetchJson<{ items: VolumeSummary[] }>(`${IAAS_BASE}/api/iaas/volumes`)).items,
+    staleTime: 30 * 1000, retry: 0,
+    // creating/deleting/extending 등 진행 중 볼륨이 있으면 3초마다 갱신
+    refetchInterval: (q) => ((q.state.data as VolumeSummary[] | undefined)?.some((v) => isTransitional(v.status)) ? 3000 : false),
+  });
+}
+export function useVolume(id: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-volume", id],
+    enabled: !!id,
+    queryFn: async (): Promise<VolumeDetail> => fetchJson<VolumeDetail>(`${IAAS_BASE}/api/iaas/volumes/${id}`),
+    staleTime: 15 * 1000, retry: 0,
+    // 볼륨 또는 스냅샷이 진행 중이면 폴링
+    refetchInterval: (q) => {
+      const d = q.state.data as VolumeDetail | undefined;
+      if (!d) return false;
+      const pending = isTransitional(d.status) || d.snapshots.some((s) => isTransitional(s.status));
+      return pending ? 3000 : false;
+    },
+  });
+}
+export function useVolumeTypes() {
+  return useQuery({
+    queryKey: ["iaas-volume-types"],
+    queryFn: async (): Promise<VolumeTypeOpt[]> =>
+      (await fetchJson<{ items: VolumeTypeOpt[] }>(`${IAAS_BASE}/api/iaas/volume-types`)).items,
+    staleTime: 5 * 60 * 1000, retry: 0,
+  });
+}
+export function useStorageCapacity() {
+  return useQuery({
+    queryKey: ["iaas-storage-capacity"],
+    queryFn: async (): Promise<StoragePool[]> =>
+      (await fetchJson<{ items: StoragePool[] }>(`${IAAS_BASE}/api/iaas/storage-capacity`)).items,
+    staleTime: 60 * 1000, retry: 0,
+  });
+}
+
+function useVolumeMutation<V, R = unknown>(fn: (v: V) => Promise<R>) {
+  const qc = useQueryClient();
+  return useMutation<R, Error, V>({
+    mutationFn: fn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-volumes"] });
+      qc.invalidateQueries({ queryKey: ["iaas-volume"] });
+      qc.invalidateQueries({ queryKey: ["iaas-storage-capacity"] });
+    },
+  });
+}
+
+export interface CreateVolumeInput {
+  name: string; size: number; projectId: string; volumeType?: string; description?: string; imageRef?: string; snapshotId?: string;
+}
+export function useCreateVolume() {
+  return useVolumeMutation((input: CreateVolumeInput) =>
+    postJson<VolumeSummary>(`${IAAS_BASE}/api/iaas/volumes`, input));
+}
+export function useDeleteVolume() {
+  return useVolumeMutation(({ id, cascade }: { id: string; cascade?: boolean }) =>
+    sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/volumes/${id}${cascade ? "?cascade=true" : ""}`));
+}
+export function useExtendVolume() {
+  return useVolumeMutation(({ id, newSize }: { id: string; newSize: number }) =>
+    sendJson<VolumeDetail>("POST", `${IAAS_BASE}/api/iaas/volumes/${id}/extend`, { newSize }));
+}
+export function useCreateSnapshot() {
+  return useVolumeMutation((input: { volumeId: string; name: string; force?: boolean }) =>
+    postJson(`${IAAS_BASE}/api/iaas/snapshots`, input));
+}
+export function useDeleteSnapshot() {
+  return useVolumeMutation((id: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/snapshots/${id}`));
+}

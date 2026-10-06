@@ -1,77 +1,61 @@
 "use client";
 import * as React from "react";
-import { Key, Plus, Search, Trash2, Download, Copy } from "lucide-react";
+import { KeyRound, Plus, Trash2, Copy, Download, ShieldAlert, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { PageHeader } from "@/components/page-header";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StatCard } from "@/components/stat-card";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
-import { keypairs as ALL_KEYPAIRS } from "@/mocks/fixtures";
-import type { KeyPair } from "@/lib/types";
+import { useConfirm } from "@/components/ui/confirm";
+import { useSshKeys, useCreateSshKey, useDeleteSshKey, type SshKey } from "@/lib/sshkey-api";
+import { generateRsaSshKeypair, downloadText } from "@/lib/ssh-keygen";
 
-export default function KeyPairsPage() {
-  const user = useAuth((s) => s.user);
-  const isAdmin = user?.role === "admin";
-  const myId = user?.email?.split("@")[0] ?? "";
+// 내 SSH 키(키페어) — 사용자 self-service. 개인키는 서버에 저장하지 않고 브라우저에서만 다운로드.
+export default function KeypairsPage() {
+  const owner = useAuth((s) => s.user?.username);
+  const { data, isLoading } = useSshKeys(owner);
+  const del = useDeleteSshKey(owner ?? "");
+  const confirm = useConfirm();
+  const [genOpen, setGenOpen] = React.useState(false);
+  const [importOpen, setImportOpen] = React.useState(false);
 
-  const base = isAdmin ? ALL_KEYPAIRS : ALL_KEYPAIRS.filter((k) => k.owner === myId);
+  const copy = (t: string, label: string) => { navigator.clipboard.writeText(t); toast.success(`${label} 복사됨`); };
 
-  const [items, setItems] = React.useState<KeyPair[]>(base);
-  const [q, setQ] = React.useState("");
-  const [createOpen, setCreateOpen] = React.useState(false);
-  const [imported, setImported] = React.useState<KeyPair | null>(null);
+  async function remove(k: SshKey) {
+    if (!(await confirm({
+      title: "SSH 키 삭제", destructive: true, confirmLabel: "삭제",
+      description: `'${k.name}' 키를 삭제할까요? 이미 VM에 심긴 공개키는 그대로 남습니다(파일). ${k.vmCount > 0 ? `현재 ${k.vmCount}개 VM과 연결됨.` : ""}`,
+    }))) return;
+    del.mutate(k.id, {
+      onSuccess: () => toast.success(`${k.name} 삭제됨`),
+      onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }),
+    });
+  }
 
-  const filtered = items.filter((k) => !q || k.name.toLowerCase().includes(q.toLowerCase()));
+  if (!owner) return <Card className="p-6 text-sm text-muted-foreground">로그인 후 이용 가능합니다.</Card>;
+  if (isLoading || !data) return <Skeleton className="h-96" />;
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="키페어"
-        description={
-          isAdmin
-            ? "OpenStack Nova SSH 키페어 — 가상머신 접속용 공개키 등록·관리"
-            : "가상머신 SSH 접속에 사용할 키페어를 등록·관리합니다."
-        }
-        actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" /> 키페어 생성·업로드
-          </Button>
-        }
-      />
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <StatCard label="키페어" value={items.length} unit="개" icon={Key} accent="indigo" />
-        <StatCard label="적용된 인스턴스" value={items.reduce((s, x) => s + x.usedBy, 0)} unit="대" icon={Key} accent="mint" />
-        {isAdmin ? (
-          <StatCard label="등록 사용자" value={new Set(items.map((x) => x.owner)).size} unit="명" icon={Key} accent="amber" />
-        ) : (
-          <StatCard label="프로젝트" value={new Set(items.map((x) => x.project)).size} unit="개" icon={Key} accent="amber" />
-        )}
+    <div className="space-y-4">
+      <div className="rounded-md border border-brand-indigo-200 bg-brand-indigo-50/50 p-3 text-[11px] text-brand-indigo-900">
+        SSH 키는 <strong>내 개인 자원</strong>입니다(프로젝트와 무관). <strong>개인키(private key)는 서버에 저장되지 않고</strong> 생성 시 브라우저에서 한 번만 내려받습니다 — 분실하면 재발급해야 합니다. 가상서버 요청 시 여기 등록한 공개키를 선택해 접속에 사용합니다.
       </div>
 
       <Card className="p-4">
         <div className="flex items-center gap-3">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input
-              placeholder="키페어 이름 검색…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              className="w-64 pl-9"
-            />
+          <span className="text-xs text-muted-foreground">내 키 {data.length}개</span>
+          <div className="ml-auto flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>공개키 가져오기</Button>
+            <Button size="sm" onClick={() => setGenOpen(true)}><Plus className="size-3.5" /> SSH 키 생성</Button>
           </div>
-          <span className="ml-auto text-xs text-muted-foreground">
-            {filtered.length}/{items.length}개 표시
-          </span>
         </div>
       </Card>
 
@@ -79,213 +63,163 @@ export default function KeyPairsPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>키페어 이름</TableHead>
-              <TableHead>키 방식</TableHead>
-              <TableHead>지문 (고유 식별값)</TableHead>
-              {isAdmin && <TableHead>소유자</TableHead>}
-              <TableHead>프로젝트</TableHead>
-              <TableHead className="text-center">적용된 가상머신</TableHead>
-              <TableHead>등록일</TableHead>
+              <TableHead>이름</TableHead>
+              <TableHead>지문 (SHA256)</TableHead>
+              <TableHead className="text-center">연결된 VM</TableHead>
+              <TableHead>생성일</TableHead>
               <TableHead className="w-24" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.map((k) => (
+            {data.map((k) => (
               <TableRow key={k.id}>
                 <TableCell>
                   <div className="flex items-center gap-2">
-                    <Key className="size-3.5 text-brand-indigo-600" />
-                    <span className="font-medium">{k.name}</span>
+                    <KeyRound className="size-3.5 text-brand-indigo-600" />
+                    <span className="font-mono text-sm font-semibold">{k.name}</span>
                   </div>
                 </TableCell>
                 <TableCell>
-                  <Badge variant="ghost" className="font-mono text-[10px]">{k.type}</Badge>
+                  <button
+                    type="button"
+                    className="max-w-[320px] cursor-pointer truncate font-mono text-[11px] text-muted-foreground hover:text-foreground"
+                    title="공개키 복사"
+                    onClick={() => copy(k.publicKey, "공개키")}
+                  >
+                    {k.fingerprint}
+                  </button>
                 </TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {k.fingerprint.slice(0, 24)}…
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => {
-                        navigator.clipboard.writeText(k.fingerprint);
-                        toast.success("Fingerprint 복사됨");
-                      }}
-                    >
-                      <Copy className="size-3" />
-                    </Button>
-                  </div>
+                <TableCell className="text-center font-mono tabular-nums" title="포털을 통해 이 키로 프로비저닝된 VM 수">
+                  {k.vmCount}
                 </TableCell>
-                {isAdmin && <TableCell className="font-mono text-xs">{k.owner}</TableCell>}
-                <TableCell className="font-mono text-xs">{k.project}</TableCell>
-                <TableCell className="text-center font-mono">{k.usedBy}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">{k.createdAt}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">{k.createdAt?.slice(0, 10) || "—"}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => toast.success(`${k.name}.pem 다운로드 — 소유자만 가능`)}
-                    >
-                      <Download className="size-3.5" />
+                    <Button variant="ghost" size="icon-sm" title="공개키 복사" onClick={() => copy(k.publicKey, "공개키")}>
+                      <Copy className="size-3.5" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => {
-                        if (k.usedBy > 0) {
-                          toast.error(`삭제 거부 — ${k.usedBy}개 인스턴스가 사용 중`);
-                          return;
-                        }
-                        setItems((prev) => prev.filter((x) => x.id !== k.id));
-                        toast.success(`${k.name} 삭제됨`);
-                      }}
-                    >
+                    <Button variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending} onClick={() => remove(k)}>
                       <Trash2 className="size-3.5 text-rose-600" />
                     </Button>
                   </div>
                 </TableCell>
               </TableRow>
             ))}
+            {data.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                  등록된 SSH 키가 없습니다. “SSH 키 생성” 또는 “공개키 가져오기”로 추가하세요.
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </Card>
 
-      <CreateKeyPairDialog
-        open={createOpen}
-        ownerKey={myId}
-        onClose={() => setCreateOpen(false)}
-        onCreate={(k, isGenerated) => {
-          setItems((prev) => [...prev, k]);
-          if (isGenerated) {
-            setImported(k);
-          } else {
-            toast.success(`${k.name} 등록됨`);
-          }
-        }}
-      />
-
-      <Dialog open={!!imported} onOpenChange={(o) => !o && setImported(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>키페어 생성 완료 — {imported?.name}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
-              <strong>비공개 키(.pem)는 지금 한 번만 다운로드할 수 있다.</strong>
-              화면을 닫으면 재발급 불가능하니 반드시 안전한 곳에 저장하기.
-            </div>
-            <Button
-              className="w-full"
-              onClick={() => {
-                toast.success(`${imported?.name}.pem 다운로드 시작`);
-                setImported(null);
-              }}
-            >
-              <Download className="size-4" /> {imported?.name}.pem 다운로드
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <GenerateKeyDialog owner={owner} open={genOpen} onClose={() => setGenOpen(false)} />
+      <ImportKeyDialog owner={owner} open={importOpen} onClose={() => setImportOpen(false)} />
     </div>
   );
 }
 
-function CreateKeyPairDialog({
-  open, ownerKey, onClose, onCreate,
-}: {
-  open: boolean;
-  ownerKey: string;
-  onClose: () => void;
-  onCreate: (k: KeyPair, isGenerated: boolean) => void;
-}) {
-  const [mode, setMode] = React.useState<"generate" | "import">("generate");
+function GenerateKeyDialog({ owner, open, onClose }: { owner: string; open: boolean; onClose: () => void }) {
   const [name, setName] = React.useState("");
-  const [type, setType] = React.useState<KeyPair["type"]>("SSH-ED25519");
-  const [publicKey, setPublicKey] = React.useState("");
-  const [project, setProject] = React.useState("proj-ai-research");
+  const [busy, setBusy] = React.useState(false);
+  const create = useCreateSshKey(owner);
+  React.useEffect(() => { if (open) setName(""); }, [open]);
 
-  const submit = () => {
-    if (!name.trim()) return;
-    onCreate(
-      {
-        id: `kp-${Date.now()}`,
-        name: name.trim(),
-        type,
-        fingerprint: `SHA256:${Array.from({ length: 43 }, () => "abcdefghijkmnpqrstuvwxyz023456789"[Math.floor(Date.now() % 32)]).join("")}`,
-        owner: ownerKey,
-        project,
-        createdAt: new Date().toISOString().slice(0, 10),
-        usedBy: 0,
-      },
-      mode === "generate",
-    );
-    setName("");
-    setPublicKey("");
-    onClose();
-  };
+  async function submit() {
+    const nm = name.trim();
+    if (!nm) return toast.error("키 이름을 입력하세요");
+    setBusy(true);
+    try {
+      // 1) 브라우저에서 키페어 생성
+      const { publicKey, privateKeyPem } = await generateRsaSshKeypair(`${owner}@openkcloud`);
+      // 2) 공개키만 서버에 등록
+      await create.mutateAsync({ name: nm, publicKey });
+      // 3) 개인키는 그 자리에서 로컬 다운로드(서버 저장 안 함)
+      downloadText(`${nm}.pem`, privateKeyPem);
+      toast.success(`SSH 키 '${nm}' 생성됨`, { description: "개인키(.pem)를 내려받았습니다. 안전하게 보관하세요 (chmod 600)." });
+      onClose();
+    } catch (e) {
+      toast.error("생성 실패", { description: String((e as Error).message) });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md">
+    <Dialog open={open} onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent>
         <DialogHeader>
-          <DialogTitle>키페어 생성 · 업로드</DialogTitle>
+          <DialogTitle>SSH 키 생성</DialogTitle>
+          <DialogDescription>브라우저에서 키페어를 생성합니다. 개인키(.pem)는 이 자리에서 1회 다운로드되며 서버에 저장되지 않습니다.</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          <div>
-            <Label>방식</Label>
-            <Select value={mode} onValueChange={(v) => setMode(v as "generate" | "import")}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="generate">새로 생성 (플랫폼에서 키페어 생성)</SelectItem>
-                <SelectItem value="import">기존 공개키 업로드</SelectItem>
-              </SelectContent>
-            </Select>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label>키 이름</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-laptop" disabled={busy} />
           </div>
-          <div>
-            <Label>이름</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-laptop-key" />
-          </div>
-          <div>
-            <Label>타입</Label>
-            <Select value={type} onValueChange={(v) => setType(v as KeyPair["type"])}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="SSH-ED25519">SSH-ED25519 (권장)</SelectItem>
-                <SelectItem value="SSH-RSA">SSH-RSA</SelectItem>
-                <SelectItem value="ECDSA">ECDSA</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {mode === "import" && (
-            <div>
-              <Label>공개키 (id_rsa.pub 내용)</Label>
-              <textarea
-                value={publicKey}
-                onChange={(e) => setPublicKey(e.target.value)}
-                className="min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs"
-                placeholder="ssh-rsa AAAAB3NzaC1yc2EAAA..."
-              />
-            </div>
-          )}
-          <div>
-            <Label>프로젝트</Label>
-            <Select value={project} onValueChange={setProject}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="proj-ai-research">proj-ai-research</SelectItem>
-                <SelectItem value="proj-llm-serving">proj-llm-serving</SelectItem>
-                <SelectItem value="proj-edge-inference">proj-edge-inference</SelectItem>
-                <SelectItem value="proj-platform-ops">proj-platform-ops</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-900">
+            <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
+            개인키는 분실 시 복구 불가입니다. 다운로드한 .pem 파일을 안전하게 보관하세요.
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button onClick={submit}>{mode === "generate" ? "생성" : "업로드"}</Button>
+          <Button variant="outline" onClick={onClose} disabled={busy}>취소</Button>
+          <Button onClick={submit} disabled={busy}>
+            {busy ? <><Loader2 className="size-3.5 animate-spin" /> 생성 중…</> : <><Download className="size-3.5" /> 생성 + 개인키 다운로드</>}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ImportKeyDialog({ owner, open, onClose }: { owner: string; open: boolean; onClose: () => void }) {
+  const [name, setName] = React.useState("");
+  const [pub, setPub] = React.useState("");
+  const create = useCreateSshKey(owner);
+  React.useEffect(() => { if (open) { setName(""); setPub(""); } }, [open]);
+
+  function submit() {
+    if (!name.trim()) return toast.error("키 이름을 입력하세요");
+    if (!pub.trim()) return toast.error("공개키를 붙여넣으세요");
+    create.mutate(
+      { name: name.trim(), publicKey: pub.trim() },
+      {
+        onSuccess: () => { toast.success(`SSH 키 '${name}' 등록됨`); onClose(); },
+        onError: (e) => toast.error("등록 실패", { description: String((e as Error).message) }),
+      },
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !create.isPending && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>공개키 가져오기</DialogTitle>
+          <DialogDescription>이미 가진 공개키(~/.ssh/id_*.pub)를 붙여넣어 등록합니다. 개인키는 입력하지 마세요.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label>키 이름</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-laptop" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>공개키 (OpenSSH)</Label>
+            <textarea
+              value={pub}
+              onChange={(e) => setPub(e.target.value)}
+              placeholder="ssh-rsa AAAA... 또는 ssh-ed25519 AAAA..."
+              rows={4}
+              className="flex w-full rounded-md border border-input bg-card px-3 py-2 font-mono text-xs shadow-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={create.isPending}>취소</Button>
+          <Button onClick={submit} disabled={create.isPending}>{create.isPending ? "등록 중…" : "등록"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

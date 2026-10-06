@@ -1,115 +1,105 @@
 "use client";
 import * as React from "react";
-import {
-  HardDrive,
-  Plus,
-  Search,
-  Camera,
-  Link2,
-  Link2Off,
-  Trash2,
-  Edit,
-  MoreVertical,
-  Activity,
-  Download,
-  Copy,
-} from "lucide-react";
-import { api } from "@/lib/api";
+import { HardDrive, Plus, Search, Trash2, Camera, Expand, Loader2, Database } from "lucide-react";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { toast } from "sonner";
-import type { Volume } from "@/lib/types";
+import { useConfirm } from "@/components/ui/confirm";
+import {
+  useVolumes, useVolume, useVolumeTypes, useStorageCapacity,
+  useCreateVolume, useDeleteVolume, useExtendVolume, useCreateSnapshot, useDeleteSnapshot, useProjects,
+  type VolumeSummary, type VolumeDetail,
+} from "@/lib/iaas-api";
+import type { Tenant } from "@/lib/types";
 
+const STATUS_VARIANT: Record<string, "success" | "secondary" | "warning"> = {
+  available: "success", "in-use": "success", creating: "warning", error: "secondary",
+};
+
+// 볼륨·스토리지 — OpenStack Cinder 실연동(백엔드 Ceph). 목록은 프로젝트 컬럼이 맨 앞.
 export default function VolumesPage() {
-  const { data, isLoading } = api.iaas.volumes() as {
-    data: { items: Volume[] } | undefined;
-    isLoading: boolean;
-  };
-  const [selected, setSelected] = React.useState<Volume | undefined>();
-  const [createOpen, setCreateOpen] = React.useState(false);
+  const { data, isLoading } = useVolumes();
+  const { data: projData } = useProjects();
+  const { data: pools } = useStorageCapacity();
   const [q, setQ] = React.useState("");
-  if (isLoading || !data) return <Skeleton className="h-96" />;
+  const [projFilter, setProjFilter] = React.useState("all");
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [selected, setSelected] = React.useState<VolumeSummary | undefined>();
 
-  const items = data.items.filter((v) => !q || v.name.toLowerCase().includes(q.toLowerCase()));
-  const totalGb = data.items.reduce((s, v) => s + v.sizeGb, 0);
-  const inUse = data.items.filter((v) => v.status === "in-use").length;
+  const projName = React.useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const p of projData?.items ?? []) m[p.id] = p.name;
+    return (id: string) => m[id] ?? id;
+  }, [projData]);
+  const projOptions = React.useMemo(() => {
+    const ids = Array.from(new Set((data ?? []).map((v) => v.tenantId).filter(Boolean)));
+    return ids.map((id) => ({ id, name: projName(id) })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [data, projName]);
+
+  if (isLoading || !data) return <Skeleton className="h-96" />;
+  const items = data.filter(
+    (v) =>
+      (!q || v.name.toLowerCase().includes(q.toLowerCase())) &&
+      (projFilter === "all" || v.tenantId === projFilter),
+  );
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatChip label="전체 볼륨" value={data.items.length} />
-        <StatChip label="사용 중" value={inUse} />
-        <StatChip label="총 용량" value={`${(totalGb / 1024).toFixed(1)} TB`} />
-        <StatChip label="평균 크기" value={`${Math.round(totalGb / data.items.length)} GB`} />
-      </div>
+      {/* Ceph 용량 패널 */}
+      {pools && pools.length > 0 && (
+        <div className="grid gap-3 md:grid-cols-2">
+          {pools.map((p) => {
+            const used = Math.max(0, p.totalGb - p.freeGb);
+            const pct = p.totalGb > 0 ? Math.round((used / p.totalGb) * 100) : 0;
+            return (
+              <Card key={p.name} className="p-4">
+                <div className="mb-2 flex items-center gap-2">
+                  <Database className="size-4 text-brand-indigo-600" />
+                  <span className="text-sm font-semibold">스토리지 풀</span>
+                  <Badge variant="outline" className="font-mono text-[10px] uppercase">{p.protocol || "ceph"}</Badge>
+                  <span className="ml-auto font-mono text-xs text-muted-foreground">{p.backend}</span>
+                </div>
+                <Progress value={pct} indicatorClassName={pct > 85 ? "bg-rose-500" : pct > 70 ? "bg-amber-500" : "bg-brand-mint-500"} />
+                <div className="mt-1.5 flex justify-between font-mono text-[11px] text-muted-foreground">
+                  <span>사용 {(used / 1024).toFixed(2)}TB ({pct}%)</span>
+                  <span>가용 {(p.freeGb / 1024).toFixed(2)}TB / 총 {(p.totalGb / 1024).toFixed(2)}TB</span>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
       <Card className="p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input placeholder="볼륨 이름·테넌트…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
-          </div>
-          <Select defaultValue="all">
-            <SelectTrigger className="w-32"><SelectValue placeholder="상태" /></SelectTrigger>
+        <div className="flex items-center gap-3">
+          <Select value={projFilter} onValueChange={setProjFilter}>
+            <SelectTrigger className="w-48"><SelectValue placeholder="프로젝트 필터" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">전체</SelectItem>
-              <SelectItem value="in-use">사용 중</SelectItem>
-              <SelectItem value="available">유휴</SelectItem>
-              <SelectItem value="error">에러</SelectItem>
+              <SelectItem value="all">전체 프로젝트</SelectItem>
+              {projOptions.map((p) => (<SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>))}
             </SelectContent>
           </Select>
-          <Button variant="outline" size="sm" className="ml-auto" onClick={() => toast.success("볼륨 목록 CSV 내보내기")}>
-            <Download className="size-3.5" /> 내보내기
-          </Button>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+            <Input placeholder="볼륨 이름 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
+          </div>
+          <span className="text-xs text-muted-foreground">총 {items.length}개</span>
+          <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
             <Plus className="size-3.5" /> 볼륨 생성
           </Button>
-        </div>
-        <div className="mt-3 rounded-md border border-brand-mint-200 bg-brand-mint-50/50 p-2.5 text-[11px] text-brand-mint-900">
-          <strong>생성 주체 정책:</strong> 사용자는 자신의 프로젝트 쿼터 범위 안에서 볼륨을 <strong>직접 생성·확장·스냅샷·삭제</strong> 가능하다.
-          자원 신청 위저드에서도 <strong>기존 볼륨을 VM에 연결</strong>할 수 있다. 관리자 승인 없음.
         </div>
       </Card>
 
@@ -117,315 +107,317 @@ export default function VolumesPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>이름</TableHead>
-              <TableHead>테넌트</TableHead>
+              <TableHead>프로젝트</TableHead>
+              <TableHead>볼륨</TableHead>
               <TableHead>유형</TableHead>
-              <TableHead>크기</TableHead>
+              <TableHead className="text-center">크기</TableHead>
               <TableHead>부팅</TableHead>
-              <TableHead>연결 VM</TableHead>
+              <TableHead className="text-center">연결 VM</TableHead>
               <TableHead>상태</TableHead>
-              <TableHead className="w-12" />
+              <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {items.map((v) => (
               <TableRow key={v.id} className="cursor-pointer" onClick={() => setSelected(v)}>
+                <TableCell className="text-xs font-medium">{v.tenantId ? projName(v.tenantId) : "—"}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
-                    <HardDrive className="size-4 text-muted-foreground" />
-                    <div>
-                      <div className="font-medium hover:text-primary">{v.name}</div>
-                      <div className="font-mono text-[10px] text-muted-foreground">{v.id}</div>
-                    </div>
+                    <HardDrive className="size-3.5 text-brand-indigo-600" />
+                    <span className="max-w-[220px] truncate font-mono text-sm font-semibold">{v.name}</span>
                   </div>
                 </TableCell>
-                <TableCell className="font-mono text-xs">{v.tenantId}</TableCell>
-                <TableCell>
-                  <Badge variant={v.type === "nvme" ? "success" : v.type === "ssd" ? "default" : "outline"}>
-                    {v.type.toUpperCase()}
-                  </Badge>
-                </TableCell>
-                <TableCell className="font-mono tabular-nums">{v.sizeGb} GB</TableCell>
-                <TableCell>{v.bootable ? <Badge variant="warning">Boot</Badge> : "—"}</TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">
-                  {v.attachedVmId ?? "—"}
-                </TableCell>
-                <TableCell>
-                  <Badge variant={v.status === "in-use" ? "success" : v.status === "error" ? "destructive" : "secondary"}>
-                    {v.status}
-                  </Badge>
-                </TableCell>
+                <TableCell className="font-mono text-xs">{v.type}</TableCell>
+                <TableCell className="text-center font-mono tabular-nums">{v.size}GB</TableCell>
+                <TableCell>{v.bootable ? <Badge variant="outline" className="text-[10px]">부팅</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
+                <TableCell className="text-center font-mono tabular-nums">{v.attachments.length}</TableCell>
+                <TableCell><Badge variant={STATUS_VARIANT[v.status] ?? "secondary"} className="text-[10px]">{v.status}</Badge></TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon-sm"><MoreVertical className="size-3.5" /></Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setSelected(v)}>
-                        <Activity className="size-3.5" /> 상세 보기
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => toast.success(`${v.name} 스냅샷 ${v.name}-snap-001 생성됨`)}>
-                        <Camera className="size-3.5" /> 스냅샷 생성
-                      </DropdownMenuItem>
-                      {v.attachedVmId ? (
-                        <DropdownMenuItem onClick={() => toast.success(`${v.name} ↛ ${v.attachedVmId} 분리됨`)}>
-                          <Link2Off className="size-3.5" /> VM 분리
-                        </DropdownMenuItem>
-                      ) : (
-                        <DropdownMenuItem onClick={() => toast.success(`${v.name} VM 연결 다이얼로그`)}>
-                          <Link2 className="size-3.5" /> VM 연결
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuItem onClick={() => toast.success(`${v.name} 크기 확장`)}>
-                        <Edit className="size-3.5" /> 크기 확장
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem className="text-rose-600" onClick={() => toast.error(`${v.name} 삭제 요청`)}>
-                        <Trash2 className="size-3.5" /> 삭제
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <Button variant="ghost" size="sm" onClick={() => setSelected(v)}>관리</Button>
                 </TableCell>
               </TableRow>
             ))}
+            {items.length === 0 && (
+              <TableRow><TableCell colSpan={8} className="py-10 text-center text-sm text-muted-foreground">볼륨이 없습니다.</TableCell></TableRow>
+            )}
           </TableBody>
         </Table>
       </Card>
 
-      {/* Detail Sheet */}
-      <Sheet open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
-        <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-2xl">
-          {selected && <VolumeDetailPanel volume={selected} />}
-        </SheetContent>
-      </Sheet>
+      <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
+        <DialogContent className="max-w-2xl">
+          {selected && <VolumeDetailBody volume={selected} projectLabel={projName(selected.tenantId)} onClose={() => setSelected(undefined)} />}
+        </DialogContent>
+      </Dialog>
 
-      <CreateVolumeDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+      <CreateVolumeDialog open={createOpen} onClose={() => setCreateOpen(false)} projects={projData?.items ?? []} />
     </div>
   );
 }
 
-function VolumeDetailPanel({ volume: v }: { volume: Volume }) {
-  const copy = (t: string, l: string) => { navigator.clipboard.writeText(t); toast.success(`${l} 복사됨`); };
+function VolumeDetailBody({ volume, projectLabel, onClose }: { volume: VolumeSummary; projectLabel: string; onClose: () => void }) {
+  const { data: d, isLoading, isError } = useVolume(volume.id);
+  const del = useDeleteVolume();
+  const confirm = useConfirm();
+  const [extendOpen, setExtendOpen] = React.useState(false);
+  const t = d ?? (volume as VolumeDetail);
+
+  async function remove() {
+    // in-use(VM 연결·부팅디스크) 볼륨은 Cinder가 삭제 거부 → 분리 먼저(분리는 VM 연동 후 제공)
+    if (t.attachments.length > 0 || t.status === "in-use") {
+      await confirm({
+        title: "삭제할 수 없음",
+        confirmLabel: "확인", cancelLabel: "닫기",
+        description: "이 볼륨은 VM에 연결(in-use) 중입니다. 연결된 VM에서 먼저 분리해야 삭제할 수 있습니다. (볼륨 분리 기능은 가상서버 연동 시 제공)",
+      });
+      return;
+    }
+    const snapCount = d?.snapshots.length ?? 0;
+    if (!(await confirm({
+      title: "볼륨 삭제", destructive: true, confirmLabel: "삭제",
+      description: snapCount > 0
+        ? `${t.name} (${t.size}GB) 을(를) 삭제할까요? 이 볼륨에 스냅샷 ${snapCount}개가 있어 함께 삭제됩니다. 되돌릴 수 없습니다.`
+        : `${t.name} (${t.size}GB) 을(를) 삭제할까요? 되돌릴 수 없습니다.`,
+    }))) return;
+    del.mutate({ id: t.id, cascade: snapCount > 0 }, {
+      onSuccess: () => { toast.success(`볼륨 ${t.name} 삭제됨`); onClose(); },
+      onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }),
+    });
+  }
+
   return (
     <>
-      <SheetHeader className="border-b border-border">
-        <div className="flex items-start gap-3">
-          <div className="flex size-10 items-center justify-center rounded-lg bg-brand-mint-50 text-brand-mint-700">
+      <DialogHeader>
+        <div className="flex items-center gap-3 pr-8">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-brand-indigo-100 text-brand-indigo-700">
             <HardDrive className="size-5" />
           </div>
-          <div className="flex-1">
-            <SheetTitle className="text-lg">{v.name}</SheetTitle>
-            <SheetDescription className="font-mono text-xs">{v.id} · OpenStack Cinder Volume</SheetDescription>
-          </div>
-          <Badge variant={v.status === "in-use" ? "success" : v.status === "error" ? "destructive" : "secondary"}>{v.status}</Badge>
-        </div>
-      </SheetHeader>
-      <div className="space-y-4 p-6">
-        <div className="grid grid-cols-3 gap-3">
-          <InfoBox label="크기" value={`${v.sizeGb} GB`} onCopy={() => copy(`${v.sizeGb}GB`, "크기")} />
-          <InfoBox label="유형" value={v.type.toUpperCase()} />
-          <InfoBox label="부팅 가능" value={v.bootable ? "Yes" : "No"} />
-        </div>
-
-        <Tabs defaultValue="info">
-          <TabsList>
-            <TabsTrigger value="info">정보</TabsTrigger>
-            <TabsTrigger value="snapshots">스냅샷</TabsTrigger>
-            <TabsTrigger value="actions">액션</TabsTrigger>
-            <TabsTrigger value="yaml">메타</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="info" className="space-y-2 pt-3">
-            <Card className="p-4 space-y-2 text-xs">
-              <KV label="ID" value={v.id} mono />
-              <KV label="이름" value={v.name} mono />
-              <KV label="테넌트" value={v.tenantId} mono />
-              <KV label="자원풀" value={v.poolId} mono />
-              <KV label="볼륨 유형" value={`${v.type} (cinder volume_type)`} mono />
-              <KV label="크기" value={`${v.sizeGb} GB`} mono />
-              <KV label="부팅 가능" value={v.bootable ? "Yes (image-backed)" : "No"} mono />
-              <KV label="연결된 VM" value={v.attachedVmId ?? "—"} mono />
-              <KV label="Device" value={v.attachedVmId ? "/dev/vdb" : "—"} mono />
-              <KV label="IOPS 한도" value={v.type === "nvme" ? "10,000" : v.type === "ssd" ? "5,000" : "1,500"} mono />
-              <KV label="Throughput" value={v.type === "nvme" ? "1 GB/s" : "500 MB/s"} mono />
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="snapshots" className="space-y-2 pt-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">최근 스냅샷</span>
-              <Button size="sm" onClick={() => toast.success(`${v.name}-snap-002 생성됨`)}>
-                <Camera className="size-3.5" /> 새 스냅샷
-              </Button>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <DialogTitle className="truncate font-mono text-lg">{t.name}</DialogTitle>
+              <Badge variant={STATUS_VARIANT[t.status] ?? "secondary"} className="shrink-0 text-[10px]">{t.status}</Badge>
             </div>
-            {[
-              { name: `${v.name}-snap-001`, created: "3일 전", size: v.sizeGb, status: "available" },
-              { name: `${v.name}-backup-w24`, created: "1주 전", size: v.sizeGb, status: "available" },
-            ].map((s) => (
-              <Card key={s.name} className="flex items-center gap-3 p-3">
-                <Camera className="size-4 text-brand-indigo-600" />
-                <div className="flex-1 text-xs">
-                  <div className="font-mono">{s.name}</div>
-                  <div className="text-muted-foreground">{s.created} · {s.size} GB</div>
-                </div>
-                <Badge variant="success" className="text-[10px]">{s.status}</Badge>
-                <Button size="sm" variant="ghost" onClick={() => toast.success(`${s.name} 으로 복원 시작`)}>복원</Button>
-              </Card>
-            ))}
-          </TabsContent>
-
-          <TabsContent value="actions" className="space-y-2 pt-3">
-            <Card className="p-4">
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" size="sm" onClick={() => toast.success(`${v.name} 크기 확장 다이얼로그`)}>
-                  <Edit className="size-3.5" /> 크기 확장
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => toast.success(`${v.name} 스냅샷 생성됨`)}>
-                  <Camera className="size-3.5" /> 스냅샷
-                </Button>
-                {v.attachedVmId ? (
-                  <Button variant="outline" size="sm" onClick={() => toast.success(`${v.attachedVmId}에서 분리됨`)}>
-                    <Link2Off className="size-3.5" /> VM 분리
-                  </Button>
-                ) : (
-                  <Button variant="outline" size="sm" onClick={() => toast.success(`연결 대상 VM 선택`)}>
-                    <Link2 className="size-3.5" /> VM 연결
-                  </Button>
-                )}
-                <Button variant="outline" size="sm" onClick={() => toast.success(`${v.name} 새 이미지로 변환`)}>
-                  복제
-                </Button>
-              </div>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="yaml" className="pt-3">
-            <Card className="overflow-hidden bg-slate-950 p-3 font-mono text-[11px] text-slate-100">
-              <pre>
-{`Volume:
-  id: ${v.id}
-  name: ${v.name}
-  size: ${v.sizeGb}
-  status: ${v.status}
-  volume_type: ${v.type}
-  bootable: ${v.bootable}
-  multiattach: false
-  availability_zone: nova
-  source_volid: null
-  consistencygroup_id: null
-  user_id: ${v.tenantId}-admin
-  attachments:
-${v.attachedVmId ? `    - server_id: ${v.attachedVmId}
-      device: /dev/vdb
-      attached_at: 2026-05-31T14:22:18Z` : "    []"}`}
-              </pre>
-            </Card>
-          </TabsContent>
-        </Tabs>
-
-        <div className="flex gap-2 border-t border-border pt-4">
-          <Button variant="outline" size="sm" onClick={() => toast.success(`${v.name} 크기 확장`)}><Edit className="size-3.5" /> 확장</Button>
-          <Button variant="outline" size="sm" onClick={() => toast.success(`${v.name} 스냅샷 생성됨`)}><Camera className="size-3.5" /> 스냅샷</Button>
-          <Button variant="destructive" size="sm" className="ml-auto" onClick={() => toast.error(`${v.name} 삭제 요청 (in-use면 거부됨)`)}><Trash2 className="size-3.5" /> 삭제</Button>
+            <DialogDescription className="truncate text-xs">
+              <span className="font-mono">{t.id}</span> · 프로젝트 {projectLabel}
+            </DialogDescription>
+          </div>
         </div>
+      </DialogHeader>
+
+      <div className="max-h-[65vh] min-w-0 overflow-y-auto">
+        {isLoading && !d ? (
+          <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> 조회 중…</div>
+        ) : isError ? (
+          <div className="p-6 text-sm text-rose-600">볼륨 상세 조회 실패</div>
+        ) : (
+          <Tabs defaultValue="info">
+            <TabsList>
+              <TabsTrigger value="info">정보</TabsTrigger>
+              <TabsTrigger value="snapshots">스냅샷 ({d?.snapshots.length ?? 0})</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="info" className="pt-3">
+              <Card className="space-y-2.5 p-4 text-xs">
+                <KV label="볼륨 ID" value={t.id} mono />
+                <KV label="프로젝트" value={projectLabel} />
+                <KV label="유형(Ceph 풀)" value={t.type} mono />
+                <KV label="크기" value={`${t.size} GB`} />
+                <KV label="부팅 가능" value={t.bootable ? "예" : "아니오"} />
+                <KV label="상태" value={t.status} />
+                <div className="flex items-start justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">연결된 VM</span>
+                  <span className="min-w-0 break-all text-right font-mono">
+                    {t.attachments.length === 0 ? "—" : t.attachments.map((a) => a.serverId).join(", ")}
+                  </span>
+                </div>
+                <KV label="설명" value={t.description || "—"} />
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="snapshots" className="pt-3">
+              {d && <SnapshotsTab volumeId={d.id} volumeName={d.name} snapshots={d.snapshots} />}
+            </TabsContent>
+          </Tabs>
+        )}
       </div>
+
+      <DialogFooter className="border-t border-border pt-4">
+        <Button variant="outline" size="sm" onClick={() => setExtendOpen(true)}><Expand className="size-3.5" /> 확장</Button>
+        <Button variant="destructive" size="sm" className="ml-auto" disabled={del.isPending} onClick={remove}><Trash2 className="size-3.5" /> 삭제</Button>
+      </DialogFooter>
+
+      <ExtendVolumeDialog volumeId={t.id} currentSize={t.size} open={extendOpen} onClose={() => setExtendOpen(false)} />
     </>
   );
 }
 
-function CreateVolumeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [name, setName] = React.useState("");
-  const [size, setSize] = React.useState("100");
-  const [type, setType] = React.useState("ssd");
-  const [bootable, setBootable] = React.useState(false);
-  const [source, setSource] = React.useState("empty");
-  function submit() {
-    if (!name) return toast.error("이름을 입력하세요");
-    toast.success(`볼륨 ${name} 생성 요청됨`, { description: `${size}GB ${type.toUpperCase()} · ${bootable ? "bootable" : "data"} · source=${source}` });
-    onClose();
-    setName("");
+function SnapshotsTab({ volumeId, volumeName, snapshots }: { volumeId: string; volumeName: string; snapshots: VolumeDetail["snapshots"] }) {
+  const create = useCreateSnapshot();
+  const del = useDeleteSnapshot();
+  const confirm = useConfirm();
+  const [name, setName] = React.useState(`${volumeName}-snap`);
+
+  function add() {
+    if (!name.trim()) return toast.error("스냅샷 이름을 입력하세요");
+    create.mutate({ volumeId, name: name.trim(), force: true }, {
+      onSuccess: () => toast.success("스냅샷 생성됨"),
+      onError: (e) => toast.error("스냅샷 생성 실패", { description: String((e as Error).message) }),
+    });
   }
+  async function remove(id: string, nm: string) {
+    if (!(await confirm({ title: "스냅샷 삭제", destructive: true, confirmLabel: "삭제", description: `'${nm}' 스냅샷을 삭제할까요?` }))) return;
+    del.mutate(id, { onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }) });
+  }
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="스냅샷 이름" className="h-8" />
+        <Button size="sm" disabled={create.isPending} onClick={add}><Camera className="size-3.5" /> 생성</Button>
+      </div>
+      {snapshots.length === 0 ? (
+        <Card className="p-6 text-center text-sm text-muted-foreground">스냅샷이 없습니다.</Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader><TableRow><TableHead>이름</TableHead><TableHead className="text-center">크기</TableHead><TableHead>상태</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+            <TableBody>
+              {snapshots.map((s) => (
+                <TableRow key={s.id}>
+                  <TableCell className="font-mono text-xs">{s.name}</TableCell>
+                  <TableCell className="text-center font-mono tabular-nums">{s.size}GB</TableCell>
+                  <TableCell><Badge variant={STATUS_VARIANT[s.status] ?? "secondary"} className="text-[10px]">{s.status}</Badge></TableCell>
+                  <TableCell>
+                    <Button variant="ghost" size="icon-sm" disabled={del.isPending} title="삭제" onClick={() => remove(s.id, s.name)}>
+                      <Trash2 className="size-3.5 text-rose-600" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function ExtendVolumeDialog({ volumeId, currentSize, open, onClose }: { volumeId: string; currentSize: number; open: boolean; onClose: () => void }) {
+  const [size, setSize] = React.useState(String(currentSize + 10));
+  const extend = useExtendVolume();
+  React.useEffect(() => { if (open) setSize(String(currentSize + 10)); }, [open, currentSize]);
+
+  function submit() {
+    const n = Number(size);
+    if (!n || n <= currentSize) return toast.error(`현재 크기(${currentSize}GB)보다 커야 합니다`);
+    extend.mutate({ id: volumeId, newSize: n }, {
+      onSuccess: () => { toast.success(`볼륨 확장 ${currentSize}→${n}GB`); onClose(); },
+      onError: (e) => toast.error("확장 실패", { description: String((e as Error).message) }),
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !extend.isPending && onClose()}>
+      <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>볼륨 생성</DialogTitle>
-          <DialogDescription>OpenStack Cinder Volume을 생성합니다.</DialogDescription>
+          <DialogTitle>볼륨 확장</DialogTitle>
+          <DialogDescription>크기는 늘릴 수만 있습니다(축소 불가). 현재 {currentSize}GB.</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3 py-2">
-          <div className="space-y-1.5">
-            <Label>이름</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-volume" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>크기 (GB)</Label>
-              <Input type="number" value={size} onChange={(e) => setSize(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>유형</Label>
-              <Select value={type} onValueChange={setType}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="nvme">NVMe (10K IOPS, 1GB/s)</SelectItem>
-                  <SelectItem value="ssd">SSD (5K IOPS, 500MB/s)</SelectItem>
-                  <SelectItem value="hdd">HDD (1.5K IOPS, 200MB/s)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>소스</Label>
-            <Select value={source} onValueChange={setSource}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="empty">빈 볼륨</SelectItem>
-                <SelectItem value="image">Glance 이미지로부터</SelectItem>
-                <SelectItem value="snapshot">스냅샷으로부터 복원</SelectItem>
-                <SelectItem value="clone">기존 볼륨 복제</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex items-center gap-2 rounded-md border border-border p-2.5">
-            <input type="checkbox" id="boot" checked={bootable} onChange={(e) => setBootable(e.target.checked)} />
-            <Label htmlFor="boot" className="cursor-pointer text-xs">부팅 가능 볼륨으로 생성 (VM이 직접 부팅)</Label>
-          </div>
+        <div className="space-y-1.5 py-2">
+          <Label>새 크기 (GB)</Label>
+          <Input type="number" value={size} onChange={(e) => setSize(e.target.value)} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button onClick={submit}>생성</Button>
+          <Button variant="outline" onClick={onClose} disabled={extend.isPending}>취소</Button>
+          <Button onClick={submit} disabled={extend.isPending}>{extend.isPending ? "확장 중…" : "확장"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function StatChip({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <Card className="p-4">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-2xl font-bold tabular-nums">{value}</div>
-    </Card>
-  );
-}
+function CreateVolumeDialog({ open, onClose, projects }: { open: boolean; onClose: () => void; projects: Tenant[] }) {
+  const { data: types } = useVolumeTypes();
+  const [projectId, setProjectId] = React.useState("");
+  const [name, setName] = React.useState("");
+  const [size, setSize] = React.useState("10");
+  const [type, setType] = React.useState("");
+  const [desc, setDesc] = React.useState("");
+  const create = useCreateVolume();
+  React.useEffect(() => { if (open) { setProjectId(""); setName(""); setSize("10"); setType(""); setDesc(""); } }, [open]);
 
-function InfoBox({ label, value, onCopy }: { label: string; value: string; onCopy?: () => void }) {
+  function submit() {
+    if (!projectId) return toast.error("프로젝트를 선택하세요");
+    if (!name.trim()) return toast.error("이름을 입력하세요");
+    const n = Number(size);
+    if (!n || n <= 0) return toast.error("크기(GB)를 입력하세요");
+    create.mutate(
+      { name: name.trim(), size: n, projectId, volumeType: type || undefined, description: desc },
+      {
+        onSuccess: (v) => { toast.success(`볼륨 ${v.name} 생성됨`, { description: `${v.size}GB ${v.type}` }); onClose(); },
+        onError: (e) => toast.error("볼륨 생성 실패", { description: String((e as Error).message) }),
+      },
+    );
+  }
+
   return (
-    <div className="rounded-md border border-border bg-secondary/30 p-2.5">
-      <div className="flex items-center justify-between text-[10px] uppercase text-muted-foreground">
-        {label}
-        {onCopy && <button onClick={onCopy} className="hover:text-foreground"><Copy className="size-3" /></button>}
-      </div>
-      <div className="mt-0.5 font-mono text-sm font-semibold">{value}</div>
-    </div>
+    <Dialog open={open} onOpenChange={(o) => !o && !create.isPending && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>볼륨 생성</DialogTitle>
+          <DialogDescription>OpenStack Cinder 볼륨(백엔드 Ceph). 선택한 프로젝트 소유로 생성됩니다.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label>프로젝트</Label>
+            <Select value={projectId} onValueChange={setProjectId}>
+              <SelectTrigger><SelectValue placeholder="프로젝트 선택" /></SelectTrigger>
+              <SelectContent>
+                {projects.filter((p) => p.enabled !== false).map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[10px] text-muted-foreground">비활성(disabled) 프로젝트에는 생성할 수 없어 목록에서 제외됩니다.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>이름</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="data-vol-01" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>크기 (GB)</Label>
+              <Input type="number" value={size} onChange={(e) => setSize(e.target.value)} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>볼륨 유형 (Ceph 풀)</Label>
+            <Select value={type} onValueChange={setType}>
+              <SelectTrigger><SelectValue placeholder="기본값" /></SelectTrigger>
+              <SelectContent>
+                {(types ?? []).map((t) => (<SelectItem key={t.id} value={t.name}>{t.name}</SelectItem>))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>설명 (선택)</Label>
+            <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="용도 설명" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={create.isPending}>취소</Button>
+          <Button onClick={submit} disabled={create.isPending}>{create.isPending ? "생성 중…" : "생성"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
 function KV({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex items-baseline justify-between gap-3">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={mono ? "font-mono text-right" : "text-right"}>{value}</span>
+    <div className="flex items-start justify-between gap-3">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className={mono ? "min-w-0 break-all text-right font-mono" : "min-w-0 break-words text-right"}>{value}</span>
     </div>
   );
 }
