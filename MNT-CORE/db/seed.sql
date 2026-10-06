@@ -186,7 +186,7 @@ FROM (VALUES
     ('admin', 'iaas.networks',     NULL, NULL),
     ('admin', 'iaas.routers',      NULL, NULL),
     ('admin', 'iaas.secgroups',    NULL, NULL),
-    ('admin', 'iaas.keypairs',     NULL, NULL),
+    -- 키페어는 사용자 전용(관리자 메뉴 아님) — user 매핑만 둔다
     ('admin', 'iaas.volumes',      NULL, NULL),
     ('admin', 'iaas.images',       NULL, NULL),
     ('admin', 'iaas.flavors',      NULL, NULL),
