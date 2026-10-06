@@ -11,12 +11,29 @@ import {
   Search,
   Copy,
   Plus,
-  X,
   KeyRound,
   TerminalSquare,
   Server,
+  Loader2,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import {
+  useNetworks,
+  useNetwork,
+  useProjects,
+  useCreateNetwork,
+  useFipTargets,
+  useAllocateFip,
+  useReleaseFip,
+  useUpdateFip,
+  useAddSubnet,
+  useDeleteNetwork,
+} from "@/lib/iaas-api";
+import type { NetworkDetail } from "@/lib/iaas-api";
+import { SgRulesDialog } from "@/components/iaas/sg-rules-dialog";
+import { useConfirm } from "@/components/ui/confirm";
+import { Label } from "@/components/ui/label";
+import type { Tenant } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,13 +41,15 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -43,137 +62,32 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { IaasNetwork, VM } from "@/lib/types";
 import { useAuth } from "@/lib/auth";
+import RoutersPage from "../routers/page";
+import SecurityGroupsPage from "../security-groups/page";
 
-// raw Neutron 유형 → 사용자용 친화 라벨
-function friendlyNetType(type: IaasNetwork["type"]) {
-  return type === "external"
-    ? { label: "인터넷망", external: true }
-    : { label: "내부망", external: false };
-}
-
-// ────── 샘플 상세 데이터 (네트워크별) ──────
-type NetworkDetail = {
-  subnets: { id: string; name: string; cidr: string; gateway: string; dhcp: boolean; dns: string[]; allocationPool: string }[];
-  ports: { id: string; name: string; status: "ACTIVE" | "DOWN"; mac: string; ip: string; deviceOwner: string; vm?: string }[];
-  securityGroups: { id: string; name: string; rules: number; desc: string }[];
-  routers: { id: string; name: string; status: "ACTIVE"; gatewayIp: string; routes: number; ha: boolean }[];
-  quotas: { ports: { used: number; max: number }; floatingIps: { used: number; max: number }; subnets: { used: number; max: number } };
-  bandwidth: { rxMbps: number; txMbps: number; pktDropPct: number };
-  floatingIps: { ip: string; mappedTo: string; status: "ACTIVE" | "DOWN" }[];
-};
-
-const DETAILS: Record<string, NetworkDetail> = {
-  "in-1": {
-    subnets: [
-      { id: "sn-1a", name: "ai-research-subnet-A", cidr: "192.168.100.0/25", gateway: "192.168.100.1", dhcp: true, dns: ["8.8.8.8", "168.126.63.1"], allocationPool: "192.168.100.10 ~ 192.168.100.126" },
-      { id: "sn-1b", name: "ai-research-subnet-B", cidr: "192.168.100.128/25", gateway: "192.168.100.129", dhcp: true, dns: ["8.8.8.8"], allocationPool: "192.168.100.140 ~ 192.168.100.254" },
-    ],
-    ports: [
-      { id: "p-001", name: "research-trainer-01-eth0", status: "ACTIVE", mac: "fa:16:3e:0a:5b:c1", ip: "192.168.100.12", deviceOwner: "compute:nova", vm: "vm-001" },
-      { id: "p-002", name: "research-trainer-02-eth0", status: "ACTIVE", mac: "fa:16:3e:0a:5b:c2", ip: "192.168.100.14", deviceOwner: "compute:nova", vm: "vm-002" },
-      { id: "p-003", name: "data-loader-01-eth0", status: "ACTIVE", mac: "fa:16:3e:0a:5b:c3", ip: "192.168.100.18", deviceOwner: "compute:nova", vm: "vm-007" },
-      { id: "p-004", name: "ai-research-router-gw", status: "ACTIVE", mac: "fa:16:3e:99:01:01", ip: "192.168.100.1", deviceOwner: "network:router_gateway" },
-      { id: "p-005", name: "dhcp-port", status: "ACTIVE", mac: "fa:16:3e:99:01:02", ip: "192.168.100.2", deviceOwner: "network:dhcp" },
-    ],
-    securityGroups: [
-      { id: "sg-default", name: "default", rules: 4, desc: "프로젝트 기본 보안 그룹 (egress all, ingress same-group)" },
-      { id: "sg-ssh", name: "ai-research-ssh", rules: 1, desc: "SSH 22 from 10.10.0.0/16" },
-      { id: "sg-jupyter", name: "ai-research-notebook", rules: 2, desc: "Notebook 8888 from mgmt, 8080 from svc" },
-      { id: "sg-nfs", name: "ai-research-nfs", rules: 1, desc: "NFS 2049 from same project" },
-    ],
-    routers: [
-      { id: "r-001", name: "ai-research-router", status: "ACTIVE", gatewayIp: "10.20.0.5", routes: 3, ha: true },
-    ],
-    quotas: { ports: { used: 14, max: 50 }, floatingIps: { used: 4, max: 10 }, subnets: { used: 2, max: 5 } },
-    bandwidth: { rxMbps: 240.5, txMbps: 312.8, pktDropPct: 0.02 },
-    floatingIps: [
-      { ip: "203.0.113.42", mappedTo: "research-trainer-01", status: "ACTIVE" },
-      { ip: "203.0.113.43", mappedTo: "research-trainer-02", status: "ACTIVE" },
-      { ip: "203.0.113.44", mappedTo: "(unmapped)", status: "DOWN" },
-    ],
-  },
-  "in-2": {
-    subnets: [
-      { id: "sn-2a", name: "llm-serving-public", cidr: "10.20.0.0/24", gateway: "10.20.0.1", dhcp: true, dns: ["8.8.8.8", "1.1.1.1"], allocationPool: "10.20.0.10 ~ 10.20.0.250" },
-    ],
-    ports: [
-      { id: "p-101", name: "vllm-solar-10b-eth0", status: "ACTIVE", mac: "fa:16:3e:1a:2b:01", ip: "10.20.0.21", deviceOwner: "compute:nova", vm: "vm-004" },
-      { id: "p-102", name: "vllm-solar-10b-eth1", status: "ACTIVE", mac: "fa:16:3e:1a:2b:02", ip: "10.20.0.22", deviceOwner: "compute:nova", vm: "vm-005" },
-      { id: "p-103", name: "kserve-furiosa-rngd-eth0", status: "ACTIVE", mac: "fa:16:3e:1a:2b:03", ip: "10.20.0.23", deviceOwner: "compute:nova", vm: "vm-006" },
-      { id: "p-104", name: "external-gw", status: "ACTIVE", mac: "fa:16:3e:1a:2b:99", ip: "10.20.0.1", deviceOwner: "network:router_gateway" },
-    ],
-    securityGroups: [
-      { id: "sg-default", name: "default", rules: 4, desc: "기본 보안 그룹" },
-      { id: "sg-https", name: "llm-serving-https", rules: 1, desc: "HTTPS 443 from anywhere" },
-      { id: "sg-vllm-api", name: "llm-serving-vllm", rules: 2, desc: "vLLM 8000 from API Gateway only" },
-    ],
-    routers: [
-      { id: "r-002", name: "llm-serving-router", status: "ACTIVE", gatewayIp: "203.0.113.1", routes: 2, ha: true },
-    ],
-    quotas: { ports: { used: 8, max: 50 }, floatingIps: { used: 2, max: 10 }, subnets: { used: 1, max: 5 } },
-    bandwidth: { rxMbps: 580.2, txMbps: 892.6, pktDropPct: 0.04 },
-    floatingIps: [
-      { ip: "203.0.113.50", mappedTo: "vllm-solar-10b-lb", status: "ACTIVE" },
-      { ip: "203.0.113.51", mappedTo: "kserve-furiosa-lb", status: "ACTIVE" },
-    ],
-  },
-  "in-3": {
-    subnets: [
-      { id: "sn-3a", name: "edge-inference-vlan-410", cidr: "172.30.10.0/24", gateway: "172.30.10.1", dhcp: false, dns: ["192.168.10.5"], allocationPool: "172.30.10.10 ~ 172.30.10.250" },
-    ],
-    ports: [
-      { id: "p-201", name: "edge-inf-furiosa-01-eth0", status: "ACTIVE", mac: "fa:16:3e:2a:3b:01", ip: "172.30.10.12", deviceOwner: "compute:nova", vm: "vm-012" },
-      { id: "p-202", name: "edge-inf-furiosa-02-eth0", status: "ACTIVE", mac: "fa:16:3e:2a:3b:02", ip: "172.30.10.13", deviceOwner: "compute:nova", vm: "vm-013" },
-      { id: "p-203", name: "edge-mgmt-gw", status: "ACTIVE", mac: "fa:16:3e:2a:3b:99", ip: "172.30.10.1", deviceOwner: "network:router_gateway" },
-    ],
-    securityGroups: [
-      { id: "sg-default", name: "default", rules: 4, desc: "기본 보안 그룹" },
-      { id: "sg-edge", name: "edge-inference-only", rules: 3, desc: "엣지 전용 — VPN 게이트웨이만 허용" },
-    ],
-    routers: [
-      { id: "r-003", name: "edge-inference-router", status: "ACTIVE", gatewayIp: "10.50.0.1", routes: 5, ha: false },
-    ],
-    quotas: { ports: { used: 5, max: 30 }, floatingIps: { used: 0, max: 5 }, subnets: { used: 1, max: 3 } },
-    bandwidth: { rxMbps: 42.4, txMbps: 88.6, pktDropPct: 0.01 },
-    floatingIps: [],
-  },
-  "in-4": {
-    subnets: [
-      { id: "sn-4a", name: "platform-shared-A", cidr: "10.50.0.0/24", gateway: "10.50.0.1", dhcp: true, dns: ["8.8.8.8"], allocationPool: "10.50.0.10 ~ 10.50.0.250" },
-      { id: "sn-4b", name: "platform-shared-B", cidr: "10.50.1.0/24", gateway: "10.50.1.1", dhcp: true, dns: ["8.8.8.8"], allocationPool: "10.50.1.10 ~ 10.50.1.250" },
-      { id: "sn-4c", name: "platform-shared-monitoring", cidr: "10.50.2.0/24", gateway: "10.50.2.1", dhcp: true, dns: ["8.8.8.8"], allocationPool: "10.50.2.10 ~ 10.50.2.250" },
-      { id: "sn-4d", name: "platform-shared-logging", cidr: "10.50.3.0/24", gateway: "10.50.3.1", dhcp: true, dns: ["8.8.8.8"], allocationPool: "10.50.3.10 ~ 10.50.3.250" },
-    ],
-    ports: [
-      { id: "p-301", name: "prometheus-01-eth0", status: "ACTIVE", mac: "fa:16:3e:3a:4b:01", ip: "10.50.2.10", deviceOwner: "compute:nova", vm: "vm-016" },
-      { id: "p-302", name: "loki-01-eth0", status: "ACTIVE", mac: "fa:16:3e:3a:4b:02", ip: "10.50.3.10", deviceOwner: "compute:nova", vm: "vm-020" },
-      { id: "p-303", name: "minio-01-eth0", status: "ACTIVE", mac: "fa:16:3e:3a:4b:03", ip: "10.50.0.22", deviceOwner: "compute:nova", vm: "vm-022" },
-      { id: "p-304", name: "harbor-01-eth0", status: "ACTIVE", mac: "fa:16:3e:3a:4b:04", ip: "10.50.0.23", deviceOwner: "compute:nova", vm: "vm-023" },
-      { id: "p-305", name: "platform-shared-gw", status: "ACTIVE", mac: "fa:16:3e:3a:4b:99", ip: "10.50.0.1", deviceOwner: "network:router_gateway" },
-    ],
-    securityGroups: [
-      { id: "sg-default", name: "default", rules: 4, desc: "기본 보안 그룹" },
-      { id: "sg-prom", name: "platform-prometheus", rules: 2, desc: "Prometheus 9090 from grafana-svc" },
-      { id: "sg-loki", name: "platform-loki", rules: 2, desc: "Loki 3100 from internal" },
-      { id: "sg-minio", name: "platform-minio", rules: 1, desc: "S3 9000 from same network" },
-      { id: "sg-harbor", name: "platform-harbor", rules: 2, desc: "Registry 443 from cluster nodes" },
-    ],
-    routers: [
-      { id: "r-004", name: "platform-shared-router", status: "ACTIVE", gatewayIp: "10.0.0.1", routes: 8, ha: true },
-    ],
-    quotas: { ports: { used: 22, max: 100 }, floatingIps: { used: 3, max: 15 }, subnets: { used: 4, max: 10 } },
-    bandwidth: { rxMbps: 1240.8, txMbps: 894.2, pktDropPct: 0.01 },
-    floatingIps: [
-      { ip: "203.0.113.60", mappedTo: "harbor-01", status: "ACTIVE" },
-      { ip: "203.0.113.61", mappedTo: "minio-01", status: "ACTIVE" },
-      { ip: "203.0.113.62", mappedTo: "grafana-01", status: "ACTIVE" },
-    ],
-  },
-};
-
+// 네트워크 영역 = 네트워크 / 라우터 / 보안그룹을 한 화면 탭으로 통합(라우터·SG는 프로젝트 자원이라 네트워크 하위가 아님 → 같은 영역에서 관리)
 export default function NetworksPage() {
   const isAdmin = useAuth((s) => s.user?.role === "admin");
-  return isAdmin ? <AdminNetworksView /> : <UserNetworkAccessView />;
+  return (
+    <Tabs defaultValue="networks" className="space-y-4">
+      <TabsList>
+        <TabsTrigger value="networks">네트워크</TabsTrigger>
+        {isAdmin && <TabsTrigger value="routers">라우터</TabsTrigger>}
+        <TabsTrigger value="security">보안 그룹</TabsTrigger>
+      </TabsList>
+      <TabsContent value="networks">
+        {isAdmin ? <AdminNetworksView /> : <UserNetworkAccessView />}
+      </TabsContent>
+      {isAdmin && (
+        <TabsContent value="routers">
+          <RoutersPage />
+        </TabsContent>
+      )}
+      <TabsContent value="security">
+        <SecurityGroupsPage />
+      </TabsContent>
+    </Tabs>
+  );
 }
 
 const SSH_USER = "ubuntu";
@@ -304,15 +218,29 @@ function UserNetworkAccessView() {
 }
 
 function AdminNetworksView() {
-  const isAdmin = useAuth((s) => s.user?.role === "admin");
-  const { data, isLoading } = api.iaas.networks() as {
-    data: { items: IaasNetwork[] } | undefined;
-    isLoading: boolean;
-  };
+  const { data, isLoading } = useNetworks();
+  const { data: projData } = useProjects();
   const [selected, setSelected] = React.useState<IaasNetwork | undefined>();
+  const [createOpen, setCreateOpen] = React.useState(false);
   const [q, setQ] = React.useState("");
+  const [projFilter, setProjFilter] = React.useState<string>("all");
+  // project_id(UUID) → 프로젝트 이름. 없으면 UUID 그대로.
+  const projName = React.useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const p of projData?.items ?? []) m[p.id] = p.name;
+    return (id: string) => m[id] ?? id;
+  }, [projData]);
+  // 네트워크가 실제 속한 프로젝트들(필터 옵션)
+  const projOptions = React.useMemo(() => {
+    const ids = Array.from(new Set((data?.items ?? []).map((n) => n.tenantId).filter(Boolean)));
+    return ids.map((id) => ({ id, name: projName(id) })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [data, projName]);
   if (isLoading || !data) return <Skeleton className="h-96" />;
-  const items = data.items.filter((n) => !q || n.name.toLowerCase().includes(q.toLowerCase()));
+  const items = data.items.filter(
+    (n) =>
+      (!q || n.name.toLowerCase().includes(q.toLowerCase())) &&
+      (projFilter === "all" || n.tenantId === projFilter),
+  );
 
   return (
     <div className="space-y-4">
@@ -327,11 +255,22 @@ function AdminNetworksView() {
       <Card className="p-4">
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
+            <Select value={projFilter} onValueChange={setProjFilter}>
+              <SelectTrigger className="w-48">
+                <SelectValue placeholder="프로젝트 필터" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">전체 프로젝트</SelectItem>
+                {projOptions.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
               <Input placeholder="네트워크 이름 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
             </div>
-            <Button size="sm" className="ml-auto" onClick={() => toast.success("네트워크 생성 다이얼로그 (관리자용)")}>
+            <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
               <Plus className="size-3.5" /> 네트워크 생성
             </Button>
           </div>
@@ -347,26 +286,24 @@ function AdminNetworksView() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead>프로젝트</TableHead>
               <TableHead>네트워크</TableHead>
-              {isAdmin && <TableHead>테넌트</TableHead>}
-              {isAdmin && <TableHead>자원풀</TableHead>}
               <TableHead>유형</TableHead>
-              {isAdmin ? (
-                <>
-                  <TableHead>CIDR</TableHead>
-                  <TableHead>VLAN</TableHead>
-                  <TableHead>서브넷</TableHead>
-                  <TableHead>포트</TableHead>
-                </>
-              ) : (
-                <TableHead>외부 접속</TableHead>
-              )}
+              <TableHead>공유</TableHead>
+              <TableHead>상태</TableHead>
+              <TableHead>CIDR</TableHead>
+              <TableHead>VLAN</TableHead>
+              <TableHead>서브넷</TableHead>
+              <TableHead>포트</TableHead>
               <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {items.map((n) => (
-              <TableRow key={n.id} className={cn(isAdmin && "cursor-pointer")} onClick={() => isAdmin && setSelected(n)}>
+              <TableRow key={n.id} className="cursor-pointer" onClick={() => setSelected(n)}>
+                <TableCell className="text-xs font-medium">
+                  {n.tenantId ? projName(n.tenantId) : "—"}
+                </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
                     <div className="size-6 rounded-md bg-sky-100 p-1 text-sky-700">
@@ -378,56 +315,166 @@ function AdminNetworksView() {
                     </div>
                   </div>
                 </TableCell>
-                {isAdmin && <TableCell className="font-mono text-xs">{n.tenantId}</TableCell>}
-                {isAdmin && <TableCell className="font-mono text-xs">{n.poolId}</TableCell>}
                 <TableCell>
-                  {isAdmin ? (
-                    <Badge variant={n.type === "external" ? "default" : n.type === "shared" ? "warning" : "outline"}>
-                      {n.type}
-                    </Badge>
-                  ) : (
-                    <Badge variant={friendlyNetType(n.type).external ? "default" : "outline"}>
-                      {friendlyNetType(n.type).label}
-                    </Badge>
-                  )}
+                  <Badge variant={n.type === "external" ? "default" : n.type === "shared" ? "warning" : "outline"}>
+                    {n.type}
+                  </Badge>
                 </TableCell>
-                {isAdmin ? (
-                  <>
-                    <TableCell className="font-mono text-xs">{n.cidr}</TableCell>
-                    <TableCell className="font-mono text-xs">{n.vlan ?? "—"}</TableCell>
-                    <TableCell className="font-mono tabular-nums">{n.subnets}</TableCell>
-                    <TableCell className="font-mono tabular-nums">{n.ports}</TableCell>
-                  </>
-                ) : (
-                  <TableCell className="text-xs">
-                    {friendlyNetType(n.type).external ? (
-                      <span className="text-emerald-700">가능 (공인 IP)</span>
-                    ) : (
-                      <span className="text-muted-foreground">불가 (내부 전용)</span>
-                    )}
-                  </TableCell>
-                )}
+                <TableCell className="text-xs">
+                  {n.shared ? <Badge variant="warning">공유</Badge> : <span className="text-muted-foreground">—</span>}
+                </TableCell>
                 <TableCell>
-                  {isAdmin && <ChevronRight className="size-4 text-muted-foreground" />}
+                  <Badge variant={n.status === "ACTIVE" ? "success" : "secondary"} className="text-[10px]">
+                    {n.status || "—"}
+                  </Badge>
+                </TableCell>
+                <TableCell className="font-mono text-xs">{n.cidr || "—"}</TableCell>
+                <TableCell className="font-mono text-xs">{n.vlan ?? "—"}</TableCell>
+                <TableCell className="font-mono tabular-nums">{n.subnets}</TableCell>
+                <TableCell className="font-mono tabular-nums">{n.ports}</TableCell>
+                <TableCell>
+                  <ChevronRight className="size-4 text-muted-foreground" />
                 </TableCell>
               </TableRow>
             ))}
+            {items.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={10} className="py-10 text-center text-sm text-muted-foreground">
+                  네트워크가 없습니다.
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </Card>
 
-      {/* Detail Sheet */}
-      <Sheet open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
-        <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-3xl">
-          {selected && <NetworkDetailPanel network={selected} onClose={() => setSelected(undefined)} />}
-        </SheetContent>
-      </Sheet>
+      {/* 상세 — 가운데 모달 */}
+      <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
+        <DialogContent className="max-w-3xl">
+          {selected && <NetworkDetailPanel network={selected} projectLabel={projName(selected.tenantId)} onClose={() => setSelected(undefined)} />}
+        </DialogContent>
+      </Dialog>
+
+      <CreateNetworkDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        projects={projData?.items ?? []}
+        defaultProjectId={projFilter !== "all" ? projFilter : ""}
+      />
     </div>
   );
 }
 
-function NetworkDetailPanel({ network, onClose }: { network: IaasNetwork; onClose: () => void }) {
-  const detail = DETAILS[network.id] ?? DETAILS["in-1"];
+function CreateNetworkDialog({
+  open, onClose, projects, defaultProjectId,
+}: { open: boolean; onClose: () => void; projects: Tenant[]; defaultProjectId: string }) {
+  const [projectId, setProjectId] = React.useState(defaultProjectId);
+  const [name, setName] = React.useState("");
+  const [subnetName, setSubnetName] = React.useState("");
+  const [cidr, setCidr] = React.useState("10.0.0.0/24");
+  const [gateway, setGateway] = React.useState("");
+  const [dhcp, setDhcp] = React.useState(true);
+  const [dns, setDns] = React.useState("");
+  const create = useCreateNetwork();
+
+  React.useEffect(() => {
+    if (open) {
+      setProjectId(defaultProjectId);
+      setName(""); setSubnetName(""); setCidr("10.0.0.0/24"); setGateway(""); setDhcp(true); setDns("");
+    }
+  }, [open, defaultProjectId]);
+
+  function submit() {
+    if (!projectId) return toast.error("프로젝트를 선택하세요");
+    if (!name.trim()) return toast.error("네트워크 이름을 입력하세요");
+    if (!cidr.trim()) return toast.error("CIDR을 입력하세요");
+    create.mutate(
+      {
+        name: name.trim(),
+        projectId,
+        cidr: cidr.trim(),
+        subnetName: subnetName.trim() || undefined,
+        gatewayIp: gateway.trim() || undefined,
+        enableDhcp: dhcp,
+        dnsNameservers: dns.split(",").map((s) => s.trim()).filter(Boolean),
+      },
+      {
+        onSuccess: (n) => {
+          toast.success(`네트워크 ${n.name} 생성됨`, { description: `서브넷 ${cidr}` });
+          onClose();
+        },
+        onError: (e) => toast.error("네트워크 생성 실패", { description: String((e as Error).message) }),
+      },
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !create.isPending && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>네트워크 생성</DialogTitle>
+          <DialogDescription>테넌트 네트워크 + 서브넷을 함께 생성합니다 (OpenStack Neutron).</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label>프로젝트</Label>
+            <Select value={projectId} onValueChange={setProjectId}>
+              <SelectTrigger>
+                <SelectValue placeholder="프로젝트 선택" />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>네트워크 이름</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-network" />
+          </div>
+          <div className="rounded-md border border-border p-3">
+            <div className="mb-2 text-[10px] uppercase text-muted-foreground">서브넷</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2 space-y-1.5">
+                <Label>이름 (선택)</Label>
+                <Input value={subnetName} onChange={(e) => setSubnetName(e.target.value)} placeholder="비우면 자동(네트워크명-subnet)" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>CIDR</Label>
+                <Input value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="10.0.0.0/24" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>게이트웨이 (선택)</Label>
+                <Input value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="자동" />
+              </div>
+              <div className="col-span-2 space-y-1.5">
+                <Label>DNS 서버 (선택, 쉼표 구분)</Label>
+                <Input value={dns} onChange={(e) => setDns(e.target.value)} placeholder="8.8.8.8, 1.1.1.1" />
+              </div>
+              <label className="col-span-2 flex cursor-pointer items-center gap-2 text-sm">
+                <input type="checkbox" checked={dhcp} onChange={(e) => setDhcp(e.target.checked)} className="size-4 cursor-pointer" />
+                DHCP 활성화
+              </label>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={create.isPending}>취소</Button>
+          <Button onClick={submit} disabled={create.isPending}>
+            {create.isPending ? "생성 중…" : "생성"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function NetworkDetailPanel({ network, projectLabel, onClose }: { network: IaasNetwork; projectLabel: string; onClose: () => void }) {
+  const { data: detail, isLoading, isError } = useNetwork(network.id);
+  const [addSubnetOpen, setAddSubnetOpen] = React.useState(false);
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
+  const [sgEditId, setSgEditId] = React.useState<string | undefined>();
   const copy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     toast.success(`${label} 복사됨`);
@@ -435,48 +482,44 @@ function NetworkDetailPanel({ network, onClose }: { network: IaasNetwork; onClos
 
   return (
     <>
-      <SheetHeader className="border-b border-border">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="flex size-10 items-center justify-center rounded-lg bg-sky-100 text-sky-700">
-              <NetworkIcon className="size-5" />
-            </div>
-            <div>
-              <SheetTitle className="text-lg">{network.name}</SheetTitle>
-              <SheetDescription className="font-mono text-xs">
-                {network.id} · {network.tenantId} · {network.poolId}
-              </SheetDescription>
-            </div>
+      <DialogHeader>
+        <div className="flex items-center gap-3 pr-8">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-700">
+            <NetworkIcon className="size-5" />
           </div>
-          <Badge variant={network.type === "external" ? "default" : network.type === "shared" ? "warning" : "outline"}>
-            {network.type}
-          </Badge>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <DialogTitle className="truncate text-lg">{network.name}</DialogTitle>
+              <Badge
+                variant={network.type === "external" ? "default" : network.type === "shared" ? "warning" : "outline"}
+                className="shrink-0"
+              >
+                {network.type}
+              </Badge>
+            </div>
+            <DialogDescription className="truncate text-xs">
+              <span className="font-mono">{network.id}</span> · 프로젝트 {projectLabel}
+              {network.poolId && <> · {network.poolId}</>}
+            </DialogDescription>
+          </div>
         </div>
-      </SheetHeader>
+      </DialogHeader>
 
-      <div className="space-y-4 p-6">
-        {/* Quick info + bandwidth */}
+      <div className="max-h-[65vh] min-w-0 space-y-4 overflow-y-auto">
+        {isLoading ? (
+          <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" /> Neutron 상세 조회 중…
+          </div>
+        ) : isError || !detail ? (
+          <div className="p-6 text-sm text-rose-600">네트워크 상세 조회 실패 (OpenStack 연결 확인)</div>
+        ) : (
+          <>
+        {/* Quick info */}
         <div className="grid grid-cols-3 gap-3">
-          <InfoBox label="CIDR" value={network.cidr} mono onCopy={() => copy(network.cidr, "CIDR")} />
-          <InfoBox label="VLAN" value={network.vlan?.toString() ?? "—"} mono />
+          <InfoBox label="CIDR" value={detail.subnets[0]?.cidr ?? "—"} mono onCopy={() => copy(detail.subnets[0]?.cidr ?? "", "CIDR")} />
+          <InfoBox label="VLAN" value={detail.vlan?.toString() ?? "—"} mono />
           <InfoBox label="Provider" value="OpenStack Neutron" />
         </div>
-
-        {/* Bandwidth band */}
-        <Card className="p-4">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-xs font-semibold">실시간 대역폭</div>
-            <Badge variant="ghost" className="font-mono text-[10px]">
-              <span className="mr-1 size-1.5 animate-pulse rounded-full bg-brand-mint-500" />
-              live
-            </Badge>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <BWMetric label="RX" value={`${detail.bandwidth.rxMbps.toFixed(1)} Mbps`} color="text-brand-mint-600" />
-            <BWMetric label="TX" value={`${detail.bandwidth.txMbps.toFixed(1)} Mbps`} color="text-brand-indigo-600" />
-            <BWMetric label="Packet Drop" value={`${detail.bandwidth.pktDropPct.toFixed(2)}%`} color="text-amber-600" />
-          </div>
-        </Card>
 
         {/* Quotas */}
         <Card className="space-y-3 p-4">
@@ -578,7 +621,7 @@ function NetworkDetailPanel({ network, onClose }: { network: IaasNetwork; onClos
                     </div>
                     <div className="text-xs text-muted-foreground">{sg.desc}</div>
                   </div>
-                  <Button variant="ghost" size="sm">규칙 보기</Button>
+                  <Button variant="ghost" size="sm" onClick={() => setSgEditId(sg.id)}>규칙 편집</Button>
                 </div>
               </Card>
             ))}
@@ -606,97 +649,313 @@ function NetworkDetailPanel({ network, onClose }: { network: IaasNetwork; onClos
           </TabsContent>
 
           <TabsContent value="fip" className="mt-3">
-            {detail.floatingIps.length === 0 ? (
-              <Card className="p-6 text-center text-sm text-muted-foreground">
-                할당된 Floating IP가 없습니다.
-              </Card>
-            ) : (
-              <Card className="overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Public IP</TableHead>
-                      <TableHead>매핑된 자원</TableHead>
-                      <TableHead>상태</TableHead>
-                      <TableHead className="w-20" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {detail.floatingIps.map((f) => (
-                      <TableRow key={f.ip}>
-                        <TableCell>
-                          <div className="flex items-center gap-1.5">
-                            <Globe className="size-3.5 text-brand-mint-600" />
-                            <span className="font-mono">{f.ip}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{f.mappedTo}</TableCell>
-                        <TableCell>
-                          <Badge variant={f.status === "ACTIVE" ? "success" : "secondary"} className="text-[10px]">
-                            {f.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <Button variant="ghost" size="icon-sm" onClick={() => copy(f.ip, "Floating IP")} title="IP 복사">
-                              <Copy className="size-3.5" />
-                            </Button>
-                            {f.status === "ACTIVE" ? (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 text-[11px]"
-                                onClick={() => toast.success(`${f.ip} 연결 해제 — ${f.mappedTo}에서 detach`)}
-                                title="연결 해제 (detach)"
-                              >
-                                해제
-                              </Button>
-                            ) : (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 text-[11px]"
-                                onClick={() => toast.success(`${f.ip} 재할당 대상 선택`)}
-                                title="자원에 할당"
-                              >
-                                할당
-                              </Button>
-                            )}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-[11px] text-rose-600"
-                              onClick={() => {
-                                if (f.status === "ACTIVE") {
-                                  toast.error(`${f.ip} 회수 거부 — 먼저 해제하기`);
-                                  return;
-                                }
-                                toast.success(`${f.ip} 풀로 반환됨 (release)`);
-                              }}
-                              title="Floating IP 회수 (release)"
-                            >
-                              회수
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Card>
-            )}
+            <FipTab projectId={detail.tenantId} fips={detail.floatingIps} copy={copy} />
           </TabsContent>
         </Tabs>
 
         {/* Actions */}
         <div className="flex items-center gap-2 border-t border-border pt-4">
-          <Button variant="outline" size="sm">서브넷 추가</Button>
-          <Button variant="outline" size="sm">FIP 할당</Button>
-          <Button variant="outline" size="sm">보안 그룹 편집</Button>
-          <Button variant="destructive" size="sm" className="ml-auto">네트워크 삭제</Button>
+          <Button variant="outline" size="sm" onClick={() => setAddSubnetOpen(true)}>서브넷 추가</Button>
+          <Button variant="destructive" size="sm" className="ml-auto" onClick={() => setDeleteOpen(true)}>네트워크 삭제</Button>
         </div>
+
+        <AddSubnetDialog networkId={network.id} open={addSubnetOpen} onClose={() => setAddSubnetOpen(false)} />
+        <DeleteNetworkDialog
+          network={network}
+          open={deleteOpen}
+          onClose={() => setDeleteOpen(false)}
+          onDeleted={() => { setDeleteOpen(false); onClose(); }}
+        />
+        <SgRulesDialog sgId={sgEditId} onClose={() => setSgEditId(undefined)} />
+          </>
+        )}
       </div>
     </>
+  );
+}
+
+function AddSubnetDialog({ networkId, open, onClose }: { networkId: string; open: boolean; onClose: () => void }) {
+  const [name, setName] = React.useState("");
+  const [cidr, setCidr] = React.useState("");
+  const [gateway, setGateway] = React.useState("");
+  const [dhcp, setDhcp] = React.useState(true);
+  const [dns, setDns] = React.useState("");
+  const add = useAddSubnet(networkId);
+  React.useEffect(() => { if (open) { setName(""); setCidr(""); setGateway(""); setDhcp(true); setDns(""); } }, [open]);
+
+  function submit() {
+    if (!cidr.trim()) return toast.error("CIDR을 입력하세요");
+    add.mutate(
+      {
+        name: name.trim() || undefined,
+        cidr: cidr.trim(),
+        gatewayIp: gateway.trim() || undefined,
+        enableDhcp: dhcp,
+        dnsNameservers: dns.split(",").map((s) => s.trim()).filter(Boolean),
+      },
+      {
+        onSuccess: () => { toast.success(`서브넷 추가됨`, { description: cidr }); onClose(); },
+        onError: (e) => toast.error("서브넷 추가 실패", { description: String((e as Error).message) }),
+      },
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !add.isPending && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>서브넷 추가</DialogTitle>
+          <DialogDescription>이 네트워크에 서브넷을 추가합니다 (OpenStack Neutron).</DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-2 gap-3 py-2">
+          <div className="col-span-2 space-y-1.5">
+            <Label>이름 (선택)</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="비우면 자동(네트워크명-subnet)" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>CIDR</Label>
+            <Input value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="10.0.1.0/24" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>게이트웨이 (선택)</Label>
+            <Input value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="자동" />
+          </div>
+          <div className="col-span-2 space-y-1.5">
+            <Label>DNS 서버 (선택, 쉼표 구분)</Label>
+            <Input value={dns} onChange={(e) => setDns(e.target.value)} placeholder="8.8.8.8, 1.1.1.1" />
+          </div>
+          <label className="col-span-2 flex cursor-pointer items-center gap-2 text-sm">
+            <input type="checkbox" checked={dhcp} onChange={(e) => setDhcp(e.target.checked)} className="size-4 cursor-pointer" />
+            DHCP 활성화
+          </label>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={add.isPending}>취소</Button>
+          <Button onClick={submit} disabled={add.isPending}>{add.isPending ? "추가 중…" : "추가"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteNetworkDialog({
+  network, open, onClose, onDeleted,
+}: { network: IaasNetwork; open: boolean; onClose: () => void; onDeleted: () => void }) {
+  const [confirm, setConfirm] = React.useState("");
+  const del = useDeleteNetwork();
+  React.useEffect(() => { if (open) setConfirm(""); }, [open]);
+
+  function submit() {
+    del.mutate(network.id, {
+      onSuccess: () => { toast.success(`네트워크 ${network.name} 삭제됨`); onDeleted(); },
+      onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }),
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !del.isPending && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-rose-600">네트워크 삭제</DialogTitle>
+          <DialogDescription>
+            되돌릴 수 없습니다. 연결된 포트(가상서버 등)가 남아있으면 삭제가 거부됩니다.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-2 text-sm">
+          <p>삭제하려면 네트워크 이름 <strong className="font-mono">{network.name}</strong> 을(를) 입력하세요.</p>
+          <Input value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder={network.name} />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={del.isPending}>취소</Button>
+          <Button variant="destructive" onClick={submit} disabled={del.isPending || confirm !== network.name}>
+            {del.isPending ? "삭제 중…" : "삭제"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function FipTab({
+  projectId, fips, copy,
+}: {
+  projectId: string;
+  fips: NetworkDetail["floatingIps"];
+  copy: (text: string, label: string) => void;
+}) {
+  const allocate = useAllocateFip();
+  const release = useReleaseFip();
+  const update = useUpdateFip();
+  const confirm = useConfirm();
+  const [assocFor, setAssocFor] = React.useState<string | undefined>(); // 연결 대상 선택 중인 FIP id
+  const busy = allocate.isPending || release.isPending || update.isPending;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">공인 IP {fips.length}개</span>
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={async () => {
+            if (!(await confirm({
+              title: "공인 IP 확보",
+              description: "외부 풀에서 공인 IP를 1개 확보합니다. (프로젝트 쿼터를 소비)",
+              confirmLabel: "확보",
+            }))) return;
+            allocate.mutate(projectId, {
+              onSuccess: (f) => toast.success(`공인 IP 확보됨`, { description: (f as { floating_ip_address?: string }).floating_ip_address }),
+              onError: (e) => toast.error("확보 실패", { description: String((e as Error).message) }),
+            });
+          }}
+        >
+          <Plus className="size-3.5" /> 공인 IP 확보
+        </Button>
+      </div>
+
+      {fips.length === 0 ? (
+        <Card className="p-6 text-center text-sm text-muted-foreground">확보된 공인 IP가 없습니다.</Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Public IP</TableHead>
+                <TableHead>연결된 내부 IP</TableHead>
+                <TableHead>상태</TableHead>
+                <TableHead className="w-44" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {fips.map((f) => {
+                const associated = !!f.portId;
+                return (
+                  <TableRow key={f.id}>
+                    <TableCell>
+                      <div className="flex items-center gap-1.5">
+                        <Globe className="size-3.5 text-brand-mint-600" />
+                        <span className="font-mono">{f.ip}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{associated ? f.mappedTo : "—"}</TableCell>
+                    <TableCell>
+                      <Badge variant={associated ? "success" : "secondary"} className="text-[10px]">
+                        {associated ? "연결됨" : "미연결"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="icon-sm" onClick={() => copy(f.ip, "공인 IP")} title="IP 복사">
+                          <Copy className="size-3.5" />
+                        </Button>
+                        {associated ? (
+                          <Button
+                            variant="ghost" size="sm" className="h-7 text-[11px]" disabled={busy}
+                            onClick={async () => {
+                              if (!(await confirm({
+                                title: "연결 해제", destructive: true, confirmLabel: "해제",
+                                description: `${f.ip} 를 ${f.mappedTo} 에서 연결 해제할까요?`,
+                              }))) return;
+                              update.mutate({ fipId: f.id, portId: null }, {
+                                onSuccess: () => toast.success(`${f.ip} 연결 해제됨`),
+                                onError: (e) => toast.error("연결 해제 실패", { description: String((e as Error).message) }),
+                              });
+                            }}
+                          >
+                            연결 해제
+                          </Button>
+                        ) : (
+                          <Button variant="ghost" size="sm" className="h-7 text-[11px]" disabled={busy} onClick={() => setAssocFor(f.id)}>
+                            연결
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost" size="sm" className="h-7 text-[11px] text-rose-600" disabled={busy}
+                          onClick={async () => {
+                            if (!(await confirm({
+                              title: "공인 IP 반납", destructive: true, confirmLabel: "반납",
+                              description: `${f.ip} 를 외부 풀로 반납할까요? 되돌릴 수 없습니다.`,
+                            }))) return;
+                            release.mutate(f.id, {
+                              onSuccess: () => toast.success(`${f.ip} 반납됨`),
+                              onError: (e) => toast.error("반납 실패", { description: String((e as Error).message) }),
+                            });
+                          }}
+                        >
+                          반납
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
+
+      <AssociateFipDialog
+        projectId={projectId}
+        fipId={assocFor}
+        onClose={() => setAssocFor(undefined)}
+        onPick={(portId) => {
+          const id = assocFor!;
+          setAssocFor(undefined);
+          update.mutate({ fipId: id, portId }, {
+            onSuccess: () => toast.success("공인 IP가 연결되었습니다"),
+            onError: (e) => toast.error("연결 실패", { description: String((e as Error).message) }),
+          });
+        }}
+      />
+    </div>
+  );
+}
+
+function AssociateFipDialog({
+  projectId, fipId, onClose, onPick,
+}: {
+  projectId: string;
+  fipId: string | undefined;
+  onClose: () => void;
+  onPick: (portId: string) => void;
+}) {
+  const { data: targets, isLoading } = useFipTargets(fipId ? projectId : undefined);
+  return (
+    <Dialog open={!!fipId} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>연결할 대상 선택</DialogTitle>
+          <DialogDescription>공인 IP를 붙일 VM의 내부 포트를 고르세요.</DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[50vh] space-y-2 overflow-y-auto py-1">
+          {isLoading ? (
+            <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> 대상 포트 조회 중…
+            </div>
+          ) : !targets || targets.length === 0 ? (
+            <Card className="p-6 text-center text-sm text-muted-foreground">연결 가능한 포트가 없습니다.</Card>
+          ) : (
+            targets.map((t) => (
+              <button
+                key={t.portId}
+                type="button"
+                onClick={() => onPick(t.portId)}
+                className="flex w-full cursor-pointer items-center justify-between rounded-md border border-border p-3 text-left hover:bg-secondary"
+              >
+                <div className="flex items-center gap-2">
+                  <Plug className="size-4 text-brand-mint-600" />
+                  <div>
+                    <div className="font-mono text-sm">{t.ip}</div>
+                    <div className="text-[11px] text-muted-foreground">{t.networkName}</div>
+                  </div>
+                </div>
+                <ChevronRight className="size-4 text-muted-foreground" />
+              </button>
+            ))
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -732,15 +991,6 @@ function InfoBox({ label, value, mono, onCopy }: { label: string; value: string;
         )}
       </div>
       <div className={cn("mt-0.5 font-semibold", mono && "font-mono")}>{value}</div>
-    </div>
-  );
-}
-
-function BWMetric({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <div className="text-center">
-      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
-      <div className={cn("font-mono text-base font-bold tabular-nums", color)}>{value}</div>
     </div>
   );
 }

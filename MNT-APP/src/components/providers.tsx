@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
 import { MSWProvider } from "@/components/msw-provider";
+import { ConfirmProvider } from "@/components/ui/confirm";
 
 function makeQueryClient() {
   return new QueryClient({
@@ -35,7 +36,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
     >
       <QueryClientProvider client={queryClient}>
         <MSWProvider>
-          <TooltipProvider delayDuration={300}>{children}</TooltipProvider>
+          <TooltipProvider delayDuration={300}>
+            <ConfirmProvider>{children}</ConfirmProvider>
+          </TooltipProvider>
         </MSWProvider>
       </QueryClientProvider>
     </ThemeProvider>

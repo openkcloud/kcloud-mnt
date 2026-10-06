@@ -243,6 +243,7 @@ export interface Tenant {
   usedAcc: number;
   members: number;
   createdAt: string;
+  enabled?: boolean; // OpenStack Keystone 프로젝트 활성 여부 (목업엔 없을 수 있음)
 }
 
 export interface VM {
@@ -305,6 +306,8 @@ export interface IaasNetwork {
   type: "tenant" | "external" | "shared";
   subnets: number;
   ports: number;
+  status?: string;
+  shared?: boolean;
 }
 
 export interface Image {
