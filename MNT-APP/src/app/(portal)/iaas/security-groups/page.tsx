@@ -1,144 +1,87 @@
 "use client";
 import * as React from "react";
-import {
-  Shield, Plus, Search, MoreVertical, Trash2, Edit, Copy, Download, ArrowDown, ArrowUp,
-} from "lucide-react";
+import { ShieldCheck, Plus, Search, Settings, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { PageHeader } from "@/components/page-header";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
-  DropdownMenuSeparator, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StatCard } from "@/components/stat-card";
+import { SgRulesDialog } from "@/components/iaas/sg-rules-dialog";
+import { useConfirm } from "@/components/ui/confirm";
+import {
+  useSecurityGroups, useCreateSecurityGroup, useDeleteSecurityGroup, useProjects,
+  type SgSummary,
+} from "@/lib/iaas-api";
+import type { Tenant } from "@/lib/types";
 
-type Direction = "ingress" | "egress";
-type Proto = "TCP" | "UDP" | "ICMP" | "ALL";
-
-interface SGRule {
-  id: string;
-  direction: Direction;
-  proto: Proto;
-  portRange: string;
-  cidr: string;
-  desc: string;
-}
-
-interface SecurityGroup {
-  id: string;
-  name: string;
-  project: string;
-  rules: SGRule[];
-  attachedTo: number;
-  createdAt: string;
-}
-
-const INITIAL: SecurityGroup[] = [
-  {
-    id: "sg-001",
-    name: "default",
-    project: "proj-ai-research",
-    rules: [
-      { id: "r-1", direction: "egress", proto: "ALL", portRange: "-", cidr: "0.0.0.0/0", desc: "모든 아웃바운드 허용" },
-      { id: "r-2", direction: "ingress", proto: "TCP", portRange: "22", cidr: "10.0.0.0/8", desc: "관리자 SSH" },
-    ],
-    attachedTo: 12,
-    createdAt: "2026-04-11",
-  },
-  {
-    id: "sg-002",
-    name: "web-tier",
-    project: "proj-llm-serving",
-    rules: [
-      { id: "r-1", direction: "ingress", proto: "TCP", portRange: "80", cidr: "0.0.0.0/0", desc: "HTTP" },
-      { id: "r-2", direction: "ingress", proto: "TCP", portRange: "443", cidr: "0.0.0.0/0", desc: "HTTPS" },
-      { id: "r-3", direction: "egress", proto: "ALL", portRange: "-", cidr: "0.0.0.0/0", desc: "아웃바운드" },
-    ],
-    attachedTo: 5,
-    createdAt: "2026-05-02",
-  },
-  {
-    id: "sg-003",
-    name: "inference-node",
-    project: "proj-llm-serving",
-    rules: [
-      { id: "r-1", direction: "ingress", proto: "TCP", portRange: "8000-8080", cidr: "172.16.0.0/12", desc: "vLLM API" },
-      { id: "r-2", direction: "ingress", proto: "TCP", portRange: "9090", cidr: "10.10.0.0/16", desc: "Prometheus scrape" },
-      { id: "r-3", direction: "egress", proto: "TCP", portRange: "443", cidr: "0.0.0.0/0", desc: "HuggingFace 모델 다운로드" },
-    ],
-    attachedTo: 8,
-    createdAt: "2026-05-15",
-  },
-  {
-    id: "sg-004",
-    name: "k8s-control-plane",
-    project: "proj-platform-ops",
-    rules: [
-      { id: "r-1", direction: "ingress", proto: "TCP", portRange: "6443", cidr: "10.10.0.0/16", desc: "kube-apiserver" },
-      { id: "r-2", direction: "ingress", proto: "TCP", portRange: "2379-2380", cidr: "10.10.1.0/24", desc: "etcd" },
-      { id: "r-3", direction: "ingress", proto: "TCP", portRange: "10250", cidr: "10.10.0.0/16", desc: "kubelet" },
-    ],
-    attachedTo: 3,
-    createdAt: "2026-03-20",
-  },
-];
-
+// 보안 그룹 — OpenStack Neutron 실연동. 목록은 프로젝트 컬럼이 맨 앞(우리 기준 데이터).
 export default function SecurityGroupsPage() {
-  const [items, setItems] = React.useState<SecurityGroup[]>(INITIAL);
+  const { data, isLoading } = useSecurityGroups();
+  const { data: projData } = useProjects();
   const [q, setQ] = React.useState("");
-  const [selected, setSelected] = React.useState<SecurityGroup | null>(null);
+  const [projFilter, setProjFilter] = React.useState("all");
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [rulesFor, setRulesFor] = React.useState<string | undefined>();
+  const del = useDeleteSecurityGroup();
+  const confirm = useConfirm();
 
-  const filtered = items.filter((s) => !q || s.name.toLowerCase().includes(q.toLowerCase()));
+  const projName = React.useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const p of projData?.items ?? []) m[p.id] = p.name;
+    return (id: string) => m[id] ?? id;
+  }, [projData]);
+  const projOptions = React.useMemo(() => {
+    const ids = Array.from(new Set((data ?? []).map((s) => s.tenantId).filter(Boolean)));
+    return ids.map((id) => ({ id, name: projName(id) })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [data, projName]);
 
-  const totals = {
-    total: items.length,
-    rules: items.reduce((s, x) => s + x.rules.length, 0),
-    attached: items.reduce((s, x) => s + x.attachedTo, 0),
-  };
+  if (isLoading || !data) return <Skeleton className="h-96" />;
+  const items = data.filter(
+    (s) =>
+      (!q || s.name.toLowerCase().includes(q.toLowerCase())) &&
+      (projFilter === "all" || s.tenantId === projFilter),
+  );
+
+  async function remove(sg: SgSummary) {
+    if (!(await confirm({
+      title: "보안 그룹 삭제", destructive: true, confirmLabel: "삭제",
+      description: `${sg.name} 을(를) 삭제할까요? 되돌릴 수 없습니다.`,
+    }))) return;
+    del.mutate(sg.id, {
+      onSuccess: () => toast.success(`보안 그룹 ${sg.name} 삭제됨`),
+      onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }),
+    });
+  }
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="보안 그룹"
-        description="가상머신의 인바운드/아웃바운드 트래픽 규칙(방화벽)을 관리합니다."
-        actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" /> 보안 그룹 생성
-          </Button>
-        }
-      />
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <StatCard label="보안 그룹" value={totals.total} unit="개" icon={Shield} accent="indigo" />
-        <StatCard label="전체 규칙" value={totals.rules} unit="건" icon={ArrowDown} accent="mint" />
-        <StatCard label="적용된 인스턴스" value={totals.attached} unit="대" icon={Shield} accent="amber" />
-      </div>
-
+    <div className="space-y-4">
       <Card className="p-4">
         <div className="flex items-center gap-3">
+          <Select value={projFilter} onValueChange={setProjFilter}>
+            <SelectTrigger className="w-48"><SelectValue placeholder="프로젝트 필터" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">전체 프로젝트</SelectItem>
+              {projOptions.map((p) => (
+                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input
-              placeholder="보안 그룹 이름 검색…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              className="w-64 pl-9"
-            />
+            <Input placeholder="보안 그룹 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
           </div>
-          <span className="ml-auto text-xs text-muted-foreground">
-            {filtered.length}/{items.length}개 표시
-          </span>
+          <span className="text-xs text-muted-foreground">총 {items.length}개</span>
+          <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-3.5" /> 보안 그룹 생성
+          </Button>
         </div>
       </Card>
 
@@ -146,353 +89,108 @@ export default function SecurityGroupsPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>이름</TableHead>
               <TableHead>프로젝트</TableHead>
-              <TableHead className="text-center">규칙 수</TableHead>
-              <TableHead className="text-center">적용 인스턴스</TableHead>
-              <TableHead>생성일</TableHead>
-              <TableHead className="w-14" />
+              <TableHead>보안 그룹</TableHead>
+              <TableHead>설명</TableHead>
+              <TableHead className="text-center">규칙</TableHead>
+              <TableHead className="w-32" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.map((sg) => (
-              <TableRow key={sg.id} className="cursor-pointer" onClick={() => setSelected(sg)}>
+            {items.map((s) => (
+              <TableRow key={s.id} className="cursor-pointer" onClick={() => setRulesFor(s.id)}>
+                <TableCell className="text-xs font-medium">{s.tenantId ? projName(s.tenantId) : "—"}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
-                    <Shield className="size-3.5 text-brand-indigo-600" />
-                    <span className="font-medium">{sg.name}</span>
+                    <ShieldCheck className="size-3.5 text-amber-600" />
+                    <span className="font-mono text-sm font-semibold">{s.name}</span>
                   </div>
-                  <div className="font-mono text-[10px] text-muted-foreground">{sg.id}</div>
+                  <div className="font-mono text-[10px] text-muted-foreground">{s.id}</div>
                 </TableCell>
-                <TableCell className="font-mono text-xs">{sg.project}</TableCell>
-                <TableCell className="text-center">
-                  <Badge variant="ghost">
-                    <ArrowDown className="size-2.5 text-brand-mint-600" />
-                    {sg.rules.filter((r) => r.direction === "ingress").length}
-                    <span className="mx-1 text-muted-foreground">·</span>
-                    <ArrowUp className="size-2.5 text-rose-600" />
-                    {sg.rules.filter((r) => r.direction === "egress").length}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-center font-mono">{sg.attachedTo}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">{sg.createdAt}</TableCell>
+                <TableCell className="max-w-[280px] truncate text-xs text-muted-foreground">{s.desc || "—"}</TableCell>
+                <TableCell className="text-center font-mono tabular-nums">{s.rules}</TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon-sm">
-                        <MoreVertical className="size-3.5" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setSelected(sg)}>
-                        <Edit className="size-3.5" /> 편집
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => {
-                          const clone = { ...sg, id: `sg-${Date.now()}`, name: `${sg.name}-copy`, attachedTo: 0 };
-                          setItems((prev) => [...prev, clone]);
-                          toast.success(`${sg.name} 복제됨`);
-                        }}
-                      >
-                        <Copy className="size-3.5" /> 복제
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => toast.success(`${sg.name} YAML 다운로드`)}>
-                        <Download className="size-3.5" /> YAML 내보내기
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="text-rose-600"
-                        onClick={() => {
-                          if (sg.attachedTo > 0) {
-                            toast.error(`${sg.name} 삭제 거부됨 — ${sg.attachedTo}개 인스턴스에 적용 중`);
-                            return;
-                          }
-                          setItems((prev) => prev.filter((x) => x.id !== sg.id));
-                          toast.success(`${sg.name} 삭제됨`);
-                        }}
-                      >
-                        <Trash2 className="size-3.5" /> 삭제
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => setRulesFor(s.id)}>
+                      <Settings className="size-3.5" /> 규칙
+                    </Button>
+                    <Button
+                      variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending}
+                      onClick={() => remove(s)}
+                    >
+                      <Trash2 className="size-3.5 text-rose-600" />
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
+            {items.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                  보안 그룹이 없습니다.
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </Card>
 
-      <SGDetailSheet
-        sg={selected}
-        onClose={() => setSelected(null)}
-        onUpdate={(updated) => {
-          setItems((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
-        }}
-      />
-
-      <CreateSGDialog
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreate={(sg) => {
-          setItems((prev) => [...prev, sg]);
-          toast.success(`${sg.name} 생성됨`);
-        }}
-      />
+      <SgRulesDialog sgId={rulesFor} onClose={() => setRulesFor(undefined)} />
+      <CreateSgDialog open={createOpen} onClose={() => setCreateOpen(false)} projects={projData?.items ?? []} />
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// 상세 Sheet — 규칙 CRUD
-// ─────────────────────────────────────────────────────────────
-function SGDetailSheet({
-  sg, onClose, onUpdate,
-}: {
-  sg: SecurityGroup | null;
-  onClose: () => void;
-  onUpdate: (sg: SecurityGroup) => void;
-}) {
-  const [addOpen, setAddOpen] = React.useState(false);
-
-  if (!sg) return null;
-
-  const removeRule = (rid: string) => {
-    onUpdate({ ...sg, rules: sg.rules.filter((r) => r.id !== rid) });
-    toast.success("규칙 삭제됨");
-  };
-
-  return (
-    <>
-      <Sheet open={!!sg} onOpenChange={(o) => !o && onClose()}>
-        <SheetContent className="w-full max-w-2xl overflow-y-auto sm:max-w-2xl">
-          <SheetHeader>
-            <SheetTitle className="text-lg">{sg.name}</SheetTitle>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="font-mono">{sg.id}</span>
-              <span>·</span>
-              <span className="font-mono">{sg.project}</span>
-              <span>·</span>
-              <span>{sg.attachedTo}개 인스턴스</span>
-            </div>
-          </SheetHeader>
-
-          <div className="mt-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">규칙 ({sg.rules.length})</div>
-              <Button size="sm" onClick={() => setAddOpen(true)}>
-                <Plus className="size-3.5" /> 규칙 추가
-              </Button>
-            </div>
-
-            <Card>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-16">방향</TableHead>
-                    <TableHead className="w-16">프로토콜</TableHead>
-                    <TableHead>포트</TableHead>
-                    <TableHead>Remote CIDR</TableHead>
-                    <TableHead>설명</TableHead>
-                    <TableHead className="w-8" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sg.rules.map((r) => (
-                    <TableRow key={r.id}>
-                      <TableCell>
-                        <Badge variant={r.direction === "ingress" ? "success" : "warning"} className="text-[10px]">
-                          {r.direction === "ingress" ? "IN" : "OUT"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{r.proto}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.portRange}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.cidr}</TableCell>
-                      <TableCell className="text-xs">{r.desc}</TableCell>
-                      <TableCell>
-                        <Button variant="ghost" size="icon-sm" onClick={() => removeRule(r.id)}>
-                          <Trash2 className="size-3.5 text-rose-600" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Card>
-          </div>
-
-          <div className="mt-5 flex items-center gap-2 border-t border-border pt-4">
-            <Button variant="outline" size="sm" onClick={() => toast.success(`${sg.name} 이름·설명 편집`)}>
-              <Edit className="size-3.5" /> 정보 편집
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => toast.success(`${sg.name} YAML 내보내기`)}>
-              <Download className="size-3.5" /> YAML
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              className="ml-auto"
-              onClick={() => {
-                if (sg.attachedTo > 0) {
-                  toast.error(`삭제 거부 — ${sg.attachedTo}개 인스턴스에 적용 중`);
-                  return;
-                }
-                toast.success(`${sg.name} 삭제됨`);
-                onClose();
-              }}
-            >
-              <Trash2 className="size-3.5" /> 삭제
-            </Button>
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      <AddRuleDialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        onAdd={(rule) => {
-          onUpdate({ ...sg, rules: [...sg.rules, { ...rule, id: `r-${Date.now()}` }] });
-          toast.success("규칙 추가됨");
-        }}
-      />
-    </>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// 규칙 추가 다이얼로그
-// ─────────────────────────────────────────────────────────────
-function AddRuleDialog({
-  open, onClose, onAdd,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onAdd: (r: Omit<SGRule, "id">) => void;
-}) {
-  const [direction, setDirection] = React.useState<Direction>("ingress");
-  const [proto, setProto] = React.useState<Proto>("TCP");
-  const [portRange, setPortRange] = React.useState("22");
-  const [cidr, setCidr] = React.useState("0.0.0.0/0");
-  const [desc, setDesc] = React.useState("");
-
-  const submit = () => {
-    onAdd({ direction, proto, portRange, cidr, desc });
-    setPortRange("22");
-    setCidr("0.0.0.0/0");
-    setDesc("");
-    onClose();
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>규칙 추가</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>방향</Label>
-              <Select value={direction} onValueChange={(v) => setDirection(v as Direction)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ingress">Ingress (인바운드)</SelectItem>
-                  <SelectItem value="egress">Egress (아웃바운드)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>프로토콜</Label>
-              <Select value={proto} onValueChange={(v) => setProto(v as Proto)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {["TCP", "UDP", "ICMP", "ALL"].map((p) => (
-                    <SelectItem key={p} value={p}>{p}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div>
-            <Label>포트 범위 (예: 22, 8000-8080, - )</Label>
-            <Input value={portRange} onChange={(e) => setPortRange(e.target.value)} />
-          </div>
-          <div>
-            <Label>Remote CIDR</Label>
-            <Input value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="0.0.0.0/0" />
-          </div>
-          <div>
-            <Label>설명</Label>
-            <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="이 규칙의 용도" />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button onClick={submit}>추가</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// 보안 그룹 생성 다이얼로그
-// ─────────────────────────────────────────────────────────────
-function CreateSGDialog({
-  open, onClose, onCreate,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreate: (sg: SecurityGroup) => void;
-}) {
+function CreateSgDialog({ open, onClose, projects }: { open: boolean; onClose: () => void; projects: Tenant[] }) {
+  const [projectId, setProjectId] = React.useState("");
   const [name, setName] = React.useState("");
-  const [project, setProject] = React.useState("proj-ai-research");
+  const [desc, setDesc] = React.useState("");
+  const create = useCreateSecurityGroup();
+  React.useEffect(() => { if (open) { setProjectId(""); setName(""); setDesc(""); } }, [open]);
 
-  const submit = () => {
-    if (!name.trim()) return;
-    onCreate({
-      id: `sg-${Date.now()}`,
-      name: name.trim(),
-      project,
-      rules: [
-        { id: "r-default", direction: "egress", proto: "ALL", portRange: "-", cidr: "0.0.0.0/0", desc: "기본 아웃바운드 허용" },
-      ],
-      attachedTo: 0,
-      createdAt: new Date().toISOString().slice(0, 10),
-    });
-    setName("");
-    onClose();
-  };
+  function submit() {
+    if (!projectId) return toast.error("프로젝트를 선택하세요");
+    if (!name.trim()) return toast.error("이름을 입력하세요");
+    create.mutate(
+      { name: name.trim(), projectId, description: desc },
+      {
+        onSuccess: (sg) => { toast.success(`보안 그룹 ${sg.name} 생성됨`); onClose(); },
+        onError: (e) => toast.error("생성 실패", { description: String((e as Error).message) }),
+      },
+    );
+  }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md">
+    <Dialog open={open} onOpenChange={(o) => !o && !create.isPending && onClose()}>
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>보안 그룹 생성</DialogTitle>
+          <DialogDescription>OpenStack Neutron 보안 그룹을 생성합니다. (규칙은 생성 후 편집)</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          <div>
-            <Label>이름</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-security-group" />
-          </div>
-          <div>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
             <Label>프로젝트</Label>
-            <Select value={project} onValueChange={setProject}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+            <Select value={projectId} onValueChange={setProjectId}>
+              <SelectTrigger><SelectValue placeholder="프로젝트 선택" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="proj-ai-research">proj-ai-research</SelectItem>
-                <SelectItem value="proj-llm-serving">proj-llm-serving</SelectItem>
-                <SelectItem value="proj-edge-inference">proj-edge-inference</SelectItem>
-                <SelectItem value="proj-platform-ops">proj-platform-ops</SelectItem>
+                {projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
-          <p className="text-xs text-muted-foreground">
-            생성 후 상세 화면에서 규칙(Ingress/Egress)을 추가할 수 있다.
-          </p>
+          <div className="space-y-1.5">
+            <Label>이름</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="web-tier" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>설명 (선택)</Label>
+            <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="용도 설명" />
+          </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button onClick={submit}>생성</Button>
+          <Button variant="outline" onClick={onClose} disabled={create.isPending}>취소</Button>
+          <Button onClick={submit} disabled={create.isPending}>{create.isPending ? "생성 중…" : "생성"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

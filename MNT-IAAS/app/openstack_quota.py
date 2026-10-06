@@ -58,3 +58,30 @@ def get_project_quota(pid: str) -> dict:
         "diskGb": {"quota": disk_q, "used": disk_u},
         "volumes": {"quota": vol_q, "used": vol_u},
     }
+
+
+def set_project_quota(pid: str, *, vcpu: int, ram_gb: int, disk_gb: int) -> None:
+    """프로젝트 Nova/Cinder 쿼터 설정(관리자). 가속기는 OpenStack에 쿼터 없음 → 미설정."""
+    conn = get_conn()
+    nova_body = {"quota_set": {"cores": vcpu, "ram": ram_gb * 1024}}
+    cinder_body = {"quota_set": {"gigabytes": disk_gb}}
+    try:
+        admin_pid = conn.session.get_project_id()
+        if settings.os_endpoint_mode == "catalog":
+            conn.session.put(
+                f"/os-quota-sets/{pid}", json=nova_body,
+                endpoint_filter={"service_type": "compute", "interface": settings.os_interface}, timeout=15,
+            ).raise_for_status()
+            conn.session.put(
+                f"/os-quota-sets/{pid}", json=cinder_body,
+                endpoint_filter={"service_type": "block-storage", "interface": settings.os_interface}, timeout=15,
+            ).raise_for_status()
+        else:  # override
+            nova_base = settings.os_endpoint_template.format(service="nova")
+            cinder_base = settings.os_endpoint_template.format(service="cinder")
+            conn.session.put(f"{nova_base}/v2.1/os-quota-sets/{pid}", json=nova_body, timeout=15).raise_for_status()
+            conn.session.put(
+                f"{cinder_base}/v3/{admin_pid}/os-quota-sets/{pid}", json=cinder_body, timeout=15
+            ).raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"쿼터 설정 실패(pid={pid}): {type(e).__name__}: {e}")

@@ -12,7 +12,7 @@ import {
   ChevronRight,
   Loader2,
 } from "lucide-react";
-import { useProjects, useProject } from "@/lib/iaas-api";
+import { useProjects, useProject, useCreateProject, useUpdateProject, useDeleteProject } from "@/lib/iaas-api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -115,14 +115,14 @@ export default function ProjectsPage() {
                 className="cursor-pointer"
                 onClick={() => setSelected(t)}
               >
-                <TableCell>
+                <TableCell className="max-w-[360px]">
                   <div className="flex items-center gap-2.5">
-                    <div className="flex size-8 items-center justify-center rounded-md bg-brand-indigo-100 text-brand-indigo-700">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-brand-indigo-100 text-brand-indigo-700">
                       <FolderKanban className="size-4" />
                     </div>
-                    <div>
-                      <div className="font-mono text-sm font-semibold">{t.name}</div>
-                      <div className="text-xs text-muted-foreground line-clamp-1">{t.description || "—"}</div>
+                    <div className="min-w-0">
+                      <div className="truncate font-mono text-sm font-semibold">{t.name}</div>
+                      <div className="truncate text-xs text-muted-foreground">{t.description || "—"}</div>
                     </div>
                   </div>
                 </TableCell>
@@ -173,7 +173,13 @@ export default function ProjectsPage() {
       {/* 상세 — 가운데 모달. 쿼터는 여기서 on-demand 라이브 조회 */}
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
         <DialogContent className="max-w-3xl">
-          {selected && <ProjectDetailBody project={selected} isAdmin={isAdmin} />}
+          {selected && (
+            <ProjectDetailBody
+              project={selected}
+              isAdmin={isAdmin}
+              onClose={() => setSelected(undefined)}
+            />
+          )}
         </DialogContent>
       </Dialog>
 
@@ -182,27 +188,28 @@ export default function ProjectsPage() {
   );
 }
 
-function ProjectDetailBody({ project, isAdmin }: { project: Tenant; isAdmin: boolean }) {
+function ProjectDetailBody({ project, isAdmin, onClose }: { project: Tenant; isAdmin: boolean; onClose: () => void }) {
   // 선택된 프로젝트의 쿼터·사용량을 그때 조회 (목록에선 안 불러옴)
   const { data: detail, isLoading, isError } = useProject(project.id);
   const t = detail ?? project; // 로딩 중엔 목록 메타로 헤더 먼저 표시
+  const [editOpen, setEditOpen] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
 
   return (
     <>
-      <DialogHeader>
-        <div className="flex items-start gap-3 pr-8">
-          <div className="flex size-10 items-center justify-center rounded-lg bg-brand-indigo-100 text-brand-indigo-700">
+      <DialogHeader className="min-w-0">
+        <div className="flex items-center gap-3 pr-8">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-brand-indigo-100 text-brand-indigo-700">
             <FolderKanban className="size-5" />
           </div>
-          <div className="flex-1">
-            <DialogTitle className="font-mono text-lg">{t.name}</DialogTitle>
-            <DialogDescription>{t.description || "—"}</DialogDescription>
+          <div className="min-w-0 flex-1">
+            <DialogTitle className="truncate font-mono text-lg">{t.name}</DialogTitle>
+            <DialogDescription className="truncate">{t.description || "—"}</DialogDescription>
           </div>
-          <Badge variant="outline" className="shrink-0 font-mono text-[10px]">{t.orgId || "—"}</Badge>
         </div>
       </DialogHeader>
 
-      <div className="max-h-[70vh] overflow-y-auto">
+      <div className="max-h-[70vh] min-w-0 overflow-y-auto">
         <Tabs defaultValue="overview">
           <TabsList>
             <TabsTrigger value="overview">개요</TabsTrigger>
@@ -211,12 +218,24 @@ function ProjectDetailBody({ project, isAdmin }: { project: Tenant; isAdmin: boo
           </TabsList>
 
           <TabsContent value="overview" className="space-y-2 pt-3">
-            <Card className="space-y-2 p-4 text-xs">
+            <Card className="space-y-2.5 p-4 text-xs">
               <KV label="프로젝트 ID" value={t.id} mono />
               <KV label="이름" value={t.name} mono />
               <KV label="조직(도메인)" value={t.orgId || "—"} mono />
-              <KV label="상태" value={t.enabled === false ? "비활성" : "활성"} />
-              <KV label="설명" value={t.description || "—"} />
+              <KV
+                label="상태"
+                value={
+                  <Badge variant={t.enabled === false ? "outline" : "success"}>
+                    {t.enabled === false ? "비활성" : "활성"}
+                  </Badge>
+                }
+              />
+              <div className="space-y-1.5">
+                <span className="text-muted-foreground">설명</span>
+                <div className="h-24 min-w-0 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/30 p-2 leading-relaxed">
+                  {t.description || "—"}
+                </div>
+              </div>
             </Card>
           </TabsContent>
 
@@ -238,11 +257,6 @@ function ProjectDetailBody({ project, isAdmin }: { project: Tenant; isAdmin: boo
                 <p className="text-[11px] text-muted-foreground">
                   * 쿼터·사용량은 OpenStack(Nova·Cinder) 실시간 조회. AI 가속기는 Cyborg 연동 시 반영.
                 </p>
-                {isAdmin && (
-                  <Button variant="outline" size="sm" onClick={() => toast.success(`${t.name} 쿼터 변경 요청 — 승인 대기`)}>
-                    <Edit className="size-3.5" /> 쿼터 변경 요청
-                  </Button>
-                )}
               </>
             )}
           </TabsContent>
@@ -262,32 +276,203 @@ function ProjectDetailBody({ project, isAdmin }: { project: Tenant; isAdmin: boo
 
       {isAdmin && (
         <DialogFooter className="border-t border-border pt-4">
-          <Button variant="outline" size="sm" onClick={() => toast.success(`${t.name} 편집`)}><Edit className="size-3.5" /> 편집</Button>
-          <Button variant="destructive" size="sm" className="ml-auto" onClick={() => toast.error(`${t.name} 삭제 — 자원 정리 후 가능`)}><Trash2 className="size-3.5" /> 삭제</Button>
+          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}><Edit className="size-3.5" /> 편집</Button>
+          <Button variant="destructive" size="sm" className="ml-auto" onClick={() => setConfirmOpen(true)}><Trash2 className="size-3.5" /> 삭제</Button>
         </DialogFooter>
       )}
+
+      {isAdmin && (
+        <>
+          <EditProjectDialog project={t} open={editOpen} onClose={() => setEditOpen(false)} />
+          <DeleteProjectDialog
+            project={t}
+            open={confirmOpen}
+            onClose={() => setConfirmOpen(false)}
+            onDeleted={() => { setConfirmOpen(false); onClose(); }}
+          />
+        </>
+      )}
     </>
+  );
+}
+
+function EditProjectDialog({ project, open, onClose }: { project: Tenant; open: boolean; onClose: () => void }) {
+  const [name, setName] = React.useState(project.name);
+  const [desc, setDesc] = React.useState(project.description);
+  const [enabled, setEnabled] = React.useState(project.enabled !== false);
+  const [vcpu, setVcpu] = React.useState(String(project.quotaVcpu));
+  const [ram, setRam] = React.useState(String(project.quotaRamGb));
+  const [disk, setDisk] = React.useState(String(Math.round(project.quotaDiskTb * 1024)));
+  const update = useUpdateProject();
+
+  // 다른 프로젝트로 모달이 다시 열릴 때 폼을 현재 값으로 초기화
+  React.useEffect(() => {
+    if (open) {
+      setName(project.name);
+      setDesc(project.description);
+      setEnabled(project.enabled !== false);
+      setVcpu(String(project.quotaVcpu));
+      setRam(String(project.quotaRamGb));
+      setDisk(String(Math.round(project.quotaDiskTb * 1024)));
+    }
+  }, [open, project]);
+
+  function submit() {
+    if (!name.trim()) return toast.error("이름을 입력하세요");
+    update.mutate(
+      {
+        id: project.id,
+        name: name.trim(),
+        description: desc,
+        enabled,
+        quotaVcpu: Number(vcpu),
+        quotaRamGb: Number(ram),
+        quotaDiskGb: Number(disk),
+      },
+      {
+        onSuccess: () => { toast.success(`${name} 수정됨`); onClose(); },
+        onError: (e) => toast.error("수정 실패", { description: String((e as Error).message) }),
+      },
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !update.isPending && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="font-mono">프로젝트 편집</DialogTitle>
+          <DialogDescription>OpenStack Keystone 메타 + Nova/Cinder 쿼터 수정</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label>프로젝트 이름</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>설명</Label>
+            <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="프로젝트 용도 설명" />
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="size-4 cursor-pointer" />
+            활성 상태
+          </label>
+          <div className="rounded-md border border-border p-3">
+            <div className="mb-2 text-[10px] uppercase text-muted-foreground">쿼터</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>vCPU</Label>
+                <Input type="number" value={vcpu} onChange={(e) => setVcpu(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>RAM (GB)</Label>
+                <Input type="number" value={ram} onChange={(e) => setRam(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>디스크 (GB)</Label>
+                <Input type="number" value={disk} onChange={(e) => setDisk(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground">가속기</Label>
+                <Input type="number" value="-1" disabled title="가속기 쿼터는 포털에서 관리 예정 (OpenStack 미지원)" />
+                <p className="text-[10px] text-muted-foreground">포털 관리 예정 (OpenStack 쿼터 없음)</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={update.isPending}>취소</Button>
+          <Button onClick={submit} disabled={update.isPending}>
+            {update.isPending ? "저장 중…" : "저장"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteProjectDialog({
+  project, open, onClose, onDeleted,
+}: { project: Tenant; open: boolean; onClose: () => void; onDeleted: () => void }) {
+  const [confirm, setConfirm] = React.useState("");
+  const del = useDeleteProject();
+  React.useEffect(() => { if (open) setConfirm(""); }, [open]);
+
+  function submit() {
+    del.mutate(project.id, {
+      onSuccess: () => { toast.success(`프로젝트 ${project.name} 삭제됨`); onDeleted(); },
+      onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }),
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !del.isPending && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-rose-600">프로젝트 삭제</DialogTitle>
+          <DialogDescription>
+            이 작업은 되돌릴 수 없습니다. 프로젝트 안의 OpenStack 자원(가상서버·볼륨 등)은 사전에 정리되어 있어야 합니다.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-2 text-sm">
+          <p>
+            삭제하려면 프로젝트 이름 <strong className="font-mono">{project.name}</strong> 을(를) 입력하세요.
+          </p>
+          <Input value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder={project.name} />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={del.isPending}>취소</Button>
+          <Button
+            variant="destructive"
+            onClick={submit}
+            disabled={del.isPending || confirm !== project.name}
+          >
+            {del.isPending ? "삭제 중…" : "삭제"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
 function CreateProjectDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = React.useState("");
   const [desc, setDesc] = React.useState("");
-  const [vcpu, setVcpu] = React.useState("64");
-  const [ram, setRam] = React.useState("256");
-  const [acc, setAcc] = React.useState("2");
+  const [vcpu, setVcpu] = React.useState("8");
+  const [ram, setRam] = React.useState("32");
+  const [disk, setDisk] = React.useState("100");
+  const acc = "-1"; // 가속기 쿼터는 OpenStack 미지원 → 비활성(-1, 포털 DB 관리 예정)
+  const create = useCreateProject();
+
+  function reset() { setName(""); setDesc(""); setVcpu("8"); setRam("32"); setDisk("100"); }
+
   function submit() {
-    if (!name) return toast.error("이름을 입력하세요");
-    toast.success(`프로젝트 ${name} 생성됨`, { description: `vCPU ${vcpu} / RAM ${ram}GB / 가속기 ${acc}장` });
-    onClose();
-    setName(""); setDesc("");
+    if (!name.trim()) return toast.error("이름을 입력하세요");
+    create.mutate(
+      {
+        name: name.trim(),
+        description: desc,
+        quotaVcpu: Number(vcpu),
+        quotaRamGb: Number(ram),
+        quotaDiskGb: Number(disk),
+        quotaAcc: -1,
+      },
+      {
+        onSuccess: (t) => {
+          toast.success(`프로젝트 ${t.name} 생성됨`, { description: `vCPU ${vcpu} / RAM ${ram}GB / Disk ${disk}GB` });
+          reset();
+          onClose();
+        },
+        onError: (e) => toast.error("프로젝트 생성 실패", { description: String((e as Error).message) }),
+      },
+    );
   }
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => !o && !create.isPending && onClose()}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>프로젝트 생성</DialogTitle>
-          <DialogDescription>OpenStack Keystone Project + Kubeflow Profile 자동 생성</DialogDescription>
+          <DialogDescription>OpenStack Keystone Project 생성</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1.5">
@@ -300,7 +485,7 @@ function CreateProjectDialog({ open, onClose }: { open: boolean; onClose: () => 
           </div>
           <div className="rounded-md border border-border p-3">
             <div className="mb-2 text-[10px] uppercase text-muted-foreground">초기 쿼터</div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>vCPU</Label>
                 <Input type="number" value={vcpu} onChange={(e) => setVcpu(e.target.value)} />
@@ -310,15 +495,22 @@ function CreateProjectDialog({ open, onClose }: { open: boolean; onClose: () => 
                 <Input type="number" value={ram} onChange={(e) => setRam(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label>가속기</Label>
-                <Input type="number" value={acc} onChange={(e) => setAcc(e.target.value)} />
+                <Label>디스크 (GB)</Label>
+                <Input type="number" value={disk} onChange={(e) => setDisk(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground">가속기</Label>
+                <Input type="number" value={acc} disabled title="가속기 쿼터는 포털에서 관리 예정 (OpenStack 미지원)" />
+                <p className="text-[10px] text-muted-foreground">포털 관리 예정 (OpenStack 쿼터 없음)</p>
               </div>
             </div>
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button onClick={submit}>생성</Button>
+          <Button variant="outline" onClick={onClose} disabled={create.isPending}>취소</Button>
+          <Button onClick={submit} disabled={create.isPending}>
+            {create.isPending ? "생성 중…" : "생성"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -340,11 +532,11 @@ function QuotaRow({ label, used, max, unit }: { label: string; used: number; max
   );
 }
 
-function KV({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function KV({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
   return (
-    <div className="flex items-baseline justify-between gap-3">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={mono ? "font-mono text-right" : "text-right"}>{value}</span>
+    <div className="flex items-start justify-between gap-3">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className={mono ? "min-w-0 break-all text-right font-mono" : "min-w-0 break-words text-right"}>{value}</span>
     </div>
   );
 }

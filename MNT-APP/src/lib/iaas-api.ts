@@ -9,8 +9,8 @@
  *
  * 실패 시 MSW 목업(/api/iaas/*)으로 폴백 — 백엔드 없이도 목업 동작 유지.
  */
-import { useQuery } from "@tanstack/react-query";
-import type { Tenant } from "@/lib/types";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { IaasNetwork, Tenant } from "@/lib/types";
 
 const RAW = process.env.NEXT_PUBLIC_IAAS_API;
 export const IAAS_BASE = RAW === undefined ? "http://localhost:8001" : RAW;
@@ -19,6 +19,74 @@ async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return (await res.json()) as T;
+}
+
+async function sendJson<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try { const j = await res.json(); if (j.detail) msg = j.detail; } catch {}
+    throw new Error(msg);
+  }
+  if (res.status === 204) return undefined as T; // No Content (삭제)
+  return (await res.json()) as T;
+}
+
+const postJson = <T>(url: string, body: unknown) => sendJson<T>("POST", url, body);
+
+export interface CreateProjectInput {
+  name: string;
+  description?: string;
+  quotaVcpu?: number;
+  quotaRamGb?: number;
+  quotaDiskGb?: number;
+  quotaAcc?: number; // 비활성(-1) — OpenStack 미지원, 포털 DB 관리 예정
+}
+
+/** 프로젝트 생성 — MNT-IAAS가 Keystone 생성 + Nova/Cinder 쿼터 설정. */
+export function useCreateProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateProjectInput) =>
+      postJson<Tenant>(`${IAAS_BASE}/api/iaas/projects`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-projects"] }),
+  });
+}
+
+export interface UpdateProjectInput {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  quotaVcpu?: number;
+  quotaRamGb?: number;
+  quotaDiskGb?: number;
+}
+
+/** 프로젝트 수정 — Keystone 메타(이름·설명·활성) + Nova/Cinder 쿼터. */
+export function useUpdateProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...input }: UpdateProjectInput & { id: string }) =>
+      sendJson<Tenant>("PATCH", `${IAAS_BASE}/api/iaas/projects/${id}`, input),
+    onSuccess: (_d, { id }) => {
+      qc.invalidateQueries({ queryKey: ["iaas-projects"] });
+      qc.invalidateQueries({ queryKey: ["iaas-project", id] });
+    },
+  });
+}
+
+/** 프로젝트 삭제 — Keystone 프로젝트 삭제(자원 사전 정리 전제). */
+export function useDeleteProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/projects/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-projects"] }),
+  });
 }
 
 /** 프로젝트 목록(경량, 쿼터 미포함) — MNT-IAAS 우선, 실패 시 MSW 목업 폴백.
@@ -55,4 +123,315 @@ export function useProject(projectId: string | undefined) {
 /** 남은 쿼터 = 한도 - 사용량 (음수 방지). 신청 화면에서 "남은 양" 표시 공통 유틸. */
 export function remaining(quota: number, used: number): number {
   return Math.max(0, (quota ?? 0) - (used ?? 0));
+}
+
+// ────── 네트워크(Neutron, 읽기 전용) ──────
+export interface NetworkDetail {
+  id: string;
+  name: string;
+  tenantId: string;
+  type: "tenant" | "external" | "shared";
+  vlan: number | null;
+  status: string;
+  subnets: { id: string; name: string; cidr: string; gateway: string; dhcp: boolean; dns: string[]; allocationPool: string }[];
+  ports: { id: string; name: string; status: string; mac: string; ip: string; deviceOwner: string; vm: string | null }[];
+  securityGroups: { id: string; name: string; rules: number; desc: string }[];
+  routers: { id: string; name: string; status: string; gatewayIp: string; routes: number; ha: boolean }[];
+  floatingIps: { id: string; ip: string; portId: string | null; mappedTo: string; status: string }[];
+  quotas: {
+    ports: { used: number; max: number };
+    floatingIps: { used: number; max: number };
+    subnets: { used: number; max: number };
+  };
+}
+
+/** 네트워크 목록(요약) — MNT-IAAS(Neutron) 우선, 실패 시 MSW 목업 폴백. */
+export function useNetworks() {
+  return useQuery({
+    queryKey: ["iaas-networks"],
+    queryFn: async (): Promise<{ items: IaasNetwork[]; live: boolean }> => {
+      try {
+        const d = await fetchJson<{ items: IaasNetwork[] }>(`${IAAS_BASE}/api/iaas/networks`);
+        return { items: d.items, live: true };
+      } catch {
+        const d = await fetchJson<{ items: IaasNetwork[] }>(`/api/iaas/networks`);
+        return { items: d.items, live: false };
+      }
+    },
+    staleTime: 30 * 1000,
+    retry: 0,
+  });
+}
+
+export interface CreateNetworkInput {
+  name: string;
+  projectId: string;
+  cidr: string;
+  subnetName?: string;
+  gatewayIp?: string;
+  enableDhcp?: boolean;
+  dnsNameservers?: string[];
+  shared?: boolean;
+}
+
+/** 네트워크+서브넷 생성 — MNT-IAAS(Neutron). 성공 시 목록 갱신. */
+export function useCreateNetwork() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateNetworkInput) =>
+      postJson<NetworkDetail>(`${IAAS_BASE}/api/iaas/networks`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-networks"] }),
+  });
+}
+
+/** 단일 네트워크 상세(+서브넷·포트·SG·라우터·FIP·쿼터) — 상세 패널 열 때 on-demand. */
+export function useNetwork(networkId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-network", networkId],
+    enabled: !!networkId,
+    queryFn: async (): Promise<NetworkDetail> =>
+      fetchJson<NetworkDetail>(`${IAAS_BASE}/api/iaas/networks/${networkId}`),
+    staleTime: 30 * 1000,
+    retry: 0,
+  });
+}
+
+// ────── Floating IP (확보/연결/해제/반납) ──────
+export interface FipTarget { portId: string; ip: string; networkName: string; vm: string | null }
+
+/** 공인 IP 연결 대상(프로젝트 compute 포트) 조회. */
+export function useFipTargets(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-fip-targets", projectId],
+    enabled: !!projectId,
+    queryFn: async (): Promise<FipTarget[]> =>
+      (await fetchJson<{ items: FipTarget[] }>(`${IAAS_BASE}/api/iaas/projects/${projectId}/fip-targets`)).items,
+    staleTime: 15 * 1000,
+    retry: 0,
+  });
+}
+
+/** FIP 변경 후 네트워크 상세·목록 캐시 무효화 공통 훅 팩토리. */
+function useFipMutation<V>(fn: (v: V) => Promise<unknown>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-network"] });
+      qc.invalidateQueries({ queryKey: ["iaas-networks"] });
+    },
+  });
+}
+
+/** 공인 IP 확보(allocate). */
+export function useAllocateFip() {
+  return useFipMutation((projectId: string) =>
+    sendJson("POST", `${IAAS_BASE}/api/iaas/floatingips`, { projectId }));
+}
+
+/** 공인 IP 반납(release). */
+export function useReleaseFip() {
+  return useFipMutation((fipId: string) =>
+    sendJson("DELETE", `${IAAS_BASE}/api/iaas/floatingips/${fipId}`));
+}
+
+/** 공인 IP 연결/해제 — portId 지정=연결, null=해제. */
+export function useUpdateFip() {
+  return useFipMutation(({ fipId, portId }: { fipId: string; portId: string | null }) =>
+    sendJson("PUT", `${IAAS_BASE}/api/iaas/floatingips/${fipId}`, { portId }));
+}
+
+// ────── 서브넷 추가 / 네트워크 삭제 ──────
+export interface AddSubnetInput {
+  name?: string;
+  cidr: string;
+  gatewayIp?: string;
+  enableDhcp?: boolean;
+  dnsNameservers?: string[];
+}
+
+/** 기존 네트워크에 서브넷 추가. */
+export function useAddSubnet(networkId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AddSubnetInput) =>
+      postJson<NetworkDetail>(`${IAAS_BASE}/api/iaas/networks/${networkId}/subnets`, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-network", networkId] });
+      qc.invalidateQueries({ queryKey: ["iaas-networks"] });
+    },
+  });
+}
+
+/** 네트워크 삭제. */
+export function useDeleteNetwork() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/networks/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-networks"] }),
+  });
+}
+
+// ────── 보안 그룹 규칙 편집 ──────
+export interface SgRule {
+  id: string;
+  direction: string;
+  ethertype: string;
+  protocol: string | null;
+  portMin: number | null;
+  portMax: number | null;
+  remoteCidr: string | null;
+  remoteGroup: string | null;
+}
+export interface SecurityGroupDetail { id: string; name: string; desc: string; rules: SgRule[] }
+export interface AddSgRuleInput {
+  direction: string;
+  ethertype?: string;
+  protocol?: string | null;
+  portMin?: number | null;
+  portMax?: number | null;
+  remoteCidr?: string | null;
+}
+
+/** 보안 그룹 + 규칙 상세. */
+export function useSecurityGroup(sgId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-sg", sgId],
+    enabled: !!sgId,
+    queryFn: async (): Promise<SecurityGroupDetail> =>
+      fetchJson<SecurityGroupDetail>(`${IAAS_BASE}/api/iaas/security-groups/${sgId}`),
+    staleTime: 15 * 1000,
+    retry: 0,
+  });
+}
+
+/** 보안 그룹 규칙 추가. */
+export function useAddSgRule(sgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AddSgRuleInput) =>
+      postJson<SecurityGroupDetail>(`${IAAS_BASE}/api/iaas/security-groups/${sgId}/rules`, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-sg", sgId] });
+      qc.invalidateQueries({ queryKey: ["iaas-network"] });
+    },
+  });
+}
+
+/** 보안 그룹 규칙 삭제. */
+export function useDeleteSgRule(sgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ruleId: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/security-group-rules/${ruleId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-sg", sgId] });
+      qc.invalidateQueries({ queryKey: ["iaas-network"] });
+    },
+  });
+}
+
+// ────── 보안 그룹 목록/생성/삭제 ──────
+export interface SgSummary { id: string; name: string; tenantId: string; desc: string; rules: number }
+
+export function useSecurityGroups() {
+  return useQuery({
+    queryKey: ["iaas-sgs"],
+    queryFn: async (): Promise<SgSummary[]> =>
+      (await fetchJson<{ items: SgSummary[] }>(`${IAAS_BASE}/api/iaas/security-groups`)).items,
+    staleTime: 30 * 1000,
+    retry: 0,
+  });
+}
+
+export function useCreateSecurityGroup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; projectId: string; description?: string }) =>
+      postJson<SecurityGroupDetail>(`${IAAS_BASE}/api/iaas/security-groups`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-sgs"] }),
+  });
+}
+
+export function useDeleteSecurityGroup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/security-groups/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-sgs"] }),
+  });
+}
+
+// ────── 라우터 (L3) ──────
+export interface RouterSummary {
+  id: string; name: string; tenantId: string; status: string; adminStateUp: boolean;
+  externalNetwork: string; externalIp: string; interfaces: number; ha: boolean; routes: number;
+}
+export interface RouterInterface { portId: string; subnetId: string; subnetName: string; cidr: string; ip: string }
+export interface RouterDetail {
+  id: string; name: string; tenantId: string; status: string; adminStateUp: boolean;
+  externalNetwork: string; externalIp: string; ha: boolean;
+  interfaces: RouterInterface[];
+  routes: { destination: string; nexthop: string }[];
+}
+export interface ProjectSubnet { id: string; name: string; cidr: string; networkName: string }
+
+export function useRouters() {
+  return useQuery({
+    queryKey: ["iaas-routers"],
+    queryFn: async (): Promise<RouterSummary[]> =>
+      (await fetchJson<{ items: RouterSummary[] }>(`${IAAS_BASE}/api/iaas/routers`)).items,
+    staleTime: 30 * 1000,
+    retry: 0,
+  });
+}
+
+export function useRouter(routerId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-router", routerId],
+    enabled: !!routerId,
+    queryFn: async (): Promise<RouterDetail> =>
+      fetchJson<RouterDetail>(`${IAAS_BASE}/api/iaas/routers/${routerId}`),
+    staleTime: 15 * 1000,
+    retry: 0,
+  });
+}
+
+export function useProjectSubnets(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-project-subnets", projectId],
+    enabled: !!projectId,
+    queryFn: async (): Promise<ProjectSubnet[]> =>
+      (await fetchJson<{ items: ProjectSubnet[] }>(`${IAAS_BASE}/api/iaas/projects/${projectId}/subnets`)).items,
+    staleTime: 15 * 1000,
+    retry: 0,
+  });
+}
+
+export function useCreateRouter() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; projectId: string; externalNetworkId?: string }) =>
+      postJson<RouterDetail>(`${IAAS_BASE}/api/iaas/routers`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-routers"] }),
+  });
+}
+
+export function useDeleteRouter() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/routers/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-routers"] }),
+  });
+}
+
+/** 라우터 인터페이스 연결/해제 — add=true 연결, false 해제. */
+export function useRouterInterface(routerId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ subnetId, add }: { subnetId: string; add: boolean }) =>
+      sendJson<RouterDetail>("PUT", `${IAAS_BASE}/api/iaas/routers/${routerId}/${add ? "add" : "remove"}-interface`, { subnetId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-router", routerId] });
+      qc.invalidateQueries({ queryKey: ["iaas-routers"] });
+    },
+  });
 }
