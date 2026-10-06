@@ -1,87 +1,96 @@
 "use client";
 import * as React from "react";
-import { Plus, Copy, Edit, Trash2, MoreVertical } from "lucide-react";
+import { Cpu, Plus, Search, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { toast } from "sonner";
+  useFlavors, useDeviceProfiles, useCreateFlavor, useDeleteFlavor, type FlavorSummary,
+} from "@/lib/iaas-api";
 
-// Nova 플레이버(VM 사양 규격). 생성·편집은 관리자 권한.
-const FLAVORS = [
-  { name: "m1.tiny", vcpu: 1, ramMb: 512, diskGb: 5, isPublic: true, vms: 0 },
-  { name: "m1.small", vcpu: 1, ramMb: 2048, diskGb: 20, isPublic: true, vms: 4 },
-  { name: "m1.medium", vcpu: 2, ramMb: 4096, diskGb: 40, isPublic: true, vms: 8 },
-  { name: "m1.large", vcpu: 4, ramMb: 8192, diskGb: 80, isPublic: true, vms: 12 },
-  { name: "m1.xlarge", vcpu: 8, ramMb: 16384, diskGb: 160, isPublic: true, vms: 6 },
-  { name: "g1.gpu", vcpu: 32, ramMb: 131072, diskGb: 1000, isPublic: true, vms: 3 },
-  { name: "g1.gpu-4x", vcpu: 64, ramMb: 262144, diskGb: 2000, isPublic: false, vms: 1 },
-  { name: "n1.npu-2", vcpu: 16, ramMb: 65536, diskGb: 500, isPublic: true, vms: 2 },
-];
-
+// 플레이버 — OpenStack Nova 실연동. 전역(admin) 자원이라 프로젝트 컬럼 없음. 가속기=Cyborg device-profile.
 export default function FlavorsPage() {
+  const { data, isLoading } = useFlavors();
+  const del = useDeleteFlavor();
+  const confirm = useConfirm();
+  const [q, setQ] = React.useState("");
   const [createOpen, setCreateOpen] = React.useState(false);
+
+  if (isLoading || !data) return <Skeleton className="h-96" />;
+  const items = data.filter((f) => !q || f.name.toLowerCase().includes(q.toLowerCase()));
+
+  async function remove(f: FlavorSummary) {
+    if (!(await confirm({ title: "플레이버 삭제", destructive: true, confirmLabel: "삭제", description: `${f.name} 을(를) 삭제할까요? 사용 중인 VM에는 영향 없지만 신규 생성에 못 씁니다.` }))) return;
+    del.mutate(f.id, {
+      onSuccess: () => toast.success(`플레이버 ${f.name} 삭제됨`),
+      onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }),
+    });
+  }
 
   return (
     <div className="space-y-4">
       <Card className="p-4">
-        <div className="mb-3 flex items-center gap-3">
-          <span className="text-xs text-muted-foreground">VM 사양 정의 (vCPU·RAM·Disk)</span>
-          <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-3.5" /> Flavor 생성
-          </Button>
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+            <Input placeholder="플레이버 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
+          </div>
+          <span className="text-xs text-muted-foreground">총 {items.length}개</span>
+          <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}><Plus className="size-3.5" /> 플레이버 생성</Button>
         </div>
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-          {FLAVORS.map((f) => (
-            <Card key={f.name} className="p-4 transition-colors hover:border-primary/40">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="font-mono font-semibold">{f.name}</div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground">
-                    {f.isPublic ? "public" : "private"} · 사용 중 {f.vms} VM
+      </Card>
+
+      <Card>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>플레이버</TableHead>
+              <TableHead className="text-center">vCPU</TableHead>
+              <TableHead className="text-center">RAM</TableHead>
+              <TableHead className="text-center">디스크</TableHead>
+              <TableHead>가속기</TableHead>
+              <TableHead>공개</TableHead>
+              <TableHead className="w-12" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((f) => (
+              <TableRow key={f.id}>
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    <Cpu className="size-3.5 text-brand-indigo-600" />
+                    <span className="font-mono text-sm font-semibold">{f.name}</span>
                   </div>
-                </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon-sm"><MoreVertical className="size-3.5" /></Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => toast.success(`${f.name} 편집`)}>
-                      <Edit className="size-3.5" /> 편집
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => toast.success(`${f.name} 복제됨`)}>
-                      <Copy className="size-3.5" /> 복제
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem className="text-rose-600" onClick={() => toast.error(`${f.name} 삭제 — VM 사용 중이라 거부됨`)}>
-                      <Trash2 className="size-3.5" /> 삭제
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-              <div className="mt-3 space-y-1 text-xs">
-                <Pair label="vCPU" value={`${f.vcpu}`} />
-                <Pair label="RAM" value={`${(f.ramMb / 1024).toFixed(0)} GB`} />
-                <Pair label="Disk" value={`${f.diskGb} GB`} />
-              </div>
-            </Card>
-          ))}
-        </div>
+                </TableCell>
+                <TableCell className="text-center font-mono tabular-nums">{f.vcpus}</TableCell>
+                <TableCell className="text-center font-mono tabular-nums">{(f.ramMb / 1024).toFixed(f.ramMb % 1024 ? 1 : 0)}GB</TableCell>
+                <TableCell className="text-center font-mono tabular-nums">{f.diskGb}GB</TableCell>
+                <TableCell>{f.accelerator ? <Badge variant="default" className="font-mono text-[10px]">{f.accelerator}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
+                <TableCell>{f.isPublic ? <Badge variant="success" className="text-[10px]">public</Badge> : <Badge variant="outline" className="text-[10px]">private</Badge>}</TableCell>
+                <TableCell>
+                  <Button variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending} onClick={() => remove(f)}>
+                    <Trash2 className="size-3.5 text-rose-600" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+            {items.length === 0 && (
+              <TableRow><TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">플레이버가 없습니다.</TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
       </Card>
 
       <CreateFlavorDialog open={createOpen} onClose={() => setCreateOpen(false)} />
@@ -90,57 +99,62 @@ export default function FlavorsPage() {
 }
 
 function CreateFlavorDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { data: dps } = useDeviceProfiles();
   const [name, setName] = React.useState("");
-  const [vcpu, setVcpu] = React.useState("4");
-  const [ramMb, setRamMb] = React.useState("8192");
-  const [diskGb, setDiskGb] = React.useState("80");
+  const [vcpus, setVcpus] = React.useState("2");
+  const [ramGb, setRamGb] = React.useState("4");
+  const [diskGb, setDiskGb] = React.useState("40");
+  const [accel, setAccel] = React.useState("none");
+  const create = useCreateFlavor();
+  React.useEffect(() => { if (open) { setName(""); setVcpus("2"); setRamGb("4"); setDiskGb("40"); setAccel("none"); } }, [open]);
+
   function submit() {
-    if (!name) return toast.error("이름을 입력하세요");
-    toast.success(`Flavor ${name} 생성됨`, { description: `${vcpu} vCPU · ${ramMb}MB RAM · ${diskGb}GB` });
-    onClose();
-    setName("");
+    if (!name.trim()) return toast.error("이름을 입력하세요");
+    const vc = Number(vcpus), rm = Number(ramGb), dk = Number(diskGb);
+    if (!vc || !rm) return toast.error("vCPU/RAM을 입력하세요");
+    create.mutate(
+      { name: name.trim(), vcpus: vc, ramMb: rm * 1024, diskGb: dk, deviceProfile: accel !== "none" ? accel : undefined },
+      {
+        onSuccess: (f) => { toast.success(`플레이버 ${f.name} 생성됨`, { description: f.accelerator ? `가속기 ${f.accelerator}` : undefined }); onClose(); },
+        onError: (e) => toast.error("플레이버 생성 실패", { description: String((e as Error).message) }),
+      },
+    );
   }
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => !o && !create.isPending && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Flavor 생성</DialogTitle>
-          <DialogDescription>VM 사양 템플릿을 정의합니다.</DialogDescription>
+          <DialogTitle>플레이버 생성</DialogTitle>
+          <DialogDescription>VM 사양 정의(Nova). 가속기는 Cyborg device-profile로 연결됩니다.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1.5">
             <Label>이름</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="m2.large" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="m1.large.custom" />
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1.5">
-              <Label>vCPU</Label>
-              <Input type="number" value={vcpu} onChange={(e) => setVcpu(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>RAM (MB)</Label>
-              <Input type="number" value={ramMb} onChange={(e) => setRamMb(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Disk (GB)</Label>
-              <Input type="number" value={diskGb} onChange={(e) => setDiskGb(e.target.value)} />
-            </div>
+            <div className="space-y-1.5"><Label>vCPU</Label><Input type="number" value={vcpus} onChange={(e) => setVcpus(e.target.value)} /></div>
+            <div className="space-y-1.5"><Label>RAM (GB)</Label><Input type="number" value={ramGb} onChange={(e) => setRamGb(e.target.value)} /></div>
+            <div className="space-y-1.5"><Label>디스크 (GB)</Label><Input type="number" value={diskGb} onChange={(e) => setDiskGb(e.target.value)} /></div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>가속기 (선택)</Label>
+            <Select value={accel} onValueChange={setAccel}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">없음 (일반)</SelectItem>
+                {(dps ?? []).map((d) => (<SelectItem key={d.name} value={d.name}>{d.name}</SelectItem>))}
+              </SelectContent>
+            </Select>
+            <p className="text-[10px] text-muted-foreground">가속기 선택 시 flavor extra_spec `accel:device_profile`로 연결됩니다.</p>
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button onClick={submit}>생성</Button>
+          <Button variant="outline" onClick={onClose} disabled={create.isPending}>취소</Button>
+          <Button onClick={submit} disabled={create.isPending}>{create.isPending ? "생성 중…" : "생성"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function Pair({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div>
-      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
-      <div className="font-mono">{value}</div>
-    </div>
   );
 }

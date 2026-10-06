@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .openstack_client import get_conn
-from .routers import projects
+from .routers import flavors, images, networks, projects, servers, volumes
 
 app = FastAPI(title="MNT-IAAS", version="0.1.0")
 
@@ -34,3 +34,8 @@ def healthz():
 
 
 app.include_router(projects.router, prefix=settings.api_prefix)
+app.include_router(networks.router, prefix=settings.api_prefix)
+app.include_router(volumes.router, prefix=settings.api_prefix)
+app.include_router(images.router, prefix=settings.api_prefix)
+app.include_router(flavors.router, prefix=settings.api_prefix)
+app.include_router(servers.router, prefix=settings.api_prefix)

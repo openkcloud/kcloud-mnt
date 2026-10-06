@@ -80,6 +80,20 @@ CREATE TABLE iam_user_role (
     PRIMARY KEY (user_id, role_id)
 );
 
+-- ── 사용자 SSH 공개키 (키페어) ────────────────────────────────────
+-- 사용자 self-service. 개인키(private)는 절대 저장하지 않는다(브라우저에서만 1회 다운로드).
+-- owner = 포털 사용자 식별자(현재 iam_user.username, Keycloak 도입 후 sub). 프로젝트가 아니라 "사용자" 스코프.
+CREATE TABLE iam_ssh_key (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    owner       VARCHAR(100) NOT NULL,            -- 포털 사용자(username/sub)
+    name        VARCHAR(100) NOT NULL,            -- 사용자가 붙인 키 이름
+    public_key  TEXT         NOT NULL,            -- OpenSSH authorized_keys 형식(ssh-rsa/ed25519 …)
+    fingerprint VARCHAR(120) NOT NULL,            -- SHA256:...
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    UNIQUE (owner, name)
+);
+COMMENT ON TABLE iam_ssh_key IS '사용자 SSH 공개키. 개인키 미저장(브라우저 전용). owner=iam_user.username→Keycloak sub';
+
 -- ── 메뉴 (계층형: 섹션 → 메뉴 → 서브메뉴) ────────────────────────
 -- 프론트 nav.ts 의 정적 정의를 DB 원장으로. 같은 path 라도 배치가 다르면
 -- 별도 행이다(예: /iaas/networks 는 사용자 IaaS 하위와 관리자 구성 섹션에 각각 존재).
