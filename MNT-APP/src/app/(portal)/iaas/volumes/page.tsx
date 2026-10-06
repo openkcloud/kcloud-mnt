@@ -48,6 +48,13 @@ export default function VolumesPage() {
     const ids = Array.from(new Set((data ?? []).map((v) => v.tenantId).filter(Boolean)));
     return ids.map((id) => ({ id, name: projName(id) })).sort((a, b) => a.name.localeCompare(b.name));
   }, [data, projName]);
+  // ?detail=<id> 딥링크 — VM 상세 등에서 특정 볼륨 상세를 바로 열 때
+  const autoOpened = React.useRef(false);
+  React.useEffect(() => {
+    if (autoOpened.current || !data) return;
+    const id = new URLSearchParams(window.location.search).get("detail");
+    if (id) { const v = data.find((x) => x.id === id); if (v) { setSelected(v); autoOpened.current = true; } }
+  }, [data]);
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const items = data.filter(

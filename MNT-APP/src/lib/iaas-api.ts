@@ -597,3 +597,103 @@ export function useDeleteFlavor() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-flavors"] }),
   });
 }
+
+// ────── 가상서버 (Nova, 운영: 조회·전원·삭제·볼륨 연결/분리) ──────
+export interface ServerAddress { network: string; ip: string; type: string | null }
+export interface ServerSummary {
+  id: string; name: string; tenantId: string; status: string; vmState: string; powerState: number;
+  flavorName: string; vcpus: number; ramMb: number; accelerator: string | null; host: string;
+  keyName: string | null; imageId: string | null; addresses: ServerAddress[]; volumeCount: number; createdAt: string;
+}
+export interface ServerInterface { portId: string; netId: string; state: string | null; ips: string[] }
+export interface ServerDetail extends ServerSummary {
+  attachedVolumes: { volumeId: string; device: string | null }[];
+  interfaces: ServerInterface[];
+  securityGroups: string[];
+}
+
+// 진행 중(전이) 상태면 폴링, 안정되면 중단
+const SERVER_SETTLED = new Set(["ACTIVE", "SHUTOFF", "ERROR", "PAUSED", "SUSPENDED"]);
+
+export function useServers() {
+  return useQuery({
+    queryKey: ["iaas-servers"],
+    queryFn: async (): Promise<ServerSummary[]> =>
+      (await fetchJson<{ items: ServerSummary[] }>(`${IAAS_BASE}/api/iaas/servers`)).items,
+    staleTime: 20 * 1000, retry: 0,
+    refetchInterval: (q) => ((q.state.data as ServerSummary[] | undefined)?.some((s) => !SERVER_SETTLED.has(s.status)) ? 4000 : false),
+  });
+}
+export function useServer(id: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-server", id],
+    enabled: !!id,
+    queryFn: async (): Promise<ServerDetail> => fetchJson<ServerDetail>(`${IAAS_BASE}/api/iaas/servers/${id}`),
+    staleTime: 10 * 1000, retry: 0,
+    refetchInterval: (q) => { const d = q.state.data as ServerDetail | undefined; return d && !SERVER_SETTLED.has(d.status) ? 4000 : false; },
+  });
+}
+
+export interface ServerDiagnostics {
+  state: string; uptime: number; numCpus: number; cpuTimeNs: number;
+  memoryMb: number; memoryUsedMb: number;
+  diskReadBytes: number; diskWriteBytes: number; nicRxBytes: number; nicTxBytes: number;
+}
+/** 하이퍼바이저 진단(현재 카운터) — active일 때만 3초 폴링. CPU%·속도는 컴포넌트가 델타로 계산. */
+export function useServerDiagnostics(id: string | undefined, active: boolean) {
+  return useQuery({
+    queryKey: ["iaas-server-diag", id],
+    enabled: !!id && active,
+    queryFn: async (): Promise<ServerDiagnostics> =>
+      fetchJson<ServerDiagnostics>(`${IAAS_BASE}/api/iaas/servers/${id}/diagnostics`),
+    refetchInterval: 3000, staleTime: 0, retry: 0,
+  });
+}
+
+function useServerMutation<V, R = unknown>(fn: (v: V) => Promise<R>) {
+  const qc = useQueryClient();
+  return useMutation<R, Error, V>({
+    mutationFn: fn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-servers"] });
+      qc.invalidateQueries({ queryKey: ["iaas-server"] });
+    },
+  });
+}
+
+/** 전원 제어 — action: start|stop|reboot. */
+export function usePowerAction() {
+  return useServerMutation(({ id, action, hard }: { id: string; action: "start" | "stop" | "reboot"; hard?: boolean }) =>
+    postJson(`${IAAS_BASE}/api/iaas/servers/${id}/power`, { action, hard: !!hard }));
+}
+export function useDeleteServer() {
+  return useServerMutation((id: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/servers/${id}`));
+}
+export function useAttachVolume() {
+  return useServerMutation(({ serverId, volumeId }: { serverId: string; volumeId: string }) =>
+    postJson<ServerDetail>(`${IAAS_BASE}/api/iaas/servers/${serverId}/volumes`, { volumeId }));
+}
+export function useDetachVolume() {
+  return useServerMutation(({ serverId, volumeId }: { serverId: string; volumeId: string }) =>
+    sendJson<ServerDetail>("DELETE", `${IAAS_BASE}/api/iaas/servers/${serverId}/volumes/${volumeId}`));
+}
+/** 네트워크 인터페이스(NIC) 연결 — 포털 네트워크 선택. */
+export function useAttachInterface() {
+  return useServerMutation(({ serverId, networkId }: { serverId: string; networkId: string }) =>
+    postJson<ServerDetail>(`${IAAS_BASE}/api/iaas/servers/${serverId}/interfaces`, { networkId }));
+}
+export function useDetachInterface() {
+  return useServerMutation(({ serverId, portId }: { serverId: string; portId: string }) =>
+    sendJson("DELETE", `${IAAS_BASE}/api/iaas/servers/${serverId}/interfaces/${portId}`));
+}
+/** 스펙(플레이버) 변경 — resize 시작 → VERIFY_RESIZE 후 confirm/revert. */
+export function useResizeServer() {
+  return useServerMutation(({ id, flavorId }: { id: string; flavorId: string }) =>
+    postJson(`${IAAS_BASE}/api/iaas/servers/${id}/resize`, { flavorId }));
+}
+export function useResizeConfirm() {
+  return useServerMutation((id: string) => postJson(`${IAAS_BASE}/api/iaas/servers/${id}/resize-confirm`, {}));
+}
+export function useResizeRevert() {
+  return useServerMutation((id: string) => postJson(`${IAAS_BASE}/api/iaas/servers/${id}/resize-revert`, {}));
+}

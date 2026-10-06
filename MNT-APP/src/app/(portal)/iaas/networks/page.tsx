@@ -235,6 +235,13 @@ function AdminNetworksView() {
     const ids = Array.from(new Set((data?.items ?? []).map((n) => n.tenantId).filter(Boolean)));
     return ids.map((id) => ({ id, name: projName(id) })).sort((a, b) => a.name.localeCompare(b.name));
   }, [data, projName]);
+  // ?detail=<id> 딥링크 — 다른 화면(VM 상세 등)에서 특정 네트워크 상세를 바로 열 때
+  const autoOpened = React.useRef(false);
+  React.useEffect(() => {
+    if (autoOpened.current || !data) return;
+    const id = new URLSearchParams(window.location.search).get("detail");
+    if (id) { const n = data.items.find((x) => x.id === id); if (n) { setSelected(n); autoOpened.current = true; } }
+  }, [data]);
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const items = data.items.filter(
     (n) =>
