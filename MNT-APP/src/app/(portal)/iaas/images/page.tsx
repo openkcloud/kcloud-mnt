@@ -1,277 +1,194 @@
 "use client";
 import * as React from "react";
-import {
-  Disc,
-  Cpu,
-  Search,
-  Download,
-  Upload,
-  Trash2,
-  Server,
-} from "lucide-react";
-import { api } from "@/lib/api";
-import { Card, CardContent } from "@/components/ui/card";
+import { Disc, Search, Trash2, Settings, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { toast } from "sonner";
-import type { Image } from "@/lib/types";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm";
+import { useImages, useSetImageVisibility, useDeleteImage, useProjects, type ImageSummary } from "@/lib/iaas-api";
 
+const VIS_VARIANT: Record<string, "success" | "secondary" | "warning" | "outline"> = {
+  public: "success", shared: "warning", private: "outline", community: "secondary",
+};
+
+// 이미지 — OpenStack Glance 실연동(라이브 조회, 포털 DB 캐시 없음). 관리자 전용.
 export default function ImagesPage() {
-  const { data, isLoading } = api.iaas.images() as {
-    data: { items: Image[] } | undefined;
-    isLoading: boolean;
-  };
-  const [selectedImage, setSelectedImage] = React.useState<Image | undefined>();
-  const [uploadOpen, setUploadOpen] = React.useState(false);
+  const { data, isLoading } = useImages();
+  const { data: projData } = useProjects();
+  const del = useDeleteImage();
+  const confirm = useConfirm();
   const [q, setQ] = React.useState("");
-  if (isLoading || !data) return <Skeleton className="h-96" />;
+  const [projFilter, setProjFilter] = React.useState("all");
+  const [selected, setSelected] = React.useState<ImageSummary | undefined>();
 
-  const filteredImages = data.items.filter((i) => !q || i.name.toLowerCase().includes(q.toLowerCase()));
+  const projName = React.useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const p of projData?.items ?? []) m[p.id] = p.name;
+    return (id: string) => m[id] || id.slice(0, 8) || "—";
+  }, [projData]);
+  const projOptions = React.useMemo(() => {
+    const ids = Array.from(new Set((data ?? []).map((i) => i.tenantId).filter(Boolean)));
+    return ids.map((id) => ({ id, name: projName(id) })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [data, projName]);
+
+  if (isLoading || !data) return <Skeleton className="h-96" />;
+  const items = data.filter(
+    (i) => (!q || i.name.toLowerCase().includes(q.toLowerCase())) && (projFilter === "all" || i.tenantId === projFilter),
+  );
+
+  async function remove(img: ImageSummary) {
+    if (img.protected) {
+      await confirm({ title: "삭제 불가", confirmLabel: "확인", description: "보호(protected) 이미지입니다. 보호 해제 후 삭제할 수 있습니다." });
+      return;
+    }
+    if (!(await confirm({ title: "이미지 삭제", destructive: true, confirmLabel: "삭제", description: `${img.name} 을(를) 삭제할까요? 되돌릴 수 없습니다.` }))) return;
+    del.mutate(img.id, {
+      onSuccess: () => toast.success(`이미지 ${img.name} 삭제됨`),
+      onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }),
+    });
+  }
 
   return (
     <div className="space-y-4">
-      <Card className="mb-4 p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input placeholder="이미지 이름·OS…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
-          </div>
-          <Select defaultValue="all">
-            <SelectTrigger className="w-32"><SelectValue placeholder="가시성" /></SelectTrigger>
+      <Card className="p-4">
+        <div className="flex items-center gap-3">
+          <Select value={projFilter} onValueChange={setProjFilter}>
+            <SelectTrigger className="w-48"><SelectValue placeholder="프로젝트 필터" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">전체</SelectItem>
-              <SelectItem value="public">Public</SelectItem>
-              <SelectItem value="shared">Shared</SelectItem>
-              <SelectItem value="private">Private</SelectItem>
+              <SelectItem value="all">전체 프로젝트</SelectItem>
+              {projOptions.map((p) => (<SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>))}
             </SelectContent>
           </Select>
-          <Button variant="outline" size="sm" className="ml-auto" onClick={() => toast.success("Glance 이미지 카탈로그 동기화 완료")}>
-            <Download className="size-3.5" /> 카탈로그 동기화
-          </Button>
-          <Button size="sm" onClick={() => setUploadOpen(true)}>
-            <Upload className="size-3.5" /> 이미지 업로드
-          </Button>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+            <Input placeholder="이미지 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
+          </div>
+          <span className="text-xs text-muted-foreground">총 {items.length}개</span>
         </div>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {filteredImages.map((img) => (
-          <button key={img.id} type="button" onClick={() => setSelectedImage(img)} className="text-left">
-            <Card className="group relative transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md">
-              <CardContent className="space-y-3 p-5">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex size-9 items-center justify-center rounded-md bg-brand-indigo-100 text-brand-indigo-700">
-                      <Disc className="size-4" />
-                    </div>
-                    <div>
-                      <div className="font-mono text-sm font-semibold group-hover:text-primary">{img.name}</div>
-                      <div className="text-xs text-muted-foreground">{img.os}</div>
-                    </div>
+      <Card>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>프로젝트</TableHead>
+              <TableHead>이미지</TableHead>
+              <TableHead>OS</TableHead>
+              <TableHead>포맷</TableHead>
+              <TableHead className="text-center">크기</TableHead>
+              <TableHead>가시성</TableHead>
+              <TableHead>상태</TableHead>
+              <TableHead className="w-24" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((i) => (
+              <TableRow key={i.id} className="cursor-pointer" onClick={() => setSelected(i)}>
+                <TableCell className="text-xs font-medium">{i.tenantId ? projName(i.tenantId) : "—"}</TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    <Disc className="size-3.5 text-brand-indigo-600" />
+                    <span className="max-w-[220px] truncate font-mono text-sm font-semibold">{i.name}</span>
                   </div>
-                  <Badge variant={img.visibility === "public" ? "success" : img.visibility === "shared" ? "default" : "outline"}>
-                    {img.visibility}
-                  </Badge>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <Pair label="아키텍처" value={img.arch} />
-                  <Pair label="포맷" value={img.format} />
-                  <Pair label="크기" value={`${(img.sizeMb / 1024).toFixed(2)} GB`} />
-                  <Pair label="배포일" value={img.createdAt} />
-                </div>
-                {img.hasAcceleratorRuntime && (
-                  <div className="flex items-center gap-1.5 rounded-md bg-brand-mint-50 px-2.5 py-1.5 text-xs text-brand-mint-700">
-                    <Cpu className="size-3.5" />
-                    AI 가속기 런타임 포함
+                </TableCell>
+                <TableCell className="text-xs">{i.os || "—"}</TableCell>
+                <TableCell className="font-mono text-xs">{i.diskFormat}</TableCell>
+                <TableCell className="text-center font-mono tabular-nums">{i.sizeGb}GB</TableCell>
+                <TableCell><Badge variant={VIS_VARIANT[i.visibility] ?? "secondary"} className="text-[10px]">{i.visibility}</Badge></TableCell>
+                <TableCell><Badge variant={i.status === "active" ? "success" : "secondary"} className="text-[10px]">{i.status}</Badge></TableCell>
+                <TableCell onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => setSelected(i)}><Settings className="size-3.5" /> 관리</Button>
+                    <Button variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending} onClick={() => remove(i)}>
+                      <Trash2 className="size-3.5 text-rose-600" />
+                    </Button>
                   </div>
-                )}
-                <div className="flex items-center gap-1 border-t border-border pt-2 text-[10px] text-muted-foreground">
-                  <span className="font-mono">{img.id}</span>
-                </div>
-              </CardContent>
-            </Card>
-          </button>
-        ))}
-      </div>
+                </TableCell>
+              </TableRow>
+            ))}
+            {items.length === 0 && (
+              <TableRow><TableCell colSpan={8} className="py-10 text-center text-sm text-muted-foreground">이미지가 없습니다.</TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </Card>
 
-      {/* Image Detail Sheet */}
-      <Sheet open={!!selectedImage} onOpenChange={(o) => !o && setSelectedImage(undefined)}>
-        <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
-          {selectedImage && <ImageDetailPanel image={selectedImage} />}
-        </SheetContent>
-      </Sheet>
-
-      <UploadImageDialog open={uploadOpen} onClose={() => setUploadOpen(false)} />
+      <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
+        <DialogContent className="max-w-xl">
+          {selected && <ImageDetailBody image={selected} projectLabel={projName(selected.tenantId)} />}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function ImageDetailPanel({ image }: { image: Image }) {
+function ImageDetailBody({ image, projectLabel }: { image: ImageSummary; projectLabel: string }) {
+  const setVis = useSetImageVisibility();
+  const [vis, setVis_] = React.useState(image.visibility);
+
+  function applyVis(v: string) {
+    setVis_(v);
+    setVis.mutate({ id: image.id, visibility: v }, {
+      onSuccess: () => toast.success(`가시성 → ${v}`),
+      onError: (e) => { setVis_(image.visibility); toast.error("가시성 변경 실패", { description: String((e as Error).message) }); },
+    });
+  }
+
   return (
     <>
-      <SheetHeader className="border-b border-border">
-        <div className="flex items-start gap-3">
-          <div className="flex size-10 items-center justify-center rounded-lg bg-brand-indigo-100 text-brand-indigo-700">
+      <DialogHeader>
+        <div className="flex items-center gap-3 pr-8">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-brand-indigo-100 text-brand-indigo-700">
             <Disc className="size-5" />
           </div>
-          <div className="flex-1">
-            <SheetTitle className="text-lg">{image.name}</SheetTitle>
-            <SheetDescription className="font-mono text-xs">{image.id} · Glance Image</SheetDescription>
+          <div className="min-w-0 flex-1">
+            <DialogTitle className="truncate font-mono text-lg">{image.name}</DialogTitle>
+            <DialogDescription className="truncate text-xs"><span className="font-mono">{image.id}</span> · 프로젝트 {projectLabel}</DialogDescription>
           </div>
-          <Badge variant={image.visibility === "public" ? "success" : image.visibility === "shared" ? "default" : "outline"}>
-            {image.visibility}
-          </Badge>
         </div>
-      </SheetHeader>
-      <div className="space-y-4 p-6">
-        <Card className="space-y-2 p-4 text-xs">
-          <KV label="OS" value={image.os} mono />
-          <KV label="아키텍처" value={image.arch} mono />
-          <KV label="포맷" value={image.format} mono />
-          <KV label="크기" value={`${image.sizeMb} MB (${(image.sizeMb / 1024).toFixed(2)} GB)`} mono />
-          <KV label="배포" value={image.createdAt} mono />
-          <KV label="가속기 런타임" value={image.hasAcceleratorRuntime ? "Yes (CUDA/RBLN/Furiosa SDK)" : "No"} mono />
-          <KV label="체크섬" value="a3f7d8e2c4b5..." mono />
-          <KV label="container_format" value="bare" mono />
-          <KV label="disk_format" value={image.format} mono />
-        </Card>
+      </DialogHeader>
 
-        {image.hasAcceleratorRuntime && (
-          <Card className="border-brand-mint-200 bg-brand-mint-50/40 p-3 text-xs">
-            <div className="mb-1 flex items-center gap-1 font-semibold">
-              <Cpu className="size-3.5 text-brand-mint-700" /> 포함된 SDK
-            </div>
-            <div className="space-y-0.5 font-mono">
-              {image.name.includes("cuda") && <div>NVIDIA CUDA 12.4 + cuDNN 9 + NCCL</div>}
-              {image.name.includes("rbln") && <div>Rebellions RBLN SDK 1.4.0 + Compiler</div>}
-              {image.name.includes("furiosa") && <div>Furiosa SDK 2.1.0 + npu-tools</div>}
-              {image.name.includes("vllm") && <div>vLLM 0.6.5 + Triton Inference Server</div>}
-              {image.name.includes("kubeflow") && <div>Code Server + Kubeflow Notebook</div>}
-            </div>
-          </Card>
-        )}
-
-        <div className="flex gap-2 border-t border-border pt-4">
-          <Button variant="outline" size="sm" onClick={() => toast.success(`${image.name}로 VM 생성 위저드`)}>
-            <Server className="size-3.5" /> 이 이미지로 VM 생성
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => toast.success(`${image.name} 다운로드 시작`)}>
-            <Download className="size-3.5" /> 다운로드
-          </Button>
-          <Button variant="destructive" size="sm" className="ml-auto" onClick={() => toast.error(`${image.name} 삭제 요청`)}>
-            <Trash2 className="size-3.5" /> 삭제
-          </Button>
+      <Card className="space-y-2.5 p-4 text-xs">
+        <KV label="OS" value={image.os || "—"} />
+        <KV label="디스크 포맷" value={image.diskFormat} mono />
+        <KV label="컨테이너 포맷" value={image.containerFormat || "—"} mono />
+        <KV label="크기" value={`${image.sizeGb} GB`} />
+        <KV label="최소 디스크/RAM" value={`${image.minDisk}GB / ${image.minRam}MB`} />
+        <KV label="상태" value={image.status} />
+        <KV label="보호(protected)" value={image.protected ? "예" : "아니오"} />
+        <div className="flex items-center justify-between gap-3">
+          <span className="shrink-0 text-muted-foreground">가시성</span>
+          <Select value={vis} onValueChange={applyVis}>
+            <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="public">public</SelectItem>
+              <SelectItem value="private">private</SelectItem>
+              <SelectItem value="shared">shared</SelectItem>
+              <SelectItem value="community">community</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
-      </div>
+        {setVis.isPending && <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><Loader2 className="size-3 animate-spin" /> 변경 중…</div>}
+      </Card>
     </>
-  );
-}
-
-function UploadImageDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [name, setName] = React.useState("");
-  const [format, setFormat] = React.useState("qcow2");
-  const [vis, setVis] = React.useState("private");
-  function submit() {
-    if (!name) return toast.error("이름을 입력하세요");
-    toast.success(`이미지 ${name} 업로드 시작 (Glance)`, { description: `${format} · ${vis} · 시간 소요 약 3분` });
-    onClose();
-    setName("");
-  }
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>이미지 업로드</DialogTitle>
-          <DialogDescription>로컬 또는 URL로부터 OpenStack Glance에 이미지 업로드</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          <div className="space-y-1.5">
-            <Label>이미지 이름</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ubuntu-24.04-cuda-12.4" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>포맷</Label>
-              <Select value={format} onValueChange={setFormat}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="qcow2">qcow2</SelectItem>
-                  <SelectItem value="raw">raw</SelectItem>
-                  <SelectItem value="iso">iso</SelectItem>
-                  <SelectItem value="vmdk">vmdk</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>가시성</Label>
-              <Select value={vis} onValueChange={setVis}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="private">Private</SelectItem>
-                  <SelectItem value="shared">Shared</SelectItem>
-                  <SelectItem value="public">Public</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>소스</Label>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" type="button" onClick={() => toast.success("파일 선택")}>
-                <Upload className="size-3.5" /> 파일 선택
-              </Button>
-              <Input placeholder="또는 https://... URL" />
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button onClick={submit}>업로드 시작</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function Pair({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div>
-      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
-      <div className="font-mono">{value}</div>
-    </div>
   );
 }
 
 function KV({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex items-baseline justify-between gap-3">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={mono ? "font-mono text-right" : "text-right"}>{value}</span>
+    <div className="flex items-start justify-between gap-3">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className={mono ? "min-w-0 break-all text-right font-mono" : "min-w-0 break-words text-right"}>{value}</span>
     </div>
   );
 }

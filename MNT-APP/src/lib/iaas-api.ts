@@ -527,3 +527,73 @@ export function useCreateSnapshot() {
 export function useDeleteSnapshot() {
   return useVolumeMutation((id: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/snapshots/${id}`));
 }
+
+// ────── 이미지 (Glance) ──────
+export interface ImageSummary {
+  id: string; name: string; tenantId: string; os: string; diskFormat: string; containerFormat: string;
+  sizeGb: number; visibility: string; status: string; protected: boolean; minDisk: number; minRam: number; createdAt: string;
+}
+
+export function useImages() {
+  return useQuery({
+    queryKey: ["iaas-images"],
+    queryFn: async (): Promise<ImageSummary[]> =>
+      (await fetchJson<{ items: ImageSummary[] }>(`${IAAS_BASE}/api/iaas/images`)).items,
+    staleTime: 60 * 1000, retry: 0,
+  });
+}
+export function useSetImageVisibility() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, visibility }: { id: string; visibility: string }) =>
+      sendJson<ImageSummary>("PATCH", `${IAAS_BASE}/api/iaas/images/${id}`, { visibility }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-images"] }),
+  });
+}
+export function useDeleteImage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/images/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-images"] }),
+  });
+}
+
+// ────── 플레이버 (Nova) — 전역 자원(프로젝트 없음) ──────
+export interface FlavorSummary {
+  id: string; name: string; vcpus: number; ramMb: number; diskGb: number; isPublic: boolean; accelerator: string | null;
+}
+export interface DeviceProfile { name: string; uuid: string }
+
+export function useFlavors() {
+  return useQuery({
+    queryKey: ["iaas-flavors"],
+    queryFn: async (): Promise<FlavorSummary[]> =>
+      (await fetchJson<{ items: FlavorSummary[] }>(`${IAAS_BASE}/api/iaas/flavors`)).items,
+    staleTime: 60 * 1000, retry: 0,
+  });
+}
+export function useDeviceProfiles() {
+  return useQuery({
+    queryKey: ["iaas-device-profiles"],
+    queryFn: async (): Promise<DeviceProfile[]> =>
+      (await fetchJson<{ items: DeviceProfile[] }>(`${IAAS_BASE}/api/iaas/device-profiles`)).items,
+    staleTime: 5 * 60 * 1000, retry: 0,
+  });
+}
+export interface CreateFlavorInput {
+  name: string; vcpus: number; ramMb: number; diskGb: number; isPublic?: boolean; deviceProfile?: string;
+}
+export function useCreateFlavor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateFlavorInput) => postJson<FlavorSummary>(`${IAAS_BASE}/api/iaas/flavors`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-flavors"] }),
+  });
+}
+export function useDeleteFlavor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/flavors/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-flavors"] }),
+  });
+}
