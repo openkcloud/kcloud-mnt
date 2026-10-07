@@ -141,12 +141,12 @@ export default function MonitoringOverviewPage() {
       </div>
 </ChangeMark>
       <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <QueryValue label="전력 효율" value={fmtN(ov?.power_efficiency_pct_per_watt, 2)} unit="%/W" delta={0} sparkData={sparkline(1, 24, 42, 6)} color="mint" connected={!!ov} />
-        <QueryValue label="저장소 사용률" value="62" unit="%" delta={0} sparkData={sparkline(2, 24, 60, 4)} color="indigo" connected={false} />
-        <QueryValue label="쓰로틀 장치" value={accel ? String(accel.throttled_count) : "—"} unit={accel ? `/ ${accel.accelerator_count}대` : "대"} delta={0} sparkData={sparkline(3, 24, 12, 8)} color="rose" connected={!!accel} />
-        <QueryValue label="가속기 사용률" value={fmtN(ov?.accelerator_utilization_percent, 0)} unit="%" delta={0} sparkData={sparkline(4, 24, 65, 15)} color="violet" connected={!!ov} />
-        <QueryValue label="서버 총 전력" value={ov?.total_power_watts != null ? (ov.total_power_watts / 1000).toFixed(2) : "—"} unit="kW" delta={0} sparkData={sparkline(5, 24, 9, 1.2)} color="amber" connected={!!ov} />
-        <QueryValue label="정상 노드" value={ov?.nodes_ready != null ? `${ov.nodes_ready} / ${ov.nodes_total}` : "—"} unit="" delta={0} sparkData={sparkline(6, 24, 6, 0)} color="sky" connected={!!ov} />
+        <QueryValue label="전력 효율" value={fmtN(ov?.power_efficiency_pct_per_watt, 2)} unit="%/W" delta={0} sparkData={sparkline(1, 24, 42, 6)} color="mint" connected={!!ov} api="/api/v2/monitoring/power/efficiency" />
+        <QueryValue label="저장소 사용률" value="62" unit="%" delta={0} sparkData={sparkline(2, 24, 60, 4)} color="indigo" connected={false} api="/api/v2/storage/ceph/capacity  (개발 중)" />
+        <QueryValue label="쓰로틀 장치" value={accel ? String(accel.throttled_count) : "—"} unit={accel ? `/ ${accel.accelerator_count}대` : "대"} delta={0} sparkData={sparkline(3, 24, 12, 8)} color="rose" connected={!!accel} api="/api/v2/clusters/{c}/nodes/{n}/accelerators (throttled)" />
+        <QueryValue label="가속기 사용률" value={fmtN(ov?.accelerator_utilization_percent, 0)} unit="%" delta={0} sparkData={sparkline(4, 24, 65, 15)} color="violet" connected={!!ov} api="/api/v2/clusters/{c}/resource (accelerators.avg_utilization_percent)" />
+        <QueryValue label="서버 총 전력" value={ov?.total_power_watts != null ? (ov.total_power_watts / 1000).toFixed(2) : "—"} unit="kW" delta={0} sparkData={sparkline(5, 24, 9, 1.2)} color="amber" connected={!!ov} api="/api/v2/clusters/{c}/resource (power.total_watts)" />
+        <QueryValue label="정상 노드" value={ov?.nodes_ready != null ? `${ov.nodes_ready} / ${ov.nodes_total}` : "—"} unit="" delta={0} sparkData={sparkline(6, 24, 6, 0)} color="sky" connected={!!ov} api="/api/v2/clusters/{c}/resource (nodes.ready/total)" />
       </div>
 
       {/* 가속기 3종 공통 지표 — 2차 워크샵 이노그리드 p.22~23 (CR-OBS-04) */}
@@ -163,7 +163,7 @@ export default function MonitoringOverviewPage() {
                     : "mgmt 관리도메인 하위 서비스클러스터의 가속기를 벤더별로 집계합니다."
                 }
               />
-              <StatusTag connected />
+              <StatusTag connected api="/api/v2/clusters/{c}/nodes/{n}/accelerators" />
             </span>
           </CardTitle>
           <CardDescription>공통 6종 + 파생 2종을 GPU·NPU 같은 지표 이름으로 조회한다.</CardDescription>
@@ -201,7 +201,7 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               호스트 맵
-              <StatusTag />
+              <StatusTag api="/api/v2/clusters/{c}/nodes" />
             </CardTitle>
             <CardDescription>노드별 가속기 사용률 — 색상 = 부하</CardDescription>
           </CardHeader>
@@ -225,7 +225,7 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               활용률 히트맵 (24h × 호스트)
-              <StatusTag />
+              <StatusTag api="/api/v2/monitoring/metrics/timeseries" />
             </CardTitle>
             <CardDescription>metric=gpu_utilization · period=24h · step=1h 응답을 호스트×시간으로 편다.</CardDescription>
           </CardHeader>
@@ -241,7 +241,7 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               상위 호스트 — 가속기 사용률
-              <StatusTag />
+              <StatusTag api="/api/v2/clusters/{c}/nodes?sort_by=utilization_percent" />
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -262,7 +262,7 @@ export default function MonitoringOverviewPage() {
               전력 시계열 — 계층별
               <span className="flex items-center gap-1.5">
                 <InfoHint text={"server(IPMI 실측) ⊃ cpu(Kepler 추정) + accelerator(벤더 exporter) + 기타.\n포함 관계라 합산하지 않고 독립 3라인으로 표시합니다.\n원천: /monitoring/power/timeseries (24h·1h·avg)"} />
-                <StatusTag connected={!!powerTs} />
+                <StatusTag connected={!!powerTs} api="/api/v2/monitoring/power/timeseries" />
               </span>
             </CardTitle>
             <CardDescription>server(IPMI 실측) · cpu(추정) · accelerator(벤더 exporter) 세 계층을 같은 축에 둔다. period·step·aggregation으로 구간을 바꾼다.</CardDescription>
@@ -298,7 +298,7 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               최근 오류 로그
-              <StatusTag />
+              <StatusTag api="/api/v2/logs/search (level=error)" />
             </CardTitle>
             <CardDescription>log_level=error 최신순. 자동 추출 필드(XID·OOM)는 배지로 표시.</CardDescription>
           </CardHeader>
@@ -326,7 +326,7 @@ export default function MonitoringOverviewPage() {
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-base">
             클러스터 자원 현황
-            <StatusTag />
+            <StatusTag api="/api/v2/clusters  ·  /api/v2/clusters/{c}/resource" />
           </CardTitle>
           <CardDescription>관리 클러스터 1개 + 서비스 클러스터 4개. 서비스 클러스터는 쿠버네티스·IPMI가 없어 CPU·서버 전력이 비어 있다.</CardDescription>
         </CardHeader>
@@ -388,7 +388,7 @@ function PowerBreakdownCard() {
           전력 분해
           <span className="flex items-center gap-1.5">
             <InfoHint text={"dimension(벤더·클러스터·노드·카드)으로 쪼개는 기준을 바꿉니다.\nlayer: server(IPMI) / cpu(추정) / accelerator(벤더).\n원천: /monitoring/power/breakdown"} />
-            <StatusTag connected={!!data} />
+            <StatusTag connected={!!data} api="/api/v2/monitoring/power/breakdown" />
           </span>
         </CardTitle>
         <CardDescription>dimension 파라미터로 쪼개는 기준을 바꾼다.</CardDescription>
@@ -422,20 +422,32 @@ function PowerBreakdownCard() {
 }
 
 // 카드 우측 상단 연동 상태 뱃지 (API 경로 표기 대체)
-function StatusTag({ connected }: { connected?: boolean }) {
-  return (
+function StatusTag({ connected, api }: { connected?: boolean; api?: string }) {
+  const badge = (
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium",
+        api && "cursor-help",
         connected
           ? "border-brand-mint-200 bg-brand-mint-50 text-brand-mint-700"
           : "border-border bg-muted text-muted-foreground",
       )}
-      title={connected ? "실 API 연동됨" : "목업 (연동 예정)"}
+      title={api ? undefined : connected ? "실 API 연동됨" : "목업 (연동 예정)"}
     >
       <span className={cn("size-1.5 rounded-full", connected ? "bg-brand-mint-500" : "bg-muted-foreground/40")} />
       {connected ? "연동" : "목업"}
     </span>
+  );
+  if (!api) return badge;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{badge}</TooltipTrigger>
+      <TooltipContent className="max-w-sm whitespace-pre-line text-[11px]">
+        <span className="text-muted-foreground">{connected ? "연동됨 · 데이터 원천" : "목업 · 연동 예정"}</span>
+        <br />
+        <span className="font-mono">{api}</span>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -461,6 +473,7 @@ function QueryValue({
   sparkData,
   color,
   connected,
+  api,
 }: {
   label: string;
   value: string;
@@ -469,6 +482,8 @@ function QueryValue({
   sparkData: { i: number; v: number }[];
   /** 실 API 연동 여부 */
   connected?: boolean;
+  /** 데이터 원천 API 경로 */
+  api?: string;
   color: "indigo" | "mint" | "rose" | "violet" | "amber" | "sky";
 }) {
   const colorMap = {
@@ -483,7 +498,7 @@ function QueryValue({
   return (
     <Card className="relative p-3">
       <span className="absolute right-2 top-2">
-        <StatusTag connected={connected} />
+        <StatusTag connected={connected} api={api} />
       </span>
       <div className="text-[11px] text-muted-foreground">{label}</div>
       <div className="mt-0.5 flex items-baseline gap-1">
