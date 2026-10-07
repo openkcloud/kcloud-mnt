@@ -1,0 +1,90 @@
+{{- $g := .Values.global -}}
+{{- $root := . -}}
+{{- range $name, $b := .Values.backends }}
+{{- if ne (toString $b.enabled) "false" }}
+{{- $full := printf "mnt-%s" $name }}
+{{- $port := default 8000 $b.port }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $full }}-config
+  namespace: {{ $g.namespace }}
+  labels:
+    app: {{ $full }}
+    {{- include "okc.labels" $root | nindent 4 }}
+data:
+{{- range $k, $v := $b.env }}
+  {{ $k }}: {{ $v | quote }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}
+  namespace: {{ $g.namespace }}
+  labels:
+    app: {{ $full }}
+    {{- include "okc.labels" $root | nindent 4 }}
+spec:
+  replicas: {{ default 1 $b.replicas }}
+  selector:
+    matchLabels:
+      app: {{ $full }}
+  template:
+    metadata:
+      labels:
+        app: {{ $full }}
+    spec:
+      {{- with $g.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $g.nodeSelectorWorkerOnly }}
+      {{- include "okc.workerAffinity" $root | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: {{ $full }}
+          image: {{ printf "%s/%s:%s" $g.image.registry $b.image (default $g.image.tag $b.tag) }}
+          imagePullPolicy: {{ $g.image.pullPolicy }}
+          ports:
+            - containerPort: {{ $port }}
+          envFrom:
+            - configMapRef:
+                name: {{ $full }}-config
+            {{- if $b.secretName }}
+            - secretRef:
+                name: {{ $b.secretName }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $port }}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml (default $g.resources $b.resources) | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}
+  namespace: {{ $g.namespace }}
+  labels:
+    app: {{ $full }}
+    {{- include "okc.labels" $root | nindent 4 }}
+spec:
+  selector:
+    app: {{ $full }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: {{ $port }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,106 @@
+# openKcloud 포털 엄브렐러 차트 값
+# 배포: helm upgrade --install openkcloud-portal charts/openkcloud-portal -n openkcloud-mnt
+# 시크릿(DATABASE_URL, OS_USERNAME/PASSWORD)은 이 파일에 넣지 말 것 → secrets.example.yaml 참고해 별도 apply.
+
+global:
+  namespace: openkcloud-mnt
+  image:
+    registry: harbor.io:7443/mnt   # Harbor 프로젝트 mnt
+    tag: c12e187                   # 현재 배포 태그(재빌드 시 교체 또는 --set global.image.tag=<git-sha>)
+    pullPolicy: IfNotPresent
+  # Harbor pull 자격증명 시크릿(docker-registry 타입) — 별도 생성 필요
+  imagePullSecrets:
+    - name: harbor-pull
+  # 컨트롤플레인(마스터) 제외, 워커에만 스케줄
+  nodeSelectorWorkerOnly: true
+  # 모듈별로 안 덮으면 쓰는 기본 리소스
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+# ── 백엔드(FastAPI, 동일 패턴) ───────────────────────────────────────
+# env = ConfigMap 으로 주입(비밀값 제외). secretName 지정 시 그 Secret 을 envFrom 으로 추가.
+backends:
+  core:
+    image: mnt-core
+    port: 8000
+    replicas: 1
+    secretName: mnt-core-secret        # DATABASE_URL 제공
+    env:
+      SERVICE_NAME: mnt-core
+      API_PREFIX: /api/core
+      CORS_ORIGINS: ""                 # 게이트웨이 single-origin → 빈값
+      IAAS_API_BASE: http://mnt-iaas.openkcloud-mnt.svc.cluster.local
+      PAAS_API_BASE: http://mnt-paas.openkcloud-mnt.svc.cluster.local
+      OBS_API_BASE: http://mnt-obs.openkcloud-mnt.svc.cluster.local
+      AINB_API_BASE: ""
+
+  iaas:
+    image: mnt-iaas
+    port: 8000
+    replicas: 1
+    secretName: mnt-iaas-secret        # OS_USERNAME / OS_PASSWORD 제공
+    env:
+      SERVICE_NAME: mnt-iaas
+      API_PREFIX: /api/iaas
+      CORS_ORIGINS: ""
+      CORE_API_BASE: http://mnt-core.openkcloud-mnt.svc.cluster.local
+      # OpenStack: 클러스터 내부는 ingressgateway 443 (25443은 외부 NAT 전용!).
+      # CoreDNS가 *-api.openstack.internal → 192.168.90.252(ingressgateway)로 해석.
+      OS_AUTH_URL: https://keystone-api.openstack.internal/v3
+      OS_PROJECT_NAME: admin
+      OS_USER_DOMAIN_NAME: Default
+      OS_PROJECT_DOMAIN_NAME: Default
+      OS_REGION_NAME: ""
+      OS_INSECURE: "true"              # 초기: verify off. 사내 root CA 신뢰 후 false 로.
+      OS_ENDPOINT_MODE: override       # ingress 직접(검증된 패턴)
+      OS_ENDPOINT_TEMPLATE: "https://{service}-api.openstack.internal"
+      OS_INTERFACE: internal
+
+  paas:
+    image: mnt-paas
+    port: 8000
+    replicas: 1
+    env:
+      SERVICE_NAME: mnt-paas
+      API_PREFIX: /api/paas
+      CORS_ORIGINS: ""
+
+  obs:
+    image: mnt-obs
+    port: 8000
+    replicas: 1
+    secretName: mnt-obs-secret         # MONITOR_USERNAME / MONITOR_PASSWORD 제공
+    env:
+      SERVICE_NAME: mnt-obs
+      API_PREFIX: /api/obs
+      CORS_ORIGINS: ""
+      # KCloud Monitor v2 (이노그리드) — master3 의 Docker 컨테이너(k8s 파드 아님).
+      # 파드에서 닿는 주소 = master3 노드IP:8000. ⚠️ 파드 도달 확인 필요(netcheck);
+      # 안 되면 Service/Endpoints(→172.29.236.153:8000) 구성 후 그 DNS 로 교체.
+      MONITOR_BASE_URL: http://172.29.236.153:8000/api/v2
+
+# ── 프론트(Next 정적 + nginx) ───────────────────────────────────────
+frontend:
+  image: mnt-app
+  port: 8080
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+# ── Istio 게이트웨이(single-origin 라우팅) ──────────────────────────
+gateway:
+  enabled: true
+  # 포털 접속 호스트 — portal-gateway 가 *.kcloud.etri 와일드카드 + TLS 제공
+  host: portal.kcloud.etri
+  # 기존 게이트웨이 재사용(새로 안 만듦). VirtualService 만 여기에 바인딩.
+  gatewayName: istio-system/portal-gateway
+  create: false
+  # 아래는 create: true 일 때만 사용(참고용)
+  istioSelector:
+    istio: ingressgateway
+  port: 443
+  tls:
+    mode: SIMPLE
+    credentialName: portal-wildcard-tls
