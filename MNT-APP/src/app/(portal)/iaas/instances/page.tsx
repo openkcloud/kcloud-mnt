@@ -13,6 +13,9 @@ import {
 } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm";
+import { RefreshControls } from "@/components/iaas/refresh-controls";
+import { useAuth } from "@/lib/auth";
+import { useMyProjectIds } from "@/lib/member-api";
 import {
   useServers, usePowerAction, useDeleteServer, useProjects, type ServerSummary,
 } from "@/lib/iaas-api";
@@ -25,6 +28,9 @@ const stVariant = (s: string) => STATUS_VARIANT[s] ?? "warning";
 // 가상서버 — OpenStack Nova 실연동(운영). 상세는 별도 페이지(/iaas/instances/detail?id=). 생성은 자원요청 흐름에서만.
 export default function InstancesPage() {
   const router = useRouter();
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
+  const myUsername = useAuth((s) => s.user?.username);
+  const { data: myProjectIds } = useMyProjectIds(isAdmin ? undefined : myUsername);
   const { data, isLoading } = useServers();
   const { data: projData } = useProjects();
   const [q, setQ] = React.useState("");
@@ -47,6 +53,7 @@ export default function InstancesPage() {
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const items = data.filter(
     (s) =>
+      (isAdmin || myProjectIds?.has(s.tenantId)) &&
       (!q || s.name.toLowerCase().includes(q.toLowerCase())) &&
       (projFilter === "all" || s.tenantId === projFilter) &&
       (statusFilter === "all" || s.status === statusFilter),
@@ -89,6 +96,7 @@ export default function InstancesPage() {
             <Input placeholder="가상서버 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-52 pl-9" />
           </div>
           <span className="text-xs text-muted-foreground">총 {items.length}개</span>
+          <div className="ml-auto"><RefreshControls queryKeys={[["iaas-servers"]]} /></div>
         </div>
       </Card>
 
