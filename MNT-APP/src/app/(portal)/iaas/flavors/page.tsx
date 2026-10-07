@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm";
+import { RefreshControls } from "@/components/iaas/refresh-controls";
 import {
   useFlavors, useDeviceProfiles, useCreateFlavor, useDeleteFlavor, type FlavorSummary,
 } from "@/lib/iaas-api";
@@ -48,7 +49,10 @@ export default function FlavorsPage() {
             <Input placeholder="플레이버 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
           </div>
           <span className="text-xs text-muted-foreground">총 {items.length}개</span>
-          <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}><Plus className="size-3.5" /> 플레이버 생성</Button>
+          <div className="ml-auto flex items-center gap-2">
+            <RefreshControls queryKeys={[["iaas-flavors"]]} />
+            <Button size="sm" onClick={() => setCreateOpen(true)}><Plus className="size-3.5" /> 플레이버 생성</Button>
+          </div>
         </div>
       </Card>
 

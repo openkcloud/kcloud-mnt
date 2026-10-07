@@ -18,6 +18,9 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ui/confirm";
+import { RefreshControls } from "@/components/iaas/refresh-controls";
+import { useAuth } from "@/lib/auth";
+import { useMyProjectIds } from "@/lib/member-api";
 import {
   useVolumes, useVolume, useVolumeTypes, useStorageCapacity,
   useCreateVolume, useDeleteVolume, useExtendVolume, useCreateSnapshot, useDeleteSnapshot, useProjects,
@@ -31,6 +34,9 @@ const STATUS_VARIANT: Record<string, "success" | "secondary" | "warning"> = {
 
 // 볼륨·스토리지 — OpenStack Cinder 실연동(백엔드 Ceph). 목록은 프로젝트 컬럼이 맨 앞.
 export default function VolumesPage() {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
+  const myUsername = useAuth((s) => s.user?.username);
+  const { data: myProjectIds } = useMyProjectIds(isAdmin ? undefined : myUsername);
   const { data, isLoading } = useVolumes();
   const { data: projData } = useProjects();
   const { data: pools } = useStorageCapacity();
@@ -59,6 +65,7 @@ export default function VolumesPage() {
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const items = data.filter(
     (v) =>
+      (isAdmin || myProjectIds?.has(v.tenantId)) &&
       (!q || v.name.toLowerCase().includes(q.toLowerCase())) &&
       (projFilter === "all" || v.tenantId === projFilter),
   );
@@ -104,9 +111,12 @@ export default function VolumesPage() {
             <Input placeholder="볼륨 이름 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
           </div>
           <span className="text-xs text-muted-foreground">총 {items.length}개</span>
-          <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-3.5" /> 볼륨 생성
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <RefreshControls queryKeys={[["iaas-volumes"], ["iaas-storage-capacity"]]} />
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-3.5" /> 볼륨 생성
+            </Button>
+          </div>
         </div>
       </Card>
 

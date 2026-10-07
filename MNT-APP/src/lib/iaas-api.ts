@@ -11,6 +11,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { IaasNetwork, Tenant } from "@/lib/types";
+import { usePollingInterval } from "@/lib/polling";
 
 const RAW = process.env.NEXT_PUBLIC_IAAS_API;
 export const IAAS_BASE = RAW === undefined ? "http://localhost:8001" : RAW;
@@ -92,6 +93,7 @@ export function useDeleteProject() {
 /** 프로젝트 목록(경량, 쿼터 미포함) — MNT-IAAS 우선, 실패 시 MSW 목업 폴백.
  *  쿼터는 N+1 방지를 위해 목록에 넣지 않고, 상세(useProject)에서 on-demand 조회한다. */
 export function useProjects() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["iaas-projects"],
     queryFn: async (): Promise<{ items: Tenant[]; live: boolean }> => {
@@ -105,6 +107,7 @@ export function useProjects() {
     },
     staleTime: 30 * 1000,
     retry: 0,
+    refetchInterval: pollMs || false,
   });
 }
 
@@ -147,6 +150,7 @@ export interface NetworkDetail {
 
 /** 네트워크 목록(요약) — MNT-IAAS(Neutron) 우선, 실패 시 MSW 목업 폴백. */
 export function useNetworks() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["iaas-networks"],
     queryFn: async (): Promise<{ items: IaasNetwork[]; live: boolean }> => {
@@ -160,6 +164,7 @@ export function useNetworks() {
     },
     staleTime: 30 * 1000,
     retry: 0,
+    refetchInterval: pollMs || false,
   });
 }
 
@@ -334,12 +339,14 @@ export function useDeleteSgRule(sgId: string) {
 export interface SgSummary { id: string; name: string; tenantId: string; desc: string; rules: number }
 
 export function useSecurityGroups() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["iaas-sgs"],
     queryFn: async (): Promise<SgSummary[]> =>
       (await fetchJson<{ items: SgSummary[] }>(`${IAAS_BASE}/api/iaas/security-groups`)).items,
     staleTime: 30 * 1000,
     retry: 0,
+    refetchInterval: pollMs || false,
   });
 }
 
@@ -375,12 +382,14 @@ export interface RouterDetail {
 export interface ProjectSubnet { id: string; name: string; cidr: string; networkName: string }
 
 export function useRouters() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["iaas-routers"],
     queryFn: async (): Promise<RouterSummary[]> =>
       (await fetchJson<{ items: RouterSummary[] }>(`${IAAS_BASE}/api/iaas/routers`)).items,
     staleTime: 30 * 1000,
     retry: 0,
+    refetchInterval: pollMs || false,
   });
 }
 
@@ -452,13 +461,14 @@ const VOLUME_SETTLED = new Set(["available", "in-use", "error", "error_deleting"
 const isTransitional = (status: string) => !VOLUME_SETTLED.has(status);
 
 export function useVolumes() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["iaas-volumes"],
     queryFn: async (): Promise<VolumeSummary[]> =>
       (await fetchJson<{ items: VolumeSummary[] }>(`${IAAS_BASE}/api/iaas/volumes`)).items,
     staleTime: 30 * 1000, retry: 0,
-    // creating/deleting/extending 등 진행 중 볼륨이 있으면 3초마다 갱신
-    refetchInterval: (q) => ((q.state.data as VolumeSummary[] | undefined)?.some((v) => isTransitional(v.status)) ? 3000 : false),
+    // 진행 중(creating/deleting/extending 등)이면 3초로 빠르게, 평상시엔 사용자 설정 주기
+    refetchInterval: (q) => ((q.state.data as VolumeSummary[] | undefined)?.some((v) => isTransitional(v.status)) ? 3000 : (pollMs || false)),
   });
 }
 export function useVolume(id: string | undefined) {
@@ -535,11 +545,13 @@ export interface ImageSummary {
 }
 
 export function useImages() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["iaas-images"],
     queryFn: async (): Promise<ImageSummary[]> =>
       (await fetchJson<{ items: ImageSummary[] }>(`${IAAS_BASE}/api/iaas/images`)).items,
     staleTime: 60 * 1000, retry: 0,
+    refetchInterval: pollMs || false,
   });
 }
 export function useSetImageVisibility() {
@@ -565,11 +577,13 @@ export interface FlavorSummary {
 export interface DeviceProfile { name: string; uuid: string }
 
 export function useFlavors() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["iaas-flavors"],
     queryFn: async (): Promise<FlavorSummary[]> =>
       (await fetchJson<{ items: FlavorSummary[] }>(`${IAAS_BASE}/api/iaas/flavors`)).items,
     staleTime: 60 * 1000, retry: 0,
+    refetchInterval: pollMs || false,
   });
 }
 export function useDeviceProfiles() {
@@ -616,12 +630,14 @@ export interface ServerDetail extends ServerSummary {
 const SERVER_SETTLED = new Set(["ACTIVE", "SHUTOFF", "ERROR", "PAUSED", "SUSPENDED"]);
 
 export function useServers() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["iaas-servers"],
     queryFn: async (): Promise<ServerSummary[]> =>
       (await fetchJson<{ items: ServerSummary[] }>(`${IAAS_BASE}/api/iaas/servers`)).items,
     staleTime: 20 * 1000, retry: 0,
-    refetchInterval: (q) => ((q.state.data as ServerSummary[] | undefined)?.some((s) => !SERVER_SETTLED.has(s.status)) ? 4000 : false),
+    // 진행 중(BUILD/REBOOT 등)이면 4초로 빠르게, 평상시엔 사용자 설정 주기
+    refetchInterval: (q) => ((q.state.data as ServerSummary[] | undefined)?.some((s) => !SERVER_SETTLED.has(s.status)) ? 4000 : (pollMs || false)),
   });
 }
 export function useServer(id: string | undefined) {

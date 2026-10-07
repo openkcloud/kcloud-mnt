@@ -16,14 +16,20 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SgRulesDialog } from "@/components/iaas/sg-rules-dialog";
 import { useConfirm } from "@/components/ui/confirm";
+import { RefreshControls } from "@/components/iaas/refresh-controls";
+import { useAuth } from "@/lib/auth";
+import { useMyProjectIds } from "@/lib/member-api";
 import {
   useSecurityGroups, useCreateSecurityGroup, useDeleteSecurityGroup, useProjects,
   type SgSummary,
 } from "@/lib/iaas-api";
 import type { Tenant } from "@/lib/types";
 
-// 보안 그룹 — OpenStack Neutron 실연동. 목록은 프로젝트 컬럼이 맨 앞(우리 기준 데이터).
+// 보안 그룹 — OpenStack Neutron 실연동. 목록은 프로젝트 컬럼이 맨 앞(우리 기준 데이터). 사용자는 멤버 프로젝트만.
 export default function SecurityGroupsPage() {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
+  const myUsername = useAuth((s) => s.user?.username);
+  const { data: myProjectIds } = useMyProjectIds(isAdmin ? undefined : myUsername);
   const { data, isLoading } = useSecurityGroups();
   const { data: projData } = useProjects();
   const [q, setQ] = React.useState("");
@@ -38,13 +44,17 @@ export default function SecurityGroupsPage() {
     for (const p of projData?.items ?? []) m[p.id] = p.name;
     return (id: string) => m[id] ?? id;
   }, [projData]);
+  const scoped = React.useMemo(
+    () => (isAdmin ? (data ?? []) : (data ?? []).filter((s) => myProjectIds?.has(s.tenantId))),
+    [data, isAdmin, myProjectIds],
+  );
   const projOptions = React.useMemo(() => {
-    const ids = Array.from(new Set((data ?? []).map((s) => s.tenantId).filter(Boolean)));
+    const ids = Array.from(new Set(scoped.map((s) => s.tenantId).filter(Boolean)));
     return ids.map((id) => ({ id, name: projName(id) })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [data, projName]);
+  }, [scoped, projName]);
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
-  const items = data.filter(
+  const items = scoped.filter(
     (s) =>
       (!q || s.name.toLowerCase().includes(q.toLowerCase())) &&
       (projFilter === "all" || s.tenantId === projFilter),
@@ -79,9 +89,14 @@ export default function SecurityGroupsPage() {
             <Input placeholder="보안 그룹 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
           </div>
           <span className="text-xs text-muted-foreground">총 {items.length}개</span>
-          <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-3.5" /> 보안 그룹 생성
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <RefreshControls queryKeys={[["iaas-sgs"]]} />
+            {isAdmin && (
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
+                <Plus className="size-3.5" /> 보안 그룹 생성
+              </Button>
+            )}
+          </div>
         </div>
       </Card>
 
