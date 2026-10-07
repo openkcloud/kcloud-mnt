@@ -267,6 +267,7 @@ def create_ticket(body: CreateTicketBody, db: Session = Depends(get_db)):
         "diskGb": flavor["diskGb"],
         "volumeGb": volume_gb,
         "deviceProfile": flavor["accelerator"],
+        "accelerators": flavor.get("accelerators") or None,  # 가속기 종류·개수 [{kind: GPU|NPU, count}] — 플레이버 라이브 조회 값
         "imageId": image["id"],
         "imageName": image["name"],
         "cloudInit": image["cloudInit"],

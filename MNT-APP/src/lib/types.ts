@@ -597,6 +597,7 @@ export interface ResourceRequest {
   acceleratorKind?: string;
   acceleratorCount?: number;
   deviceProfile?: string;  // 플레이버의 Cyborg device-profile (실제 VM 티켓의 가속기 표시)
+  accelerators?: { kind: string; count: number }[];  // device-profile 의 가속기 종류(GPU/NPU)·개수 — 신청 시 저장
   // Cluster
   clusterName?: string;
   k8sVersion?: string;

@@ -35,7 +35,24 @@ def _cyborg(method: str, path: str):
     return _os_req("cyborg", "accelerator", "/v2", method, path)
 
 
-def _to_flavor(f: dict, accel: str | None) -> dict:
+# device-profile group 의 resource class → 화면 가속기 종류
+_ACCEL_KIND = {"PGPU": "GPU", "CUSTOM_AICHIP": "NPU"}
+
+
+def _dp_accelerators(groups: list[dict] | None) -> list[dict]:
+    """device-profile groups → [{kind, count}]. 예) [{"resources:CUSTOM_AICHIP": "1", ...}] → [{NPU, 1}].
+    group 마다 resources:<class>=<개수> 를 종류별로 합산. 모르는 class 는 class 이름 그대로 표시."""
+    counts: dict[str, int] = {}
+    for g in groups or []:
+        for key, val in g.items():
+            if key.startswith("resources:"):
+                rc = key.split(":", 1)[1]
+                kind = _ACCEL_KIND.get(rc, rc)
+                counts[kind] = counts.get(kind, 0) + int(val)
+    return [{"kind": k, "count": c} for k, c in counts.items()]
+
+
+def _to_flavor(f: dict, accel: str | None, accelerators: list[dict] | None = None) -> dict:
     return {
         "id": f["id"],
         "name": f.get("name") or f["id"],
@@ -44,18 +61,26 @@ def _to_flavor(f: dict, accel: str | None) -> dict:
         "diskGb": f.get("disk", 0),
         "isPublic": bool(f.get("os-flavor-access:is_public", True)),
         "accelerator": accel,  # 가속기 device-profile(없으면 None)
+        "accelerators": accelerators or [],  # device-profile 의 가속기 종류·개수 [{kind: GPU|NPU, count}]
     }
 
 
 @router.get("/flavors")
 def list_flavors():
-    """플레이버 목록 + 가속기(device_profile) extra_spec."""
+    """플레이버 목록 + 가속기(device_profile) extra_spec + 가속기 종류(GPU/NPU)."""
+    try:
+        # 가속기 종류는 부가정보 — Cyborg 조회가 실패해도 플레이버 목록은 돌려준다
+        dps = {d["name"]: _dp_accelerators(d.get("groups"))
+               for d in _cyborg("GET", "/device_profiles").json().get("device_profiles", [])}
+    except Exception:  # noqa: BLE001
+        dps = {}
     try:
         flavors = _nova("GET", "/flavors/detail").json()["flavors"]
         items = []
         for f in flavors:
             specs = _nova("GET", f"/flavors/{f['id']}/os-extra_specs").json().get("extra_specs", {})
-            items.append(_to_flavor(f, specs.get("accel:device_profile")))
+            dp = specs.get("accel:device_profile")
+            items.append(_to_flavor(f, dp, dps.get(dp)))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"플레이버 조회 실패: {e}")
     return {"items": items, "count": len(items)}
