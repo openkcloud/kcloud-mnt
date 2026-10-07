@@ -554,6 +554,18 @@ export function useImages() {
     refetchInterval: pollMs || false,
   });
 }
+/** 프로젝트가 쓸 수 있는 이미지(public + 프로젝트 소유 + 공유받은 것) — 자원신청 템플릿. 목업 폴백 없음.
+ *  cloudInit=false 면 키페어 주입 불가(Glance 속성 okc_cloud_init=false). */
+export type ProjectImage = ImageSummary & { cloudInit: boolean };
+export function useProjectImages(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-project-images", projectId],
+    enabled: !!projectId,
+    queryFn: async (): Promise<ProjectImage[]> =>
+      (await fetchJson<{ items: ProjectImage[] }>(`${IAAS_BASE}/api/iaas/projects/${projectId}/images`)).items,
+    staleTime: 60 * 1000, retry: 0,
+  });
+}
 export function useSetImageVisibility() {
   const qc = useQueryClient();
   return useMutation({

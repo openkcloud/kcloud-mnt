@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .db import engine
-from .routers import codes, members, menus, ssh_keys
+from .routers import auth, codes, members, menus, ssh_keys, tickets
 
 app = FastAPI(title="MNT-CORE", version="0.1.0")
 
@@ -44,3 +44,5 @@ app.include_router(menus.router, prefix=settings.api_prefix)
 app.include_router(codes.router, prefix=settings.api_prefix)
 app.include_router(ssh_keys.router, prefix=settings.api_prefix)
 app.include_router(members.router, prefix=settings.api_prefix)
+app.include_router(auth.router, prefix=settings.api_prefix)
+app.include_router(tickets.router, prefix=settings.api_prefix)
