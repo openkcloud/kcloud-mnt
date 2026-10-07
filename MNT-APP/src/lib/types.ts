@@ -322,6 +322,12 @@ export interface Image {
   createdAt: string;
 }
 
+// 자원 신청 템플릿 — Glance 이미지 + cloud-init 여부 · min_disk
+export interface TemplateImage extends Image {
+  cloudInit: boolean;      // cloud-init 포함 여부 (키페어 주입 가능)
+  minDiskGb: number;       // Glance min_disk
+}
+
 // ───────── PaaS / K8s ─────────
 export interface KCluster {
   id: string;
@@ -449,9 +455,113 @@ export interface Alert {
 export type RequestType = "vm" | "cluster";
 export type RequestStatus =
   | "pending"
+  | "approved"
   | "provisioning"
   | "completed"
+  | "failed"
   | "rejected";
+
+// 관리자 승인 입력 — 네트워크·IP·보안그룹 (OpenStack 라이브 조회 값)
+export interface ProvisionSpec {
+  networkId: string;
+  networkName: string;
+  networkKind: "project" | "shared" | "external";
+  // 내부/공유망 + Floating IP 연결 시 FIP 풀(external 망)
+  floatingNetworkId?: string;
+  floatingNetworkName?: string;
+  // external 망 직접 연결(Static IP) — fixedIp 없으면 자동 할당
+  fixedIp?: string;
+  securityGroups: string[];
+}
+
+// 프로비저닝 결과
+export interface ProvisionResult {
+  serverId?: string;
+  fixedIp?: string;
+  floatingIp?: string;
+}
+
+export interface ProvisionStepsResp {
+  status: RequestStatus;
+  attempt: number;         // 표시 중인 실행 회차 (MAX(attempt))
+  errorMessage?: string;
+  result?: ProvisionResult;
+  items: ProvisionStep[];
+}
+
+export interface Org {
+  id: string;
+  name: string;
+  superUserId?: string;
+}
+
+// 신청 마법사 — 사용자에게 할당된 프로젝트 (포털 DB)
+export interface MyProject {
+  id: string;
+  name: string;
+  orgId: string;
+  orgName?: string;
+  quota: string;
+  accelerators: { kind: string; label: string; node: string }[];
+}
+
+// Nova 플레이버 — diskGb 0 이면 부팅 볼륨 크기 입력
+export interface Flavor {
+  id: string;
+  name: string;
+  vcpu: number;
+  ramGb: number;
+  diskGb: number;
+  accel: { kind: string; label: string } | null;
+}
+
+// 승인용 Neutron 네트워크
+export interface ProvNetwork {
+  id: string;
+  name: string;
+  kind: "project" | "shared" | "external";
+  projectId: string;
+  cidr: string;
+}
+
+// 신청 마법사 키페어 — iam_ssh_key (owner = iam_user.username)
+export interface SshKey {
+  id: string;
+  owner: string;
+  name: string;
+  type: string;
+  fingerprint: string;
+  createdAt: string;
+}
+
+export interface SecurityGroup {
+  id: string;
+  name: string;
+  projectId: string;
+  description: string;
+}
+
+export type ProvStepStatus = "waiting" | "running" | "done" | "failed" | "skipped";
+
+// 상세 단계 (tkt_provision_substep) — label 은 cmn_code(TKT_PROVISION_SUBSTEP_IAAS).name
+export interface ProvisionSubStep {
+  code: string;
+  label: string;
+  value?: string;
+  status: ProvStepStatus;
+}
+
+// 단계 5개 고정 (tkt_provision_step): create_server · attach_network · attach_volume · bind_accelerator · wait_active
+export interface ProvisionStep {
+  seq: number;
+  code: string;
+  message: string;         // 단계 제목 (cmn_code TKT_PROVISION_STEP_IAAS.name)
+  status: ProvStepStatus;
+  startedAt?: string;
+  endedAt?: string;
+  error?: string;
+  details: ProvisionSubStep[];
+}
 
 export interface ResourceRequest {
   id: string;
@@ -460,18 +570,30 @@ export interface ResourceRequest {
   requestedBy: string;
   requestedByName: string;
   requestedAt: string;
+  orgId?: string;
+  orgName?: string;
   projectId: string;
   projectName: string;
   // VM
   vmName?: string;
+  networkType?: "internal" | "internet"; // 사용자 희망 망
+  flavorId?: string;       // Nova flavorRef
+  imageId?: string;
+  imageName?: string;
+  cloudInit?: boolean;
+  volumeGb?: number;       // 플레이버 disk=0 일 때 부팅 볼륨 크기
+  provisionSpec?: ProvisionSpec;
+  result?: ProvisionResult;
+  errorMessage?: string;
   flavorName?: string;
   vcpu?: number;
   ramGb?: number;
   diskGb?: number;         // 스펙 내장 시스템(루트) 디스크
-  storageGb?: number;      // 추가 데이터 스토리지
+  storageGb?: number;      // 추가 데이터 스토리지 (클러스터)
   networkName?: string;
+  keypairId?: string;      // iam_ssh_key.id
   keypairName?: string;
-  floatingIp?: boolean;
+  floatingIp?: boolean;    // 사용자 공인 IP 희망
   acceleratorKind?: string;
   acceleratorCount?: number;
   // Cluster

@@ -1,5 +1,10 @@
 /* Mock fixture — openKcloud CMP 시연용 시드 데이터 */
 import type {
+  Flavor,
+  TemplateImage,
+  Org,
+  ProvNetwork,
+  SecurityGroup,
   Accelerator,
   AcceleratorPartition,
   Activity,
@@ -104,6 +109,55 @@ export const pools: Pool[] = [
     used: { vcpu: 124, ramGb: 480, diskTb: 22 },
   },
 ];
+
+// ─────────────────────── 조직 · 사용자 (포털 DB: iam_org · iam_user) ───────────────────────
+export const orgs: Org[] = [
+  { id: "org-etri",    name: "ETRI",       superUserId: "u-001" },
+  { id: "org-okestro", name: "오케스트로", superUserId: "u-005" },
+  { id: "org-keti",    name: "KETI",       superUserId: "u-003" },
+];
+
+// username = iam_user.username = iam_ssh_key.owner
+export const portalUsers = [
+  { id: "u-001", username: "admin",   name: "최현화", orgId: "org-etri" },
+  { id: "u-002", username: "user",    name: "윤호영", orgId: "org-okestro" },
+  { id: "u-003", username: "mj.kim",  name: "김민준", orgId: "org-keti" },
+  { id: "u-004", username: "js.park", name: "박지수", orgId: "org-etri" },
+  { id: "u-005", username: "jh.lee",  name: "이준호", orgId: "org-okestro" },
+];
+
+// SSH 키 (포털 DB: iam_ssh_key — owner = iam_user.username, 개인키 미저장)
+// 조직별 키 목록 = iam_ssh_key ⋈ iam_user(username → org_id)
+export const sshKeys = [
+  { id: "sk-1", owner: "user",    name: "hy-yun-laptop",     type: "SSH-ED25519", fingerprint: "SHA256:8s0k+aFzZ2GxjP9NLcv1XoQnEd8H4RmqA5oV6WuZ2t0", createdAt: "2026-03-15" },
+  { id: "sk-2", owner: "user",    name: "hy-yun-desktop",    type: "ECDSA",       fingerprint: "SHA256:R7qWsX8yZ9aB0cD1eF2gH3iJ4kL5mN6oP7qR8sT9uVw", createdAt: "2026-05-20" },
+  { id: "sk-3", owner: "jh.lee",  name: "okestro-ops-key",   type: "SSH-ED25519", fingerprint: "SHA256:Lq2W8eR4tY6uI0oP3aS5dF7gH9jK1lZ3xC5vB7nM9qE", createdAt: "2026-06-02" },
+  { id: "sk-4", owner: "admin",   name: "etri-shared-01",    type: "SSH-RSA",     fingerprint: "SHA256:X9pQmR3vN2s8YkA4dLcE7BgV1oF6WuHtZjK5NqPxRxo", createdAt: "2026-04-01" },
+  { id: "sk-5", owner: "js.park", name: "etri-research-key", type: "SSH-ED25519", fingerprint: "SHA256:Hn3J5kL7mN9pQ1rS3tU5vW7xY9zA1bC3dE5fG7hI9jK", createdAt: "2026-07-11" },
+  { id: "sk-6", owner: "mj.kim",  name: "keti-edge-key",     type: "SSH-RSA",     fingerprint: "SHA256:Pz4X6cV8bN0mA2sD4fG6hJ8kL0qW2eR4tY6uI8oP0aS", createdAt: "2026-04-18" },
+];
+
+// 사용자-프로젝트 할당 (포털 DB: iam_user_project)
+export const userProjects: Record<string, string[]> = {
+  "u-002": ["proj-llm-serving"],
+  "u-003": ["proj-edge-inference"],
+  "u-004": ["proj-ai-research"],
+  "u-005": ["proj-llm-serving", "proj-platform-ops"],
+};
+
+// 프로젝트별 할당 가속기 (CMP DB: project_accelerator_allocations)
+export const projectAccelerators: Record<string, { kind: string; label: string; node: string }[]> = {
+  "proj-ai-research": [
+    { kind: "NPU", label: "Furiosa RNGD × 2", node: "compute1" },
+    { kind: "NPU", label: "Rebellions ATOM × 1", node: "compute1" },
+  ],
+  "proj-llm-serving": [
+    { kind: "GPU", label: "NVIDIA A100 × 1", node: "compute5" },
+    { kind: "NPU", label: "Furiosa RNGD × 1", node: "compute5" },
+  ],
+  "proj-edge-inference": [{ kind: "GPU", label: "NVIDIA L40S × 1", node: "compute6" }],
+  "proj-platform-ops": [],
+};
 
 // ─────────────────────── Tenants ───────────────────────
 export const tenants: Tenant[] = [
@@ -550,6 +604,61 @@ export const images: Image[] = [
   { id: "img-4", name: "rocky-9-rebellions-rt", os: "Rocky 9 + Rebellions Runtime", arch: "x86_64", sizeMb: 5980, visibility: "shared", format: "qcow2", hasAcceleratorRuntime: true, createdAt: "2025-11-15" },
   { id: "img-5", name: "openkcloud-kubeflow-base", os: "Ubuntu 24.04 + Kubeflow Notebook", arch: "x86_64", sizeMb: 7820, visibility: "private", format: "qcow2", hasAcceleratorRuntime: true, createdAt: "2026-01-22" },
   { id: "img-6", name: "vllm-serving-runtime", os: "Ubuntu 24.04 + vLLM + Triton", arch: "x86_64", sizeMb: 12480, visibility: "private", format: "qcow2", hasAcceleratorRuntime: true, createdAt: "2026-02-18" },
+];
+
+// ─────────────────────── 템플릿 이미지 (자원 신청 전용 · Glance 라이브 조회 대상) ───────────────────────
+// cloudInit = 이미지 속성 기준 cloud-init 포함 여부, minDiskGb = Glance min_disk
+export const templateImages: TemplateImage[] = [
+  { id: "img-1", name: "ubuntu-22.04-server", os: "Ubuntu 22.04 LTS", arch: "x86_64", sizeMb: 2456, visibility: "public", format: "qcow2", hasAcceleratorRuntime: false, cloudInit: true, minDiskGb: 10, createdAt: "2025-04-20" },
+  { id: "img-2", name: "ubuntu-24.04-cuda-12.4", os: "Ubuntu 24.04 + CUDA", arch: "x86_64", sizeMb: 8612, visibility: "public", format: "qcow2", hasAcceleratorRuntime: true, cloudInit: true, minDiskGb: 40, createdAt: "2025-09-12" },
+  { id: "img-3", name: "rhel-9-furiosa-sdk", os: "RHEL 9 + Furiosa SDK", arch: "x86_64", sizeMb: 6240, visibility: "shared", format: "qcow2", hasAcceleratorRuntime: true, cloudInit: true, minDiskGb: 40, createdAt: "2025-10-04" },
+  { id: "img-4", name: "rocky-9-rebellions-rt", os: "Rocky 9 + Rebellions Runtime", arch: "x86_64", sizeMb: 5980, visibility: "shared", format: "qcow2", hasAcceleratorRuntime: true, cloudInit: true, minDiskGb: 40, createdAt: "2025-11-15" },
+  { id: "img-5", name: "openkcloud-kubeflow-base", os: "Ubuntu 24.04 + Kubeflow Notebook", arch: "x86_64", sizeMb: 7820, visibility: "private", format: "qcow2", hasAcceleratorRuntime: true, cloudInit: true, minDiskGb: 50, createdAt: "2026-01-22" },
+  { id: "img-6", name: "vllm-serving-runtime", os: "Ubuntu 24.04 + vLLM + Triton", arch: "x86_64", sizeMb: 12480, visibility: "private", format: "qcow2", hasAcceleratorRuntime: true, cloudInit: true, minDiskGb: 80, createdAt: "2026-02-18" },
+  // cloud-init 미포함 — 키페어 주입 불가, 이미지 기본 계정으로 접속
+  { id: "img-7", name: "centos-7-legacy-appliance", os: "CentOS 7 (Appliance)", arch: "x86_64", sizeMb: 1840, visibility: "public", format: "qcow2", hasAcceleratorRuntime: false, cloudInit: false, minDiskGb: 20, createdAt: "2024-11-02" },
+  { id: "img-8", name: "windows-server-2022", os: "Windows Server 2022", arch: "x86_64", sizeMb: 10240, visibility: "public", format: "qcow2", hasAcceleratorRuntime: false, cloudInit: false, minDiskGb: 60, createdAt: "2025-03-10" },
+];
+
+// ─────────────────────── Flavors (Nova 라이브 조회 대상) ───────────────────────
+// diskGb 0 = 루트 디스크 없음 → 신청 시 부팅 볼륨 크기 입력(boot-from-volume)
+// 가속기는 extra spec(pci_passthrough:alias / Cyborg)에 내장
+export const flavors: Flavor[] = [
+  { id: "flv-1",  name: "m1.small",   vcpu: 4,  ramGb: 16,  diskGb: 100,  accel: null },
+  { id: "flv-2",  name: "m1.large",   vcpu: 8,  ramGb: 32,  diskGb: 200,  accel: null },
+  { id: "flv-3",  name: "m1.xlarge",  vcpu: 16, ramGb: 64,  diskGb: 500,  accel: null },
+  { id: "flv-4",  name: "m1.2xlarge", vcpu: 32, ramGb: 128, diskGb: 1000, accel: null },
+  { id: "flv-5",  name: "v1.small",   vcpu: 4,  ramGb: 16,  diskGb: 0,    accel: null },
+  { id: "flv-6",  name: "v1.large",   vcpu: 8,  ramGb: 32,  diskGb: 0,    accel: null },
+  { id: "flv-7",  name: "g1.a100",    vcpu: 32, ramGb: 128, diskGb: 1000, accel: { kind: "GPU", label: "NVIDIA A100 × 1" } },
+  { id: "flv-8",  name: "g1.l40s",    vcpu: 16, ramGb: 64,  diskGb: 500,  accel: { kind: "GPU", label: "NVIDIA L40S × 1" } },
+  { id: "flv-9",  name: "g1.l40s.v",  vcpu: 16, ramGb: 64,  diskGb: 0,    accel: { kind: "GPU", label: "NVIDIA L40S × 1" } },
+  { id: "flv-10", name: "n1.rngd-1",  vcpu: 16, ramGb: 64,  diskGb: 500,  accel: { kind: "NPU", label: "Furiosa RNGD × 1" } },
+  { id: "flv-11", name: "n1.rngd-2",  vcpu: 32, ramGb: 128, diskGb: 1000, accel: { kind: "NPU", label: "Furiosa RNGD × 2" } },
+  { id: "flv-12", name: "n1.atom-1",  vcpu: 16, ramGb: 64,  diskGb: 500,  accel: { kind: "NPU", label: "Rebellions ATOM × 1" } },
+];
+
+// ─────────────────────── 승인용 네트워크 · 보안그룹 (Neutron 라이브 조회 대상) ───────────────────────
+// kind: project(프로젝트 소유) · shared(공유) · external(router:external — FIP 풀/직접 연결)
+export const provNetworks: ProvNetwork[] = [
+  { id: "net-ai-int",   name: "ai-research-net",   kind: "project",  projectId: "proj-ai-research",    cidr: "192.168.100.0/24" },
+  { id: "net-llm-int",  name: "llm-serving-net",   kind: "project",  projectId: "proj-llm-serving",    cidr: "192.168.110.0/24" },
+  { id: "net-edge-int", name: "edge-inference-net", kind: "project", projectId: "proj-edge-inference", cidr: "172.30.10.0/24" },
+  { id: "net-ops-int",  name: "platform-ops-net",  kind: "project",  projectId: "proj-platform-ops",   cidr: "192.168.120.0/24" },
+  { id: "net-shared",   name: "platform-shared",   kind: "shared",   projectId: "proj-platform-ops",   cidr: "10.50.0.0/22" },
+  { id: "net-ext",      name: "ext-net",           kind: "external", projectId: "admin",               cidr: "203.0.113.0/24" },
+  { id: "net-ext-svc",  name: "ext-svc-net",       kind: "external", projectId: "admin",               cidr: "198.51.100.0/24" },
+];
+
+export const securityGroups: SecurityGroup[] = [
+  { id: "sg-ai-default",   name: "default",   projectId: "proj-ai-research",    description: "프로젝트 기본 — 같은 그룹 내 통신 허용" },
+  { id: "sg-ai-ssh",       name: "allow-ssh", projectId: "proj-ai-research",    description: "TCP 22 인바운드 허용" },
+  { id: "sg-llm-default",  name: "default",   projectId: "proj-llm-serving",    description: "프로젝트 기본 — 같은 그룹 내 통신 허용" },
+  { id: "sg-llm-ssh",      name: "allow-ssh", projectId: "proj-llm-serving",    description: "TCP 22 인바운드 허용" },
+  { id: "sg-llm-web",      name: "allow-web", projectId: "proj-llm-serving",    description: "TCP 80·443 인바운드 허용" },
+  { id: "sg-edge-default", name: "default",   projectId: "proj-edge-inference", description: "프로젝트 기본 — 같은 그룹 내 통신 허용" },
+  { id: "sg-edge-ssh",     name: "allow-ssh", projectId: "proj-edge-inference", description: "TCP 22 인바운드 허용" },
+  { id: "sg-ops-default",  name: "default",   projectId: "proj-platform-ops",   description: "프로젝트 기본 — 같은 그룹 내 통신 허용" },
 ];
 
 // ─────────────────────── K8s Clusters ───────────────────────
@@ -1084,67 +1193,37 @@ partitions.forEach((p) => {
 
 // ─────────────────────── Resource Requests ───────────────────────
 export const resourceRequests: ResourceRequest[] = [
-  // 대기중 — 현재 위저드 규칙에 맞춘 신규 신청 (가속기 GPU · 인터넷망 · 공인 IP)
+  // 대기 — GPU · 인터넷망 + 공인 IP 희망 · 키페어
   {
-    id: "req-101",
-    type: "vm",
-    status: "pending",
-    requestedBy: "u-002",
-    requestedByName: "윤호영",
-    requestedAt: "2026-09-22T10:12:00Z",
-    projectId: "proj-llm-serving",
-    projectName: "llm-serving",
-    vmName: "vllm-serving-01",
-    flavorName: "g1.a100",
-    vcpu: 32,
-    ramGb: 128,
-    diskGb: 1000,
-    storageGb: 1024,
-    networkName: "llm-serving-public",
-    keypairName: "hy-yun-laptop",
-    floatingIp: true,
-    acceleratorKind: "GPU",
-    acceleratorCount: 1,
+    id: "req-101", type: "vm", status: "pending",
+    requestedBy: "u-002", requestedByName: "윤호영", requestedAt: "2026-09-22T10:12:00Z",
+    orgId: "org-okestro", orgName: "오케스트로",
+    projectId: "proj-llm-serving", projectName: "llm-serving",
+    vmName: "vllm-serving-01", networkType: "internet", floatingIp: true,
+    flavorName: "g1.a100", vcpu: 32, ramGb: 128, diskGb: 1000,
+    imageId: "img-6", imageName: "vllm-serving-runtime", cloudInit: true,
+    keypairId: "sk-1", keypairName: "hy-yun-laptop",
+    acceleratorKind: "GPU", acceleratorCount: 1,
   },
-  // 대기중 — 가속기 없는 일반 VM (내부망)
+  // 대기 — 디스크 0 플레이버 → 부팅 볼륨 지정 · 내부망 · 키페어 없음
   {
-    id: "req-102",
-    type: "vm",
-    status: "pending",
-    requestedBy: "u-002",
-    requestedByName: "윤호영",
-    requestedAt: "2026-09-22T09:40:00Z",
-    projectId: "proj-ai-research",
-    projectName: "ai-research",
-    vmName: "dev-box-04",
-    flavorName: "m1.large",
-    vcpu: 8,
-    ramGb: 32,
-    diskGb: 200,
-    storageGb: 0,
-    networkName: "ai-research-private",
-    keypairName: "hy-yun-desktop",
-    floatingIp: false,
+    id: "req-102", type: "vm", status: "pending",
+    requestedBy: "u-004", requestedByName: "박지수", requestedAt: "2026-09-22T09:40:00Z",
+    orgId: "org-etri", orgName: "ETRI",
+    projectId: "proj-ai-research", projectName: "ai-research",
+    vmName: "dev-box-04", networkType: "internal", floatingIp: false,
+    flavorName: "v1.large", vcpu: 8, ramGb: 32, diskGb: 0, volumeGb: 100,
+    imageId: "img-1", imageName: "ubuntu-22.04-server", cloudInit: true,
   },
+  // 대기 — cloud-init 없는 이미지 (키페어 미적용)
   {
-    id: "req-001",
-    type: "vm",
-    status: "pending",
-    requestedBy: "u-002",
-    requestedByName: "윤호영",
-    requestedAt: "2026-09-17T09:23:00Z",
-    projectId: "proj-ai-research",
-    projectName: "ai-research",
-    vmName: "research-trainer-01",
-    flavorName: "n1.npu-2",
-    vcpu: 16,
-    ramGb: 64,
-    storageGb: 500,
-    networkName: "DJ-Z1-Svc",
-    keypairName: "hy-yun-laptop",
-    floatingIp: true,
-    acceleratorKind: "NPU",
-    acceleratorCount: 1,
+    id: "req-103", type: "vm", status: "pending",
+    requestedBy: "u-003", requestedByName: "김민준", requestedAt: "2026-09-21T16:05:00Z",
+    orgId: "org-keti", orgName: "KETI",
+    projectId: "proj-edge-inference", projectName: "edge-inference",
+    vmName: "legacy-gw-01", networkType: "internet", floatingIp: false,
+    flavorName: "m1.small", vcpu: 4, ramGb: 16, diskGb: 100,
+    imageId: "img-7", imageName: "centos-7-legacy-appliance", cloudInit: false,
   },
   {
     id: "req-002",
@@ -1153,6 +1232,7 @@ export const resourceRequests: ResourceRequest[] = [
     requestedBy: "u-002",
     requestedByName: "윤호영",
     requestedAt: "2026-09-16T14:10:00Z",
+    orgId: "org-okestro", orgName: "오케스트로",
     projectId: "proj-llm-serving",
     projectName: "llm-serving",
     nodeCount: 3,
@@ -1163,60 +1243,85 @@ export const resourceRequests: ResourceRequest[] = [
     acceleratorKind: "GPU",
     acceleratorCount: 2,
   },
+  // 생성 중 — 목업 핸들러가 단계 진행을 시뮬레이션
   {
-    id: "req-003",
-    type: "vm",
-    status: "completed",
-    requestedBy: "u-003",
-    requestedByName: "김민준",
-    requestedAt: "2026-09-15T11:00:00Z",
-    projectId: "proj-edge-inference",
-    projectName: "edge-inference",
-    vmName: "inference-server-02",
-    flavorName: "g1.gpu",
-    vcpu: 32,
-    ramGb: 128,
-    storageGb: 1000,
-    networkName: "DJ-Z1-Svc",
-    keypairName: "kim-research-key",
-    floatingIp: false,
-    acceleratorKind: "GPU",
-    acceleratorCount: 1,
-    reviewedBy: "u-001",
-    reviewedByName: "최현화",
-    reviewedAt: "2026-09-15T15:30:00Z",
+    id: "req-006", type: "vm", status: "provisioning",
+    requestedBy: "u-005", requestedByName: "이준호", requestedAt: "2026-09-18T08:00:00Z",
+    orgId: "org-okestro", orgName: "오케스트로",
+    projectId: "proj-llm-serving", projectName: "llm-serving",
+    vmName: "llm-worker-01", networkType: "internal", floatingIp: false,
+    flavorName: "g1.l40s.v", vcpu: 16, ramGb: 64, diskGb: 0, volumeGb: 200,
+    imageId: "img-2", imageName: "ubuntu-24.04-cuda-12.4", cloudInit: true,
+    keypairId: "sk-3", keypairName: "okestro-ops-key",
+    acceleratorKind: "GPU", acceleratorCount: 1,
+    provisionSpec: { networkId: "net-llm-int", networkName: "llm-serving-net", networkKind: "project", securityGroups: ["default", "allow-ssh"] },
+    reviewedBy: "u-001", reviewedByName: "최현화", reviewedAt: "2026-09-18T09:00:00Z",
   },
+  // 완료 — external 망 직접 연결 (Static IP 직접 입력)
   {
-    id: "req-004",
-    type: "vm",
-    status: "rejected",
-    requestedBy: "u-004",
-    requestedByName: "박지수",
-    requestedAt: "2026-09-14T09:00:00Z",
-    projectId: "proj-ai-research",
-    projectName: "ai-research",
-    vmName: "big-trainer-xlarge",
-    flavorName: "g1.gpu-4x",
-    vcpu: 64,
-    ramGb: 256,
-    storageGb: 2000,
-    networkName: "DJ-Z1-Svc",
-    keypairName: "park-dev-key",
-    floatingIp: true,
-    acceleratorKind: "GPU",
-    acceleratorCount: 4,
-    reviewedBy: "u-001",
-    reviewedByName: "최현화",
-    reviewedAt: "2026-09-14T14:00:00Z",
-    rejectReason: "프로젝트 쿼터 초과 — 가속기 최대 2개 (신청 4개)",
+    id: "req-003", type: "vm", status: "completed",
+    requestedBy: "u-003", requestedByName: "김민준", requestedAt: "2026-09-15T11:00:00Z",
+    orgId: "org-keti", orgName: "KETI",
+    projectId: "proj-edge-inference", projectName: "edge-inference",
+    vmName: "inference-server-02", networkType: "internet", floatingIp: true,
+    flavorName: "g1.l40s", vcpu: 16, ramGb: 64, diskGb: 500,
+    imageId: "img-2", imageName: "ubuntu-24.04-cuda-12.4", cloudInit: true,
+    keypairId: "sk-6", keypairName: "keti-edge-key",
+    acceleratorKind: "GPU", acceleratorCount: 1,
+    provisionSpec: { networkId: "net-ext-svc", networkName: "ext-svc-net", networkKind: "external", fixedIp: "198.51.100.24", securityGroups: ["default", "allow-ssh"] },
+    result: { serverId: "8f1c2a4e-5b7d-4c9e-a1f3-2d6b8e0c4a71", fixedIp: "198.51.100.24" },
+    reviewedBy: "u-001", reviewedByName: "최현화", reviewedAt: "2026-09-15T15:30:00Z",
+  },
+  // 완료 — 내부망 + Floating IP
+  {
+    id: "req-008", type: "vm", status: "completed",
+    requestedBy: "u-004", requestedByName: "박지수", requestedAt: "2026-09-12T13:20:00Z",
+    orgId: "org-etri", orgName: "ETRI",
+    projectId: "proj-ai-research", projectName: "ai-research",
+    vmName: "research-trainer-01", networkType: "internet", floatingIp: true,
+    flavorName: "n1.rngd-1", vcpu: 16, ramGb: 64, diskGb: 500,
+    imageId: "img-3", imageName: "rhel-9-furiosa-sdk", cloudInit: true,
+    keypairId: "sk-5", keypairName: "etri-research-key",
+    acceleratorKind: "NPU", acceleratorCount: 1,
+    provisionSpec: { networkId: "net-ai-int", networkName: "ai-research-net", networkKind: "project", floatingNetworkId: "net-ext", floatingNetworkName: "ext-net", securityGroups: ["default", "allow-ssh"] },
+    result: { serverId: "3b9e7d21-0c4f-4a8b-9e6d-5f2a1c7b8e90", fixedIp: "192.168.100.37", floatingIp: "203.0.113.58" },
+    reviewedBy: "u-001", reviewedByName: "최현화", reviewedAt: "2026-09-12T15:00:00Z",
+  },
+  // 실패 — 서버 생성 단계 실패 (재시도 가능)
+  {
+    id: "req-007", type: "vm", status: "failed",
+    requestedBy: "u-002", requestedByName: "윤호영", requestedAt: "2026-09-19T10:30:00Z",
+    orgId: "org-okestro", orgName: "오케스트로",
+    projectId: "proj-llm-serving", projectName: "llm-serving",
+    vmName: "vllm-bench-02", networkType: "internet", floatingIp: true,
+    flavorName: "g1.a100", vcpu: 32, ramGb: 128, diskGb: 1000,
+    imageId: "img-6", imageName: "vllm-serving-runtime", cloudInit: true,
+    keypairId: "sk-1", keypairName: "hy-yun-laptop",
+    acceleratorKind: "GPU", acceleratorCount: 1,
+    provisionSpec: { networkId: "net-llm-int", networkName: "llm-serving-net", networkKind: "project", floatingNetworkId: "net-ext", floatingNetworkName: "ext-net", securityGroups: ["default", "allow-ssh", "allow-web"] },
+    errorMessage: "No valid host was found. There are not enough hosts available.",
+    reviewedBy: "u-001", reviewedByName: "최현화", reviewedAt: "2026-09-19T11:00:00Z",
+  },
+  // 반려
+  {
+    id: "req-004", type: "vm", status: "rejected",
+    requestedBy: "u-004", requestedByName: "박지수", requestedAt: "2026-09-14T09:00:00Z",
+    orgId: "org-etri", orgName: "ETRI",
+    projectId: "proj-ai-research", projectName: "ai-research",
+    vmName: "big-trainer-xlarge", networkType: "internet", floatingIp: true,
+    flavorName: "m1.2xlarge", vcpu: 32, ramGb: 128, diskGb: 1000,
+    imageId: "img-1", imageName: "ubuntu-22.04-server", cloudInit: true,
+    reviewedBy: "u-001", reviewedByName: "최현화", reviewedAt: "2026-09-14T14:00:00Z",
+    rejectReason: "대용량 스펙 사용 목적 불명확 — 사유 보완 후 재신청 바랍니다",
   },
   {
     id: "req-005",
     type: "cluster",
     status: "completed",
-    requestedBy: "u-002",
-    requestedByName: "윤호영",
+    requestedBy: "u-004",
+    requestedByName: "박지수",
     requestedAt: "2026-09-10T10:00:00Z",
+    orgId: "org-etri", orgName: "ETRI",
     projectId: "proj-ai-research",
     projectName: "ai-research",
     nodeCount: 5,
@@ -1230,29 +1335,6 @@ export const resourceRequests: ResourceRequest[] = [
     reviewedByName: "최현화",
     reviewedAt: "2026-09-10T16:00:00Z",
     resultId: "svc-ai-prod",
-  },
-  {
-    id: "req-006",
-    type: "vm",
-    status: "provisioning",
-    requestedBy: "u-005",
-    requestedByName: "이준호",
-    requestedAt: "2026-09-18T08:00:00Z",
-    projectId: "proj-llm-serving",
-    projectName: "llm-serving",
-    vmName: "llm-worker-01",
-    flavorName: "n1.npu-2",
-    vcpu: 16,
-    ramGb: 64,
-    storageGb: 500,
-    networkName: "DJ-Z1-Svc",
-    keypairName: "lee-dev-key",
-    floatingIp: false,
-    acceleratorKind: "NPU",
-    acceleratorCount: 1,
-    reviewedBy: "u-001",
-    reviewedByName: "최현화",
-    reviewedAt: "2026-09-18T09:00:00Z",
   },
 ];
 

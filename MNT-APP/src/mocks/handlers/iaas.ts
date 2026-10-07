@@ -9,6 +9,12 @@ import {
   volumes,
   images,
   iaasNetworks,
+  flavors,
+  templateImages,
+  sshKeys,
+  portalUsers,
+  provNetworks,
+  securityGroups,
 } from "../fixtures";
 
 export const iaasHandlers = [
@@ -53,5 +59,34 @@ export const iaasHandlers = [
   http.get("/api/iaas/networks", async () => {
     await delay(80);
     return HttpResponse.json({ items: iaasNetworks });
+  }),
+  // ── 자원 신청용 라이브 조회 (Nova · Neutron) ──
+  http.get("/api/iaas/flavors", async () => {
+    await delay(100);
+    return HttpResponse.json({ items: flavors });
+  }),
+  // 템플릿 — Glance 이미지 + cloud-init 여부 · min_disk (이미지 메뉴 목업과 분리)
+  http.get("/api/iaas/template-images", async () => {
+    await delay(100);
+    return HttpResponse.json({ items: templateImages });
+  }),
+  // 키페어 — 신청자 조직의 키 (iam_ssh_key ⋈ iam_user: owner = username → org_id)
+  // 실연동: Nova 라이브 목록을 이 결과로 필터
+  http.get("/api/iaas/keypairs", async ({ request }) => {
+    await delay(100);
+    const userId = new URL(request.url).searchParams.get("userId");
+    const orgId = portalUsers.find((u) => u.id === userId)?.orgId;
+    const owners = new Set(portalUsers.filter((u) => u.orgId === orgId).map((u) => u.username));
+    return HttpResponse.json({ items: sshKeys.filter((k) => owners.has(k.owner)) });
+  }),
+  // 승인용 — 티켓 프로젝트 기준: 프로젝트 소유 + shared + external
+  http.get("/api/iaas/projects/:projectId/networks", async ({ params }) => {
+    await delay(120);
+    const items = provNetworks.filter((n) => n.kind !== "project" || n.projectId === params.projectId);
+    return HttpResponse.json({ items });
+  }),
+  http.get("/api/iaas/projects/:projectId/security-groups", async ({ params }) => {
+    await delay(120);
+    return HttpResponse.json({ items: securityGroups.filter((g) => g.projectId === params.projectId) });
   }),
 ];
