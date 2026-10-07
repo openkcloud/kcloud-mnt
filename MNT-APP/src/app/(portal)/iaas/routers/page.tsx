@@ -22,6 +22,7 @@ import {
 } from "@/lib/iaas-api";
 import type { Tenant } from "@/lib/types";
 import { useConfirm } from "@/components/ui/confirm";
+import { RefreshControls } from "@/components/iaas/refresh-controls";
 
 // 라우터(L3) — OpenStack Neutron 실연동. 목록은 프로젝트 컬럼이 맨 앞(우리 기준 데이터).
 export default function RoutersPage() {
@@ -80,9 +81,12 @@ export default function RoutersPage() {
             <Input placeholder="라우터 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
           </div>
           <span className="text-xs text-muted-foreground">총 {items.length}개</span>
-          <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-3.5" /> 라우터 생성
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <RefreshControls queryKeys={[["iaas-routers"]]} />
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-3.5" /> 라우터 생성
+            </Button>
+          </div>
         </div>
       </Card>
 

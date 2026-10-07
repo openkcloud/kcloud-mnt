@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm";
+import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useImages, useSetImageVisibility, useDeleteImage, useProjects, type ImageSummary } from "@/lib/iaas-api";
 
 const VIS_VARIANT: Record<string, "success" | "secondary" | "warning" | "outline"> = {
@@ -74,6 +75,7 @@ export default function ImagesPage() {
             <Input placeholder="이미지 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
           </div>
           <span className="text-xs text-muted-foreground">총 {items.length}개</span>
+          <div className="ml-auto"><RefreshControls queryKeys={[["iaas-images"]]} /></div>
         </div>
       </Card>
 

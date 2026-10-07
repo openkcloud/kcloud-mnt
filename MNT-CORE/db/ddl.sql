@@ -94,6 +94,19 @@ CREATE TABLE iam_ssh_key (
 );
 COMMENT ON TABLE iam_ssh_key IS '사용자 SSH 공개키. 개인키 미저장(브라우저 전용). owner=iam_user.username→Keycloak sub';
 
+-- ── 프로젝트 멤버 (포털 관리, OpenStack 멤버와 별개) ────────────────
+-- project_id = OpenStack Keystone 프로젝트 UUID(포털 DB엔 프로젝트 원장이 없으므로 문자열 참조).
+-- role = 포털 레벨 역할(owner|member|viewer) — OpenStack Keystone role assignment 와 무관.
+CREATE TABLE iam_project_member (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    project_id VARCHAR(64) NOT NULL,                       -- OpenStack 프로젝트 UUID
+    user_id    BIGINT NOT NULL REFERENCES iam_user(id) ON DELETE CASCADE,
+    role       VARCHAR(20) NOT NULL DEFAULT 'member',      -- owner | member | viewer
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (project_id, user_id)
+);
+COMMENT ON TABLE iam_project_member IS '프로젝트-사용자 멤버십(포털). project_id=OpenStack UUID, role=포털 역할(OpenStack과 별개)';
+
 -- ── 메뉴 (계층형: 섹션 → 메뉴 → 서브메뉴) ────────────────────────
 -- 프론트 nav.ts 의 정적 정의를 DB 원장으로. 같은 path 라도 배치가 다르면
 -- 별도 행이다(예: /iaas/networks 는 사용자 IaaS 하위와 관리자 구성 섹션에 각각 존재).
