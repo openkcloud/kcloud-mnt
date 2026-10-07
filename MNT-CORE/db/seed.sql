@@ -35,11 +35,19 @@ INSERT INTO iam_role (code, name, description) VALUES
 
 -- ── 2) 사용자 (목업 계정) ────────────────────────────────────────
 INSERT INTO iam_user (username, password_hash, name, org) VALUES
-    ('admin', crypt('admin', gen_salt('bf')), '최현화', 'ETRI'),
-    ('user',  crypt('user',  gen_salt('bf')), '윤호영', '오케스트로');
+    ('admin',   crypt('admin',   gen_salt('bf')), '최현화', 'ETRI'),
+    ('user',    crypt('user',    gen_salt('bf')), '윤호영', '오케스트로'),
+    ('ek.lee',  crypt('ek.lee',  gen_salt('bf')), '이은경', NULL),
+    ('ky.yang', crypt('ky.yang', gen_salt('bf')), '양기영', NULL),
+    ('jw.lee',  crypt('jw.lee',  gen_salt('bf')), '이진우', NULL);
 
+-- admin/user 는 username==role code 로 자동 매핑
 INSERT INTO iam_user_role (user_id, role_id)
 SELECT u.id, r.id FROM iam_user u JOIN iam_role r ON r.code = u.username;
+-- 추가 사용자(이은경·양기영·이진우)는 사용자(user) 권한
+INSERT INTO iam_user_role (user_id, role_id)
+SELECT u.id, (SELECT id FROM iam_role WHERE code = 'user')
+  FROM iam_user u WHERE u.username IN ('ek.lee', 'ky.yang', 'jw.lee');
 
 -- ── 3) 메뉴: 섹션 ────────────────────────────────────────────────
 INSERT INTO mnu_menu (menu_type, code, label, sort_order) VALUES

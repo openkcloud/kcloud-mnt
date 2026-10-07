@@ -30,6 +30,12 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useAuth } from "@/lib/auth";
+import { cn } from "@/lib/utils";
+import { RefreshControls } from "@/components/iaas/refresh-controls";
+import {
+  useProjectMembers, usePortalUsers, useAddProjectMember, useRemoveProjectMember, useMyProjectIds,
+  type ProjectMember,
+} from "@/lib/member-api";
 import {
   Table,
   TableBody,
@@ -43,21 +49,12 @@ import type { Tenant } from "@/lib/types";
 
 const PAGE_SIZE = 20;
 
-// 멤버는 포털 DB(MNT-CORE) 관리 예정 — OpenStack과 별개. 현재는 목업.
-const MEMBERS: Record<string, { name: string; role: "admin" | "member" | "viewer"; email: string }[]> = {
-  default: [
-    { name: "윤호영", role: "admin", email: "hy.yun@okestro.com" },
-    { name: "박의규", role: "member", email: "ek.park@okestro.com" },
-    { name: "최현화", role: "member", email: "hhchoi@etri.re.kr" },
-    { name: "김대원", role: "viewer", email: "dw.kim@etri.re.kr" },
-  ],
-};
-
 const pct = (used: number, max: number) => (max > 0 ? Math.round((used / max) * 100) : 0);
 
 export default function ProjectsPage() {
   const isAdmin = useAuth((s) => s.user?.role === "admin");
-  const myEmail = useAuth((s) => s.user?.email ?? "");
+  const myUsername = useAuth((s) => s.user?.username);
+  const { data: myProjectIds } = useMyProjectIds(isAdmin ? undefined : myUsername); // 사용자는 멤버인 프로젝트만
   const { data, isLoading } = useProjects() as {
     data: { items: Tenant[]; live: boolean } | undefined;
     isLoading: boolean;
@@ -70,10 +67,8 @@ export default function ProjectsPage() {
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
 
-  // 사용자는 자신이 속한 프로젝트만 (관리자는 전체) — 멤버십은 추후 MNT-CORE DB
-  const mine = isAdmin
-    ? data.items
-    : data.items.filter((t) => (MEMBERS[t.id] ?? MEMBERS.default).some((m) => m.email === myEmail));
+  // 사용자는 자신이 멤버인 프로젝트만 (관리자는 전체) — 멤버십은 포털 DB(iam_project_member)
+  const mine = isAdmin ? data.items : data.items.filter((t) => myProjectIds?.has(t.id));
   const filtered = mine.filter((t) => !q || t.name.toLowerCase().includes(q.toLowerCase()));
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -89,11 +84,14 @@ export default function ProjectsPage() {
             <Input placeholder="프로젝트 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
           </div>
           <span className="text-xs text-muted-foreground">총 {filtered.length}개</span>
-          {isAdmin && (
-            <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
-              <Plus className="size-3.5" /> 프로젝트 생성
-            </Button>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            <RefreshControls queryKeys={[["iaas-projects"]]} />
+            {isAdmin && (
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
+                <Plus className="size-3.5" /> 프로젝트 생성
+              </Button>
+            )}
+          </div>
         </div>
       </Card>
 
@@ -191,6 +189,7 @@ export default function ProjectsPage() {
 function ProjectDetailBody({ project, isAdmin, onClose }: { project: Tenant; isAdmin: boolean; onClose: () => void }) {
   // 선택된 프로젝트의 쿼터·사용량을 그때 조회 (목록에선 안 불러옴)
   const { data: detail, isLoading, isError } = useProject(project.id);
+  const { data: members } = useProjectMembers(project.id); // 멤버는 포털 DB(MNT-CORE)
   const t = detail ?? project; // 로딩 중엔 목록 메타로 헤더 먼저 표시
   const [editOpen, setEditOpen] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -214,7 +213,7 @@ function ProjectDetailBody({ project, isAdmin, onClose }: { project: Tenant; isA
           <TabsList>
             <TabsTrigger value="overview">개요</TabsTrigger>
             <TabsTrigger value="quota">쿼터</TabsTrigger>
-            <TabsTrigger value="members">멤버 ({t.members})</TabsTrigger>
+            <TabsTrigger value="members">멤버 ({members?.length ?? 0})</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-2 pt-3">
@@ -262,14 +261,7 @@ function ProjectDetailBody({ project, isAdmin, onClose }: { project: Tenant; isA
           </TabsContent>
 
           <TabsContent value="members" className="pt-3">
-            <Card className="flex flex-col items-center gap-2 p-10 text-center">
-              <Users className="size-8 text-muted-foreground/40" />
-              <div className="text-sm text-muted-foreground">멤버 정보 준비 중</div>
-              <p className="max-w-sm text-[11px] text-muted-foreground">
-                프로젝트 멤버는 포털(MNT-CORE)에서 관리합니다 — OpenStack 멤버와 별개.
-                멤버 관리 기능 연동 후 표시됩니다.
-              </p>
-            </Card>
+            <MembersTab projectId={project.id} members={members} isAdmin={isAdmin} />
           </TabsContent>
         </Tabs>
       </div>
@@ -293,6 +285,105 @@ function ProjectDetailBody({ project, isAdmin, onClose }: { project: Tenant; isA
         </>
       )}
     </>
+  );
+}
+
+// 프로젝트 멤버 = 포털 DB. 역할 구분 없이 "현재 멤버 ↔ 후보" 전송 목록(화살표)+각 목록 검색.
+function MembersTab({ projectId, members, isAdmin }: { projectId: string; members: ProjectMember[] | undefined; isAdmin: boolean }) {
+  const { data: users } = usePortalUsers();
+  const add = useAddProjectMember(projectId);
+  const remove = useRemoveProjectMember(projectId);
+  const [qCand, setQCand] = React.useState("");
+  const [qMem, setQMem] = React.useState("");
+  const [selCand, setSelCand] = React.useState<Set<string>>(new Set());
+  const [selMem, setSelMem] = React.useState<Set<string>>(new Set());
+  const busy = add.isPending || remove.isPending;
+  const toggle = (set: React.Dispatch<React.SetStateAction<Set<string>>>, id: string) =>
+    set((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+  if (!members || !users) return <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> 멤버 조회 중…</div>;
+
+  const matchU = (u: { username: string; name: string }, q: string) => {
+    const s = q.trim().toLowerCase();
+    return !s || u.username.toLowerCase().includes(s) || u.name.toLowerCase().includes(s);
+  };
+  const memberIds = new Set(members.map((m) => m.userId));
+  const candFiltered = users.filter((u) => !memberIds.has(u.id) && matchU(u, qCand));
+  const memFiltered = members.filter((m) => matchU(m, qMem));
+
+  async function moveToMembers() {
+    const ids = [...selCand];
+    try { for (const id of ids) await add.mutateAsync({ userId: Number(id), role: "member" }); toast.success(`${ids.length}명 추가됨`); }
+    catch (e) { toast.error("추가 실패", { description: String((e as Error).message) }); }
+    setSelCand(new Set());
+  }
+  async function moveToCandidates() {
+    const ids = [...selMem];
+    try { for (const id of ids) await remove.mutateAsync(id); toast.success(`${ids.length}명 제거됨`); }
+    catch (e) { toast.error("제거 실패", { description: String((e as Error).message) }); }
+    setSelMem(new Set());
+  }
+
+  if (!isAdmin) {
+    return members.length === 0
+      ? <Card className="p-8 text-center text-sm text-muted-foreground">등록된 멤버가 없습니다.</Card>
+      : (
+        <Card className="divide-y divide-border">
+          {members.map((m) => (
+            <div key={m.userId} className="flex items-center gap-2 px-3 py-2">
+              <div className="flex size-7 items-center justify-center rounded-full bg-brand-indigo-100 text-[11px] font-semibold text-brand-indigo-700">{m.name.slice(0, 1)}</div>
+              <div><div className="text-sm font-medium">{m.name}</div><div className="font-mono text-[10px] text-muted-foreground">{m.username}{m.org ? ` · ${m.org}` : ""}</div></div>
+            </div>
+          ))}
+        </Card>
+      );
+  }
+
+  return (
+    <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-3">
+      <TransferPanel title="사용자" count={candFiltered.length} q={qCand} setQ={setQCand}
+        items={candFiltered.map((u) => ({ id: u.id, name: u.name, username: u.username, org: u.org }))}
+        selected={selCand} onToggle={(id) => toggle(setSelCand, id)} emptyText="추가할 사용자가 없습니다" />
+      <div className="flex flex-col items-center justify-center gap-2">
+        <Button size="icon-sm" variant="outline" disabled={!selCand.size || busy} title="멤버로 추가" onClick={moveToMembers}><ChevronRight className="size-4" /></Button>
+        <Button size="icon-sm" variant="outline" disabled={!selMem.size || busy} title="멤버에서 제거" onClick={moveToCandidates}><ChevronLeft className="size-4" /></Button>
+      </div>
+      <TransferPanel title="현재 멤버" count={memFiltered.length} q={qMem} setQ={setQMem}
+        items={memFiltered.map((m) => ({ id: m.userId, name: m.name, username: m.username, org: m.org }))}
+        selected={selMem} onToggle={(id) => toggle(setSelMem, id)} emptyText="멤버가 없습니다" />
+    </div>
+  );
+}
+
+function TransferPanel({ title, count, q, setQ, items, selected, onToggle, emptyText }: {
+  title: string; count: number; q: string; setQ: (v: string) => void;
+  items: { id: string; name: string; username: string; org: string }[];
+  selected: Set<string>; onToggle: (id: string) => void; emptyText: string;
+}) {
+  return (
+    <Card className="flex flex-col overflow-hidden">
+      <div className="border-b border-border p-2">
+        <div className="mb-1.5 px-1 text-[11px] font-semibold text-muted-foreground">{title} ({count})</div>
+        <div className="relative">
+          <Search className="absolute left-2 top-2 size-3.5 text-muted-foreground" />
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="아이디·이름 검색" className="h-8 pl-7 text-xs" />
+        </div>
+      </div>
+      <div className="max-h-64 min-h-40 space-y-0.5 overflow-y-auto p-1.5">
+        {items.length === 0 ? <div className="p-6 text-center text-xs text-muted-foreground">{emptyText}</div> :
+          items.map((u) => (
+            <button key={u.id} type="button" onClick={() => onToggle(u.id)}
+              className={cn("flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-secondary",
+                selected.has(u.id) && "bg-brand-indigo-50 ring-1 ring-brand-indigo-200")}>
+              <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-brand-indigo-100 text-[10px] font-semibold text-brand-indigo-700">{u.name.slice(0, 1)}</div>
+              <div className="min-w-0">
+                <div className="truncate text-xs font-medium">{u.name}</div>
+                <div className="truncate font-mono text-[10px] text-muted-foreground">{u.username}{u.org ? ` · ${u.org}` : ""}</div>
+              </div>
+            </button>
+          ))}
+      </div>
+    </Card>
   );
 }
 
