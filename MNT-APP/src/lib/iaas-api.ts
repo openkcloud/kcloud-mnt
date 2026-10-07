@@ -10,7 +10,7 @@
  * 실패 시 MSW 목업(/api/iaas/*)으로 폴백 — 백엔드 없이도 목업 동작 유지.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { IaasNetwork, Tenant } from "@/lib/types";
+import type { IaasNetwork, ProvNetwork, SecurityGroup, Tenant } from "@/lib/types";
 import { usePollingInterval } from "@/lib/polling";
 
 const RAW = process.env.NEXT_PUBLIC_IAAS_API;
@@ -564,6 +564,38 @@ export function useProjectImages(projectId: string | undefined) {
     queryFn: async (): Promise<ProjectImage[]> =>
       (await fetchJson<{ items: ProjectImage[] }>(`${IAAS_BASE}/api/iaas/projects/${projectId}/images`)).items,
     staleTime: 60 * 1000, retry: 0,
+  });
+}
+/** 승인 설정 — 티켓 프로젝트 기준 네트워크(프로젝트 소유 + 공유 + 외부). 목업 폴백 없음. */
+export function useProjectNetworks(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-project-networks", projectId],
+    enabled: !!projectId,
+    queryFn: async (): Promise<ProvNetwork[]> =>
+      (await fetchJson<{ items: ProvNetwork[] }>(`${IAAS_BASE}/api/iaas/projects/${projectId}/networks`)).items,
+    staleTime: 30 * 1000, retry: 0,
+  });
+}
+/** 승인 설정 — 프로젝트 보안그룹(라이브). 목업 폴백 없음. */
+export function useProjectSecurityGroups(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-project-sgs", projectId],
+    enabled: !!projectId,
+    queryFn: async (): Promise<SecurityGroup[]> =>
+      (await fetchJson<{ items: SecurityGroup[] }>(`${IAAS_BASE}/api/iaas/projects/${projectId}/security-groups`)).items,
+    staleTime: 30 * 1000, retry: 0,
+  });
+}
+/** Static IP 사용 가능 여부 — 서브넷 범위·게이트웨이·사용 중 포트(Neutron). */
+export function useIpCheck(networkId: string, ip: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["iaas-ip-check", networkId, ip],
+    enabled,
+    queryFn: () =>
+      fetchJson<{ available: boolean; reason: string | null }>(
+        `${IAAS_BASE}/api/iaas/networks/${networkId}/ip-check?${new URLSearchParams({ ip })}`,
+      ),
+    retry: 1,
   });
 }
 export function useSetImageVisibility() {

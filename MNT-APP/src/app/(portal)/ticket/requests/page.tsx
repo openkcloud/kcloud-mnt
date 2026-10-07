@@ -32,7 +32,8 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
-import { useOrgs, useTickets } from "@/lib/ticket-api";
+import { useOrgs, useReviewTicket, useTickets } from "@/lib/ticket-api";
+import { useIpCheck, useProjectNetworks, useProjectSecurityGroups } from "@/lib/iaas-api";
 import { PageHeader } from "@/components/page-header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -66,8 +67,8 @@ const STATUS_LABEL: Record<RequestStatus, string> = {
   rejected: "반려됨",
 };
 
-// 진행 보기 가능한 상태
-const IN_PROVISION: RequestStatus[] = ["approved", "provisioning", "completed", "failed"];
+// 진행 보기 가능한 상태 — 프로비저닝(Temporal)·진행 팝업 연결 전이라 approved 는 제외 (연결 시 추가)
+const IN_PROVISION: RequestStatus[] = ["provisioning", "completed", "failed"];
 
 function StatusBadge({ status }: { status: RequestStatus }) {
   const variant =
@@ -102,11 +103,11 @@ function StatusHelpHead() {
             </div>
             <ul className="space-y-1 text-background/80">
               <li><span className="font-medium text-background">대기중</span> · 신청 접수, 관리자 승인 대기</li>
-              <li><span className="font-medium text-background">승인</span> · 승인됨, 프로비저닝 시작 대기</li>
+              <li><span className="font-medium text-background">승인</span> · 승인됨, 관리자 프로비저닝 대기</li>
               <li><span className="font-medium text-background">생성중</span> · 가상머신 생성·연결 진행</li>
               <li><span className="font-medium text-background">완료</span> · 생성 완료, 사용 가능</li>
               <li><span className="font-medium text-background">실패</span> · 프로비저닝 실패 (재시도 가능)</li>
-              <li><span className="font-medium text-background">반려됨</span> · 승인 거부 (사유 표시)</li>
+              <li><span className="font-medium text-background">반려됨</span> · 승인 또는 프로비저닝 단계에서 거부 (사유 표시)</li>
             </ul>
           </div>
         </TooltipContent>
@@ -137,6 +138,11 @@ function specSummary(r: ResourceRequest) {
 
 function fmtDt(iso: string) {
   return iso.replace("T", " ").slice(0, 16);
+}
+
+// 반려 사유 — 승인 단계 또는 프로비저닝 단계
+function rejectReasonOf(r: ResourceRequest) {
+  return r.approvedRejectReason ?? r.provisioningRejectReason;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -267,13 +273,16 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
       )}
 
       {/* 처리 결과 */}
-      {(r.reviewedByName || r.rejectReason || r.errorMessage) && (
+      {(r.approvedByName || r.provisioningByName || r.approvedRejectByName || r.provisioningRejectByName || r.errorMessage) && (
         <div className="space-y-2.5 rounded-xl border border-border bg-secondary/30 p-3.5">
           <div className="flex items-center gap-1.5 text-xs font-semibold">
             <Clock className="size-3.5 text-muted-foreground" /> 처리 결과
           </div>
-          {r.reviewedByName && <Field label="처리자">{r.reviewedByName} · <span className="font-mono">{fmtDt(r.reviewedAt ?? "")}</span></Field>}
-          {r.rejectReason && <Field label="반려 사유"><span className="text-rose-600">{r.rejectReason}</span></Field>}
+          {r.approvedByName && <Field label="승인">{r.approvedByName} · <span className="font-mono">{fmtDt(r.approvedAt ?? "")}</span></Field>}
+          {r.provisioningByName && <Field label="프로비저닝 시작">{r.provisioningByName} · <span className="font-mono">{fmtDt(r.provisioningAt ?? "")}</span></Field>}
+          {r.approvedRejectByName && <Field label="반려 (승인 단계)">{r.approvedRejectByName} · <span className="font-mono">{fmtDt(r.approvedRejectAt ?? "")}</span></Field>}
+          {r.provisioningRejectByName && <Field label="반려 (프로비저닝 단계)">{r.provisioningRejectByName} · <span className="font-mono">{fmtDt(r.provisioningRejectAt ?? "")}</span></Field>}
+          {rejectReasonOf(r) && <Field label="반려 사유"><span className="text-rose-600">{rejectReasonOf(r)}</span></Field>}
           {r.errorMessage && <Field label="실패 사유"><span className="text-rose-600">{r.errorMessage}</span></Field>}
         </div>
       )}
@@ -300,10 +309,8 @@ function ipInCidr(ip: string, cidr: string) {
 
 // 승인 입력 — 네트워크 · IP 방식 · 보안그룹 (티켓 프로젝트 기준 라이브 조회)
 function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: ProvisionSpec | null) => void }) {
-  const { data: netData, isLoading: netLoading } = api.iaas.projectNetworks(r.projectId);
-  const { data: sgData } = api.iaas.projectSecurityGroups(r.projectId);
-  const networks = netData?.items ?? [];
-  const sgs = sgData?.items ?? [];
+  const { data: networks = [], isLoading: netLoading, error: netError } = useProjectNetworks(r.projectId);
+  const { data: sgs = [], error: sgError } = useProjectSecurityGroups(r.projectId);
   const externals = networks.filter((n) => n.kind === "external");
 
   const [networkId, setNetworkId] = React.useState("");
@@ -316,18 +323,18 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
   const net = networks.find((n) => n.id === networkId);
   const isExternal = net?.kind === "external";
   const fipNet = externals.find((n) => n.id === fipNetId) ?? externals[0];
-  const ipInRange = !!net && ipInCidr(fixedIp, net.cidr);
+  const ipInRange = !!net && net.cidr.split(", ").some((c) => ipInCidr(fixedIp, c)); // 서브넷이 여러 개면 ", " 로 연결됨
 
   // 직접 입력 IP — '중복 확인' 버튼을 누른 IP 로 사용 여부 조회. 입력을 바꾸면 다시 확인해야 한다.
   const [checkedIp, setCheckedIp] = React.useState("");
   const ipCheckReady = isExternal && ipManual && ipInRange && checkedIp === fixedIp;
   const {
     data: ipCheck, isFetching: ipChecking, isError: ipCheckFailed, error: ipCheckError, refetch: recheckIp,
-  } = api.iaas.ipCheck(networkId, checkedIp, ipCheckReady);
+  } = useIpCheck(networkId, checkedIp, ipCheckReady);
   const ipValid = !ipManual || (ipCheckReady && !ipChecking && ipCheck?.available === true);
 
   React.useEffect(() => {
-    if (!net || !ipValid) return onChange(null);
+    if (!net || !ipValid || (!isExternal && fipOn && !fipNet)) return onChange(null); // FIP 를 켰는데 풀이 없으면 승인 불가
     onChange({
       networkId: net.id,
       networkName: net.name,
@@ -339,7 +346,8 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
     });
   }, [net, isExternal, fipOn, fipNet, ipManual, fixedIp, ipValid, sgNames, onChange]);
 
-  const kindLabel = { project: "프로젝트", shared: "공유", external: "External" } as const;
+  // 사용자 희망(내부망/인터넷망)과 같은 말로 표시 — 외부(external) 망만 인터넷망
+  const kindLabel = { project: "내부망", shared: "내부망 · 공유", external: "인터넷망" } as const;
 
   return (
     <div className="space-y-3 rounded-xl border border-brand-indigo-200 bg-brand-indigo-50/30 p-3.5">
@@ -353,7 +361,9 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
       {/* 네트워크 */}
       <div className="space-y-1.5">
         <div className="text-xs font-medium">네트워크 <span className="text-rose-500">*</span></div>
-        {netLoading ? <Skeleton className="h-16" /> : (
+        {netLoading ? <Skeleton className="h-16" /> : netError ? (
+          <p className="text-xs text-rose-500">네트워크를 불러오지 못했습니다 ({netError.message}).</p>
+        ) : (
           <div className="grid gap-1.5">
             {networks.map((n) => (
               <button
@@ -368,7 +378,8 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
                 {n.kind === "external" ? <Globe className="size-4 shrink-0 text-amber-600" /> : <Wifi className="size-4 shrink-0 text-sky-600" />}
                 <span className="flex-1 font-mono text-sm">{n.name}</span>
                 <span className="font-mono text-[11px] text-muted-foreground">{n.cidr}</span>
-                <Badge variant={n.kind === "external" ? "warning" : n.kind === "shared" ? "secondary" : "outline"} className="text-[10px]">
+                {/* 색상은 '사용자 희망' 배지와 동일 — 인터넷망 amber, 내부망 sky */}
+                <Badge variant="ghost" className={cn("text-[10px]", n.kind === "external" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
                   {kindLabel[n.kind]}
                 </Badge>
               </button>
@@ -437,6 +448,7 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
       {/* 보안그룹 */}
       <div className="space-y-1.5">
         <div className="text-xs font-medium">보안그룹</div>
+        {sgError && <p className="text-xs text-rose-500">보안그룹을 불러오지 못했습니다 ({sgError.message}).</p>}
         <div className="flex flex-wrap gap-1.5">
           {sgs.map((g) => {
             const on = sgNames.includes(g.name);
@@ -771,7 +783,7 @@ function AdminView() {
   // 전체 신청 = MNT-CORE 실제 티켓 (목업 폴백 없음)
   const { data, isLoading, error } = useTickets(filters);
   const { data: orgs = [] } = useOrgs();
-  const reviewMutation = api.ticket.reviewRequest();
+  const reviewMutation = useReviewTicket();
 
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
@@ -810,24 +822,25 @@ function AdminView() {
       await reviewMutation.mutateAsync({
         id: r.id,
         action,
-        reason: action === "reject" ? rejectReason || undefined : undefined,
-        provisionSpec: action === "approve" ? spec ?? undefined : undefined,
-        reviewedBy: reviewer?.id,
-        reviewedByName: reviewer?.displayName,
+        processedBy: reviewer?.username ?? "",
+        reason: action === "reject" ? rejectReason.trim() : undefined,
+        expectedStatus: r.status,
       });
       setDetailOpen(false);
       if (action === "approve") {
-        toast.success("승인 — 프로비저닝을 시작합니다", { description: `신청 ID: ${r.id}` });
-        if (r.type === "vm") openSheet({ ...r, status: "approved", provisionSpec: spec ?? undefined });
+        toast.success("승인되었습니다", { description: `신청 ID: ${r.id}` });
       } else {
         toast.success("반려 처리됨", { description: `신청 ID: ${r.id}` });
       }
     } catch (e) {
-      toast.error(e instanceof Error && e.message.startsWith("409") ? "고정 IP가 이미 사용 중입니다. 다른 IP를 지정하세요." : "처리 실패");
+      toast.error("처리하지 못했습니다", { description: e instanceof Error ? e.message : undefined });
     }
   }
 
-  const isPendingVm = detail?.status === "pending" && detail.type === "vm";
+  // 대기 → 승인·반려, 승인(VM) → 프로비저닝·반려. 승인 설정은 프로비저닝 단계에서 입력
+  const isPending = detail?.status === "pending";
+  const isApprovedVm = detail?.status === "approved" && detail.type === "vm";
+  const canProcess = isPending || isApprovedVm;
 
   return (
     <div className="space-y-4">
@@ -905,6 +918,7 @@ function AdminView() {
             <TableBody>
               {items.map((r) => {
                 const actionable = r.status === "pending";
+                const provisionable = r.type === "vm" && r.status === "approved";
                 const inProvision = r.type === "vm" && IN_PROVISION.includes(r.status);
                 return (
                   <TableRow key={r.id} className="cursor-pointer" onClick={() => openDetail(r)}>
@@ -936,6 +950,25 @@ function AdminView() {
                             <XCircle className="size-3.5" /> 반려
                           </Button>
                         </div>
+                      ) : provisionable ? (
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 border-brand-indigo-200 text-brand-indigo-700 hover:bg-brand-indigo-50"
+                            onClick={() => openDetail(r)}
+                          >
+                            <Server className="size-3.5" /> 프로비저닝
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 border-rose-200 text-rose-600 hover:bg-rose-50"
+                            onClick={() => openDetail(r, "reject")}
+                          >
+                            <XCircle className="size-3.5" /> 반려
+                          </Button>
+                        </div>
                       ) : inProvision ? (
                         <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => openSheet(r)}>
                           {r.status === "completed" ? <CheckCircle2 className="size-3.5" />
@@ -943,8 +976,8 @@ function AdminView() {
                             : <Loader2 className="size-3.5 animate-spin" />}
                           진행 보기
                         </Button>
-                      ) : r.status === "rejected" && r.rejectReason ? (
-                        <span className="text-xs text-muted-foreground">{r.rejectReason}</span>
+                      ) : r.status === "rejected" && rejectReasonOf(r) ? (
+                        <span className="text-xs text-muted-foreground">{rejectReasonOf(r)}</span>
                       ) : null}
                     </TableCell>
                   </TableRow>
@@ -965,7 +998,7 @@ function AdminView() {
       {/* 프로비저닝 진행 사이드 시트 */}
       <ProvisioningSheet key={sheetReq?.id} req={sheetReq} open={sheetOpen} onClose={() => setSheetOpen(false)} canRetry />
 
-      {/* 신청 상세 — 신청 내용 확인 + 승인 설정 후 승인·반려 */}
+      {/* 신청 상세 — 대기: 승인·반려 / 승인(VM): 승인 설정 후 프로비저닝·반려 */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
@@ -973,15 +1006,17 @@ function AdminView() {
               신청 상세 {detail && <StatusBadge status={detail.status} />}
             </DialogTitle>
             <DialogDescription>
-              {detail?.status === "pending" ? "신청 내용을 확인하고 네트워크를 지정해 승인하거나 반려하세요." : "신청 내용입니다."}
+              {isPending ? "신청 내용을 확인하고 승인하거나 반려하세요."
+                : isApprovedVm ? "승인 설정(네트워크·보안그룹)을 지정해 프로비저닝하거나 반려하세요."
+                : "신청 내용입니다."}
             </DialogDescription>
           </DialogHeader>
           {detail && <RequestDetailBody r={detail} />}
-          {isPendingVm && <PlacementCapacity r={detail} />}
-          {isPendingVm && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
-          {detail?.status === "pending" && rejecting && (
+          {isApprovedVm && <PlacementCapacity r={detail} />}
+          {isApprovedVm && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
+          {canProcess && rejecting && (
             <div className="space-y-2">
-              <label className="text-sm font-medium">반려 사유 <span className="text-muted-foreground">(선택)</span></label>
+              <label className="text-sm font-medium">반려 사유 <span className="text-rose-500">(필수)</span></label>
               <textarea
                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                 rows={3}
@@ -992,12 +1027,12 @@ function AdminView() {
               />
             </div>
           )}
-          {detail?.status === "pending" && (
+          {canProcess && (
             <DialogFooter>
               {rejecting ? (
                 <>
                   <Button variant="outline" onClick={() => setRejecting(false)}>취소</Button>
-                  <Button variant="destructive" onClick={() => review("reject")} disabled={reviewMutation.isPending}>
+                  <Button variant="destructive" onClick={() => review("reject")} disabled={reviewMutation.isPending || !rejectReason.trim()}>
                     <XCircle className="size-3.5" /> 반려 확정
                   </Button>
                 </>
@@ -1010,12 +1045,16 @@ function AdminView() {
                   >
                     <XCircle className="size-3.5" /> 반려
                   </Button>
-                  <Button
-                    onClick={() => review("approve")}
-                    disabled={reviewMutation.isPending || (detail.type === "vm" && !spec)}
-                  >
-                    <CheckCircle2 className="size-3.5" /> 승인 · 프로비저닝 시작
-                  </Button>
+                  {isPending ? (
+                    <Button onClick={() => review("approve")} disabled={reviewMutation.isPending}>
+                      <CheckCircle2 className="size-3.5" /> 승인
+                    </Button>
+                  ) : (
+                    // 프로비저닝 API(Temporal 연결)는 개발 중
+                    <Button onClick={() => alert("개발 중")} disabled={!spec}>
+                      <Server className="size-3.5" /> 프로비저닝
+                    </Button>
+                  )}
                 </>
               )}
             </DialogFooter>
@@ -1116,10 +1155,12 @@ function UserView({ username }: { username: string }) {
                   <TableCell className="font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
                   <TableCell><StatusBadge status={r.status} /></TableCell>
                   <TableCell className="text-xs text-muted-foreground">
-                    {r.status === "rejected" && r.rejectReason ? (
-                      <span className="text-rose-600">{r.rejectReason}</span>
-                    ) : r.reviewedByName ? (
-                      `${r.reviewedByName} · ${fmtDt(r.reviewedAt ?? "")}`
+                    {r.status === "rejected" && rejectReasonOf(r) ? (
+                      <span className="text-rose-600">{rejectReasonOf(r)}</span>
+                    ) : r.provisioningByName ? (
+                      `${r.provisioningByName} · ${fmtDt(r.provisioningAt ?? "")}`
+                    ) : r.approvedByName ? (
+                      `${r.approvedByName} · ${fmtDt(r.approvedAt ?? "")}`
                     ) : "—"}
                   </TableCell>
                 </TableRow>

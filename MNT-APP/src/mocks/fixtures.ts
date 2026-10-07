@@ -1255,7 +1255,7 @@ export const resourceRequests: ResourceRequest[] = [
     keypairId: "sk-3", keypairName: "okestro-ops-key",
     acceleratorKind: "GPU", acceleratorCount: 1,
     provisionSpec: { networkId: "net-llm-int", networkName: "llm-serving-net", networkKind: "project", securityGroups: ["default", "allow-ssh"] },
-    reviewedBy: "u-001", reviewedByName: "최현화", reviewedAt: "2026-09-18T09:00:00Z",
+    approvedBy: "u-001", approvedByName: "최현화", approvedAt: "2026-09-18T09:00:00Z",
   },
   // 완료 — external 망 직접 연결 (Static IP 직접 입력)
   {
@@ -1270,7 +1270,7 @@ export const resourceRequests: ResourceRequest[] = [
     acceleratorKind: "GPU", acceleratorCount: 1,
     provisionSpec: { networkId: "net-ext-svc", networkName: "ext-svc-net", networkKind: "external", fixedIp: "198.51.100.24", securityGroups: ["default", "allow-ssh"] },
     result: { serverId: "8f1c2a4e-5b7d-4c9e-a1f3-2d6b8e0c4a71", fixedIp: "198.51.100.24" },
-    reviewedBy: "u-001", reviewedByName: "최현화", reviewedAt: "2026-09-15T15:30:00Z",
+    approvedBy: "u-001", approvedByName: "최현화", approvedAt: "2026-09-15T15:30:00Z",
   },
   // 완료 — 내부망 + Floating IP
   {
@@ -1285,7 +1285,7 @@ export const resourceRequests: ResourceRequest[] = [
     acceleratorKind: "NPU", acceleratorCount: 1,
     provisionSpec: { networkId: "net-ai-int", networkName: "ai-research-net", networkKind: "project", floatingNetworkId: "net-ext", floatingNetworkName: "ext-net", securityGroups: ["default", "allow-ssh"] },
     result: { serverId: "3b9e7d21-0c4f-4a8b-9e6d-5f2a1c7b8e90", fixedIp: "192.168.100.37", floatingIp: "203.0.113.58" },
-    reviewedBy: "u-001", reviewedByName: "최현화", reviewedAt: "2026-09-12T15:00:00Z",
+    approvedBy: "u-001", approvedByName: "최현화", approvedAt: "2026-09-12T15:00:00Z",
   },
   // 실패 — 서버 생성 단계 실패 (재시도 가능)
   {
@@ -1300,7 +1300,7 @@ export const resourceRequests: ResourceRequest[] = [
     acceleratorKind: "GPU", acceleratorCount: 1,
     provisionSpec: { networkId: "net-llm-int", networkName: "llm-serving-net", networkKind: "project", floatingNetworkId: "net-ext", floatingNetworkName: "ext-net", securityGroups: ["default", "allow-ssh", "allow-web"] },
     errorMessage: "No valid host was found. There are not enough hosts available.",
-    reviewedBy: "u-001", reviewedByName: "최현화", reviewedAt: "2026-09-19T11:00:00Z",
+    approvedBy: "u-001", approvedByName: "최현화", approvedAt: "2026-09-19T11:00:00Z",
   },
   // 반려
   {
@@ -1311,8 +1311,8 @@ export const resourceRequests: ResourceRequest[] = [
     vmName: "big-trainer-xlarge", networkType: "external", floatingIp: true,
     flavorName: "m1.2xlarge", vcpu: 32, ramGb: 128, diskGb: 1000,
     imageId: "img-1", imageName: "ubuntu-22.04-server", cloudInit: true,
-    reviewedBy: "u-001", reviewedByName: "최현화", reviewedAt: "2026-09-14T14:00:00Z",
-    rejectReason: "대용량 스펙 사용 목적 불명확 — 사유 보완 후 재신청 바랍니다",
+    approvedRejectBy: "u-001", approvedRejectByName: "최현화", approvedRejectAt: "2026-09-14T14:00:00Z",
+    approvedRejectReason: "대용량 스펙 사용 목적 불명확 — 사유 보완 후 재신청 바랍니다",
   },
   {
     id: "req-005",
@@ -1331,9 +1331,9 @@ export const resourceRequests: ResourceRequest[] = [
     storageGb: 200,
     acceleratorKind: "NPU",
     acceleratorCount: 2,
-    reviewedBy: "u-001",
-    reviewedByName: "최현화",
-    reviewedAt: "2026-09-10T16:00:00Z",
+    approvedBy: "u-001",
+    approvedByName: "최현화",
+    approvedAt: "2026-09-10T16:00:00Z",
     resultId: "svc-ai-prod",
   },
 ];

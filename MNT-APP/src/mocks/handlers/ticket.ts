@@ -180,7 +180,7 @@ function sync(r: ResourceRequest): ProvisionStep[] {
   const total = flatSubs(defs).length;
   const run = runs[r.id];
   // 시드 완료·실패 티켓은 승인 시각 기준으로 타임라인을 구성
-  const seedBase = Date.parse(r.reviewedAt ?? r.requestedAt) + APPROVED_MS;
+  const seedBase = Date.parse(r.approvedAt ?? r.requestedAt) + APPROVED_MS;
   if (r.status === "completed" && !run) return render(defs, total, seedBase);
   if (r.status === "failed") return render(defs, failedPos(r), seedBase, r.errorMessage, failedPos(r));
   if (!run) return render(defs, -1, seedBase);
@@ -304,10 +304,11 @@ export const ticketHandlers = [
     };
     const req = resourceRequests.find((r) => r.id === params.id);
     if (!req) return HttpResponse.json({ message: "not found" }, { status: 404 });
-    req.reviewedBy = body.reviewedBy;
-    req.reviewedByName = body.reviewedByName;
-    req.reviewedAt = new Date().toISOString();
+    const now = new Date().toISOString();
     if (body.action === "approve") {
+      req.approvedBy = body.reviewedBy;
+      req.approvedByName = body.reviewedByName;
+      req.approvedAt = now;
       // 승인 시 서버에서 Static IP 충돌 재확인
       const p = body.provisionSpec;
       if (p?.fixedIp) {
@@ -322,7 +323,10 @@ export const ticketHandlers = [
       }
     } else {
       req.status = "rejected";
-      req.rejectReason = body.reason;
+      req.approvedRejectBy = body.reviewedBy;
+      req.approvedRejectByName = body.reviewedByName;
+      req.approvedRejectAt = now;
+      req.approvedRejectReason = body.reason;
     }
     return HttpResponse.json({ success: true, id: params.id, action: body.action });
   }),
