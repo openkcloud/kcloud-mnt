@@ -576,7 +576,7 @@ export interface ResourceRequest {
   projectName: string;
   // VM
   vmName?: string;
-  networkType?: "internal" | "internet"; // 사용자 희망 망
+  networkType?: "internal" | "external"; // 사용자 희망 망
   flavorId?: string;       // Nova flavorRef
   imageId?: string;
   imageName?: string;
@@ -596,6 +596,7 @@ export interface ResourceRequest {
   floatingIp?: boolean;    // 사용자 공인 IP 희망
   acceleratorKind?: string;
   acceleratorCount?: number;
+  deviceProfile?: string;  // 플레이버의 Cyborg device-profile (실제 VM 티켓의 가속기 표시)
   // Cluster
   clusterName?: string;
   k8sVersion?: string;

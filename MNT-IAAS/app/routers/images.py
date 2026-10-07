@@ -58,6 +58,33 @@ def list_images():
     return {"items": items, "count": len(items)}
 
 
+@router.get("/projects/{project_id}/images")
+def list_project_images(project_id: str):
+    """프로젝트가 쓸 수 있는 active 이미지 — public + 프로젝트 소유 + 공유받은 것(거절 제외). 자원신청 템플릿용.
+    서비스 계정이 관리자라 Glance 가 전체를 돌려주므로 여기서 거른다.
+    cloudInit: 기본 true, Glance 속성 okc_cloud_init=false 인 이미지만 false(키페어 주입 불가)."""
+    try:
+        images, params = [], {"limit": 200, "status": "active"}
+        while True:  # 관리자 계정은 전체 이미지가 보이므로 페이지(next)를 끝까지 따라간다
+            page = _glance_req("GET", "/images", params=params).json()
+            images += page.get("images", [])
+            if not page.get("next") or not page.get("images"):
+                break
+            params["marker"] = images[-1]["id"]
+        out = []
+        for i in images:
+            if i.get("visibility") == "public" or i.get("owner") == project_id:
+                out.append(i)
+            elif i.get("visibility") == "shared":
+                members = _glance_req("GET", f"/images/{i['id']}/members").json().get("members", [])
+                if any(m.get("member_id") == project_id and m.get("status") != "rejected" for m in members):
+                    out.append(i)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"이미지 조회 실패: {e}")
+    items = [{**_to_image(i), "cloudInit": str(i.get("okc_cloud_init", "")).lower() != "false"} for i in out]
+    return {"items": items, "count": len(items)}
+
+
 @router.get("/images/{image_id}")
 def get_image(image_id: str):
     try:

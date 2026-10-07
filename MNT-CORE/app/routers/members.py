@@ -25,6 +25,13 @@ def list_users(db: Session = Depends(get_db)):
                        "org": r["org"], "status": r["status"]} for r in rows]}
 
 
+@router.get("/orgs")
+def list_orgs(db: Session = Depends(get_db)):
+    """조직 목록 — 신청 관리(관리자)의 조직 필터 등."""
+    rows = db.execute(text("SELECT id, code, name FROM iam_org ORDER BY name")).mappings().all()
+    return {"items": [{"id": str(r["id"]), "code": r["code"], "name": r["name"]} for r in rows]}
+
+
 @router.get("/my-projects")
 def my_projects(username: str, db: Session = Depends(get_db)):
     """해당 사용자가 멤버인 프로젝트 ID 목록(사용자 화면 스코프용)."""

@@ -4,6 +4,8 @@
 환경독립: override=template.format(service="nova")+"/v2.1", catalog=service_type="compute".
 가속기는 flavor extra_spec(accel:device_profile)에서 도출.
 """
+from urllib.parse import quote
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -85,6 +87,16 @@ def list_servers():
         raise HTTPException(502, f"가상서버 조회 실패: {e}")
     amap = _accel_map()
     return {"items": [_to_server(s, amap) for s in servers], "count": len(servers)}
+
+
+@router.get("/projects/{project_id}/server-names")
+def list_server_names(project_id: str):
+    """프로젝트의 가상서버 이름 목록(경량, Nova 1회) — 자원신청 VM 이름 중복 확인용."""
+    try:
+        servers = _nova_req("GET", f"/servers?all_tenants=1&project_id={quote(project_id, safe='')}").json()["servers"]
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"가상서버 조회 실패: {e}")
+    return {"names": [s.get("name") for s in servers]}
 
 
 @router.get("/servers/{server_id}")

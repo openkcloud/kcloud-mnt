@@ -1,5 +1,5 @@
 import { http, HttpResponse, delay } from "msw";
-import { resourceRequests, orgs, provNetworks, tenants, userProjects, projectAccelerators, flavors, vms } from "../fixtures";
+import { resourceRequests, orgs, portalUsers, provNetworks, tenants, userProjects, projectAccelerators, flavors, vms } from "../fixtures";
 import type { ProvisionSpec, ProvisionStep, ResourceRequest } from "@/lib/types";
 
 // ── 프로비저닝 시뮬레이션 ─────────────────────────────────────────
@@ -217,16 +217,19 @@ function ipInUse(networkId: string, ip: string, exceptId?: string) {
   return used ? "이미 사용 중인 IP입니다." : null;
 }
 
+// 화면은 사용자를 username 으로 보낸다 (CORE API 와 동일) — 목업 데이터는 u-00x id 기준
+const userIdOf = (username: string | null) => portalUsers.find((u) => u.username === username)?.id;
+
 // 자원 신청(티켓) — VM·서비스 클러스터 공통. 유형은 type("vm" | "cluster")으로 구분한다.
 export const ticketHandlers = [
   http.get("/api/core/orgs", async () => {
     await delay(80);
     return HttpResponse.json({ items: orgs });
   }),
-  // 사용자에게 할당된 프로젝트 (iam_user_project)
-  http.get("/api/core/users/:userId/projects", async ({ params }) => {
+  // 사용자가 속한 프로젝트 (iam_project_member)
+  http.get("/api/core/users/:username/projects", async ({ params }) => {
     await delay(100);
-    const ids = userProjects[params.userId as string] ?? [];
+    const ids = userProjects[userIdOf(params.username as string) ?? ""] ?? [];
     const items = tenants
       .filter((t) => ids.includes(t.id))
       .map((t) => ({
@@ -262,7 +265,7 @@ export const ticketHandlers = [
     let items = [...resourceRequests];
     if (status && status !== "all") items = items.filter((r) => r.status === status);
     if (type && type !== "all") items = items.filter((r) => r.type === type);
-    if (requestedBy) items = items.filter((r) => r.requestedBy === requestedBy);
+    if (requestedBy) items = items.filter((r) => r.requestedBy === userIdOf(requestedBy));
     if (orgId && orgId !== "all") items = items.filter((r) => r.orgId === orgId);
     return HttpResponse.json({ items, total: items.length });
   }),
@@ -285,6 +288,7 @@ export const ticketHandlers = [
       orgId: org?.id,
       orgName: org?.name,
       ...body,
+      requestedBy: userIdOf(String(body.requestedBy)) ?? body.requestedBy,
     } as ResourceRequest;
     resourceRequests.unshift(newReq);
     return HttpResponse.json(newReq, { status: 201 });

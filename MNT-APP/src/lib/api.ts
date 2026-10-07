@@ -1,7 +1,7 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
-  Flavor, MyProject, Org, ProvisionSpec, ProvisionStepsResp, ProvNetwork, SecurityGroup, SshKey, TemplateImage,
+  ProvisionSpec, ProvisionStepsResp, ProvNetwork, SecurityGroup,
 } from "@/lib/types";
 
 async function get<T>(url: string): Promise<T> {
@@ -52,16 +52,6 @@ export const api = {
   },
   // 자원 신청(티켓) — VM·서비스 클러스터 공통
   ticket: {
-    requests: (q?: Record<string, string>) => {
-      const search = q ? "?" + new URLSearchParams(q).toString() : "";
-      return useQuery({
-        queryKey: ["ticket", "requests", q],
-        queryFn: () => get<{ items: { status: string }[] }>(`/api/ticket/requests${search}`),
-        // 승인·생성 중인 티켓이 있으면 상태가 바뀔 때까지 2초마다 다시 조회
-        refetchInterval: (query) =>
-          query.state.data?.items.some((r) => r.status === "approved" || r.status === "provisioning") ? 2000 : false,
-      });
-    },
     reviewRequest: () => {
       const qc = useQueryClient();
       return useMutation({
@@ -94,24 +84,6 @@ export const api = {
         onSuccess: () => qc.invalidateQueries({ queryKey: ["ticket"] }),
       });
     },
-    // 신청 마법사 · 승인 폼 조회
-    myProjects: (userId: string) =>
-      useQuery({
-        queryKey: ["ticket", "my-projects", userId],
-        queryFn: () => get<{ items: MyProject[] }>(`/api/core/users/${userId}/projects`),
-        enabled: !!userId,
-      }),
-    // VM 이름 중복 확인 (같은 프로젝트)
-    vmNameCheck: (projectId: string, name: string, enabled: boolean) =>
-      useQuery({
-        queryKey: ["ticket", "vm-name-check", projectId, name],
-        queryFn: () =>
-          get<{ available: boolean; reason: string | null }>(
-            `/api/ticket/vm-name-check?${new URLSearchParams({ projectId, name })}`,
-          ),
-        enabled,
-      }),
-    orgs: () => useQuery({ queryKey: ["core", "orgs"], queryFn: () => get<{ items: Org[] }>("/api/core/orgs") }),
     createRequest: () => {
       const qc = useQueryClient();
       return useMutation({
@@ -135,16 +107,6 @@ export const api = {
     networks: () => useQuery({ queryKey: ["iaas", "networks"], queryFn: () => get("/api/iaas/networks") }),
     centers: () => useQuery({ queryKey: ["iaas", "centers"], queryFn: () => get("/api/iaas/centers") }),
     zones: () => useQuery({ queryKey: ["iaas", "zones"], queryFn: () => get("/api/iaas/zones") }),
-    flavors: () => useQuery({ queryKey: ["iaas", "flavors"], queryFn: () => get<{ items: Flavor[] }>("/api/iaas/flavors") }),
-    templateImages: () =>
-      useQuery({ queryKey: ["iaas", "template-images"], queryFn: () => get<{ items: TemplateImage[] }>("/api/iaas/template-images") }),
-    // 신청자 조직의 키페어
-    orgKeypairs: (userId: string | undefined) =>
-      useQuery({
-        queryKey: ["iaas", "keypairs", userId],
-        queryFn: () => get<{ items: SshKey[] }>(`/api/iaas/keypairs?userId=${userId}`),
-        enabled: !!userId,
-      }),
     projectNetworks: (projectId: string | undefined) =>
       useQuery({
         queryKey: ["iaas", "project-networks", projectId],
@@ -160,6 +122,7 @@ export const api = {
             `/api/iaas/networks/${networkId}/ip-check?${new URLSearchParams({ ip })}`,
           ),
         enabled,
+        retry: 1,
       }),
     projectSecurityGroups: (projectId: string | undefined) =>
       useQuery({

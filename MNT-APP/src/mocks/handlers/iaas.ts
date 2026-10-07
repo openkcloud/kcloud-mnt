@@ -12,7 +12,6 @@ import {
   flavors,
   templateImages,
   sshKeys,
-  portalUsers,
   provNetworks,
   securityGroups,
 } from "../fixtures";
@@ -70,14 +69,11 @@ export const iaasHandlers = [
     await delay(100);
     return HttpResponse.json({ items: templateImages });
   }),
-  // 키페어 — 신청자 조직의 키 (iam_ssh_key ⋈ iam_user: owner = username → org_id)
-  // 실연동: Nova 라이브 목록을 이 결과로 필터
+  // 키페어 — 신청자 본인 키만 (iam_ssh_key.owner = username)
   http.get("/api/iaas/keypairs", async ({ request }) => {
     await delay(100);
-    const userId = new URL(request.url).searchParams.get("userId");
-    const orgId = portalUsers.find((u) => u.id === userId)?.orgId;
-    const owners = new Set(portalUsers.filter((u) => u.orgId === orgId).map((u) => u.username));
-    return HttpResponse.json({ items: sshKeys.filter((k) => owners.has(k.owner)) });
+    const username = new URL(request.url).searchParams.get("username");
+    return HttpResponse.json({ items: sshKeys.filter((k) => k.owner === username) });
   }),
   // 승인용 — 티켓 프로젝트 기준: 프로젝트 소유 + shared + external
   http.get("/api/iaas/projects/:projectId/networks", async ({ params }) => {

@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
+import { useOrgs, useTickets } from "@/lib/ticket-api";
 import { PageHeader } from "@/components/page-header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -54,8 +55,6 @@ import { ResourceRequestWizard } from "@/components/resource-request-wizard";
 import { cn } from "@/lib/utils";
 import { nodes, vms, accelerators } from "@/mocks/fixtures";
 import type { ProvisionSpec, ProvisionStep, ProvStepStatus, ResourceRequest, RequestStatus } from "@/lib/types";
-
-type RequestsResp = { items: ResourceRequest[]; total: number };
 
 // ── 상태 표시 ──
 const STATUS_LABEL: Record<RequestStatus, string> = {
@@ -130,6 +129,7 @@ function TypeBadge({ type }: { type: "vm" | "cluster" }) {
 
 function specSummary(r: ResourceRequest) {
   if (r.type === "vm") {
+    if (r.deviceProfile) return `${r.flavorName ?? "—"} · ${r.deviceProfile}`;
     return `${r.flavorName ?? "—"} · ${r.acceleratorKind ?? "—"}×${r.acceleratorCount ?? 0}`;
   }
   return `Worker×${r.nodeCount ?? 0} · ${r.acceleratorKind ?? "—"}×${r.acceleratorCount ?? 0}`;
@@ -157,7 +157,7 @@ function accKindClass(kind?: string) {
 
 // 사용자 희망 망 배지
 function NetworkWish({ r }: { r: ResourceRequest }) {
-  const internet = r.networkType === "internet";
+  const internet = r.networkType === "external";
   return (
     <span className="inline-flex items-center gap-1.5">
       <Badge variant="ghost" className={cn("gap-1", internet ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
@@ -211,7 +211,9 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
               <span className="font-mono">{r.diskGb ? `${r.diskGb} GB` : r.volumeGb ? `부팅 볼륨 ${r.volumeGb} GB` : "—"}</span>
             </Field>
             <Field label="가속기">
-              {r.acceleratorKind
+              {r.deviceProfile
+                ? <Badge variant="ghost" className="gap-1 bg-purple-100 font-mono text-purple-800"><Cpu className="size-3" />{r.deviceProfile}</Badge>
+                : r.acceleratorKind
                 ? <Badge variant="ghost" className={cn("gap-1 font-mono", accKindClass(r.acceleratorKind))}><Cpu className="size-3" />{r.acceleratorKind} × {r.acceleratorCount ?? 1}</Badge>
                 : <span className="text-muted-foreground">없음</span>}
             </Field>
@@ -319,7 +321,9 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
   // 직접 입력 IP — '중복 확인' 버튼을 누른 IP 로 사용 여부 조회. 입력을 바꾸면 다시 확인해야 한다.
   const [checkedIp, setCheckedIp] = React.useState("");
   const ipCheckReady = isExternal && ipManual && ipInRange && checkedIp === fixedIp;
-  const { data: ipCheck, isFetching: ipChecking } = api.iaas.ipCheck(networkId, checkedIp, ipCheckReady);
+  const {
+    data: ipCheck, isFetching: ipChecking, isError: ipCheckFailed, error: ipCheckError, refetch: recheckIp,
+  } = api.iaas.ipCheck(networkId, checkedIp, ipCheckReady);
   const ipValid = !ipManual || (ipCheckReady && !ipChecking && ipCheck?.available === true);
 
   React.useEffect(() => {
@@ -397,7 +401,7 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
                   variant="outline"
                   className="h-7"
                   disabled={!ipInRange || (ipChecking && checkedIp === fixedIp)}
-                  onClick={() => setCheckedIp(fixedIp)}
+                  onClick={() => (checkedIp === fixedIp ? recheckIp() : setCheckedIp(fixedIp))}
                 >
                   중복 확인
                 </Button>
@@ -408,8 +412,9 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
             !ipInRange ? <p className="text-xs text-rose-500">{net.cidr} 범위의 호스트 IP를 입력하세요.</p>
               : !ipCheckReady ? <p className="text-xs text-muted-foreground">중복 확인을 눌러 IP 사용 여부를 확인하세요.</p>
               : ipChecking ? <p className="text-xs text-muted-foreground">IP 사용 여부 확인 중…</p>
+              : ipCheckFailed ? <p className="text-xs text-rose-500">IP 중복 확인에 실패했습니다{ipCheckError?.message ? ` (${ipCheckError.message})` : ""}. 중복 확인을 다시 눌러 주세요.</p>
               : ipCheck?.available ? <p className="text-xs text-brand-mint-700">사용 가능한 IP입니다.</p>
-              : <p className="text-xs text-rose-500">{ipCheck?.reason ?? "IP를 확인할 수 없습니다."}</p>
+              : <p className="text-xs text-rose-500">{ipCheck?.reason ?? "사용할 수 없는 IP입니다."}</p>
           )}
         </div>
       ) : (
@@ -763,11 +768,9 @@ function AdminView() {
   if (typeFilter !== "all") filters.type = typeFilter;
   if (orgFilter !== "all") filters.orgId = orgFilter;
 
-  const { data, isLoading } = api.ticket.requests(filters) as {
-    data: RequestsResp | undefined;
-    isLoading: boolean;
-  };
-  const { data: orgData } = api.ticket.orgs();
+  // 전체 신청 = MNT-CORE 실제 티켓 (목업 폴백 없음)
+  const { data, isLoading, error } = useTickets(filters);
+  const { data: orgs = [] } = useOrgs();
   const reviewMutation = api.ticket.reviewRequest();
 
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
@@ -854,7 +857,7 @@ function AdminView() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">전체 조직</SelectItem>
-              {(orgData?.items ?? []).map((o) => <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>)}
+              {orgs.map((o) => <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -949,8 +952,8 @@ function AdminView() {
               })}
               {items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className="py-12 text-center text-sm text-muted-foreground">
-                    조건에 맞는 신청이 없습니다.
+                  <TableCell colSpan={9} className={cn("py-12 text-center text-sm", error ? "text-rose-600" : "text-muted-foreground")}>
+                    {error ? `신청 목록을 불러오지 못했습니다 (${error.message}).` : "조건에 맞는 신청이 없습니다."}
                   </TableCell>
                 </TableRow>
               )}
@@ -1031,19 +1034,16 @@ function AdminView() {
 }
 
 // ─────────── 사용자 뷰 ───────────
-function UserView({ userId }: { userId: string }) {
+function UserView({ username }: { username: string }) {
   const [wizardOpen, setWizardOpen] = React.useState(false);
   const [statusFilter, setStatusFilter] = React.useState("all");
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
 
-  const filters: Record<string, string> = { requestedBy: userId };
+  // 내 신청 = MNT-CORE 실제 티켓 (목업 폴백 없음)
+  const filters: Record<string, string> = { requestedBy: username };
   if (statusFilter !== "all") filters.status = statusFilter;
-
-  const { data, isLoading } = api.ticket.requests(filters) as {
-    data: RequestsResp | undefined;
-    isLoading: boolean;
-  };
+  const { data, isLoading, error } = useTickets(filters, !!username);
 
   const items = data?.items ?? [];
   const pending = items.filter((r) => r.status === "pending").length;
@@ -1126,8 +1126,10 @@ function UserView({ userId }: { userId: string }) {
               ))}
               {items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="py-12 text-center text-sm text-muted-foreground">
-                    신청 내역이 없습니다. 위의 "자원 신청" 버튼으로 신청하세요.
+                  <TableCell colSpan={7} className={cn("py-12 text-center text-sm", error ? "text-rose-600" : "text-muted-foreground")}>
+                    {error
+                      ? `신청 목록을 불러오지 못했습니다 (${error.message}).`
+                      : "신청 내역이 없습니다. 위의 \"자원 신청\" 버튼으로 신청하세요."}
                   </TableCell>
                 </TableRow>
               )}
@@ -1191,7 +1193,7 @@ export default function RequestsPage() {
             : "VM 또는 K8s 클러스터 자원을 신청하고 처리 현황을 확인합니다."
         }
       />
-      {isAdmin ? <AdminView /> : <UserView userId={user?.id ?? ""} />}
+      {isAdmin ? <AdminView /> : <UserView username={user?.username ?? ""} />}
     </div>
   );
 }
