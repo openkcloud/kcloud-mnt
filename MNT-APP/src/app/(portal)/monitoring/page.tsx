@@ -163,7 +163,7 @@ export default function MonitoringOverviewPage() {
                     : "mgmt 관리도메인 하위 서비스클러스터의 가속기를 벤더별로 집계합니다."
                 }
               />
-              <StatusTag connected api="/api/v2/clusters/{c}/nodes/{n}/accelerators" />
+              <StatusTag connected={!!accel} api="/api/v2/clusters/{c}/nodes/{n}/accelerators" />
             </span>
           </CardTitle>
           <CardDescription>공통 6종 + 파생 2종을 GPU·NPU 같은 지표 이름으로 조회한다.</CardDescription>
