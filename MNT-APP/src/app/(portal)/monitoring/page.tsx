@@ -169,7 +169,7 @@ export default function MonitoringOverviewPage() {
       <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
         <QueryValue label="전력 효율" value={fmtN(ov?.power_efficiency_pct_per_watt, 2)} unit="%/W" delta={0} sparkData={sparkline(1, 24, 42, 6)} color="mint" connected={!!ov} />
         <QueryValue label="저장소 사용률" value="62" unit="%" delta={0} sparkData={sparkline(2, 24, 60, 4)} color="indigo" connected={false} />
-        <QueryValue label="쓰로틀링 횟수" value="14" unit="회" delta={0} sparkData={sparkline(3, 24, 12, 8)} color="rose" connected={false} />
+        <QueryValue label="쓰로틀 장치" value={accel ? String(accel.throttled_count) : "—"} unit={accel ? `/ ${accel.accelerator_count}대` : "대"} delta={0} sparkData={sparkline(3, 24, 12, 8)} color="rose" connected={!!accel} />
         <QueryValue label="가속기 사용률" value={fmtN(ov?.accelerator_utilization_percent, 0)} unit="%" delta={0} sparkData={sparkline(4, 24, 65, 15)} color="violet" connected={!!ov} />
         <QueryValue label="서버 총 전력" value={ov?.total_power_watts != null ? (ov.total_power_watts / 1000).toFixed(2) : "—"} unit="kW" delta={0} sparkData={sparkline(5, 24, 9, 1.2)} color="amber" connected={!!ov} />
         <QueryValue label="정상 노드" value={ov?.nodes_ready != null ? `${ov.nodes_ready} / ${ov.nodes_total}` : "—"} unit="" delta={0} sparkData={sparkline(6, 24, 6, 0)} color="sky" connected={!!ov} />
