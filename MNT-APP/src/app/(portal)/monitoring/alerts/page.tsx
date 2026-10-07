@@ -1,4 +1,5 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   AlertTriangle, Bell, Plus, Edit, Trash2, MoreVertical, Mail, MessageSquare, Webhook,
@@ -45,68 +46,97 @@ interface AlertPolicy {
   channels: ("email" | "slack" | "webhook")[];
   enabled: boolean;
   target: string;
+  /** 규칙 성격 설명 */
+  scenario?: string;
+  /** 평가에 쓰는 모니터링 API 경로 */
+  source: string;
 }
 
 const INITIAL_POLICIES: AlertPolicy[] = [
   {
-    id: "pol-001",
-    name: "vLLM 추론 지연 초과",
-    metric: "inference_latency_p99_ms",
-    condition: ">",
-    threshold: 1000,
-    duration: "5m",
-    severity: "critical",
-    channels: ["email", "slack"],
-    enabled: true,
-    target: "namespace=llm-serving",
+    id: "pol-001", name: "가속기 온도 임계 근접",
+    metric: "temperature_celsius", condition: ">=", threshold: 80, duration: "5m",
+    severity: "warning", channels: ["email", "slack"], enabled: true,
+    target: "가속기 전체", source: "/clusters/{c}/nodes/{n}/accelerators/{id}/metrics",
   },
   {
-    id: "pol-002",
-    name: "GPU 가동률 임계 초과",
-    metric: "gpu_utilization_pct",
-    condition: ">=",
-    threshold: 95,
-    duration: "10m",
-    severity: "warning",
-    channels: ["slack"],
-    enabled: true,
-    target: "kind=GPU",
+    id: "pol-002", name: "가속기 사용률 포화",
+    metric: "utilization_percent", condition: ">=", threshold: 95, duration: "10m",
+    severity: "warning", channels: ["slack"], enabled: true,
+    target: "cluster=l40s", source: "/clusters/{c}/nodes/{n}/accelerators/{id}/metrics",
   },
   {
-    id: "pol-003",
-    name: "Pod 재시작 반복",
-    metric: "pod_restart_count",
-    condition: ">",
-    threshold: 5,
-    duration: "15m",
-    severity: "warning",
-    channels: ["email"],
-    enabled: true,
-    target: "cluster=svc-ai-prod",
+    id: "pol-003", name: "가속기 메모리 포화",
+    metric: "memory_used_bytes / memory_total_bytes", condition: ">=", threshold: 90, duration: "10m",
+    severity: "warning", channels: ["slack"], enabled: true,
+    target: "가속기 전체", source: "/clusters/{c}/nodes/{n}/accelerators/{id}/metrics",
   },
   {
-    id: "pol-004",
-    name: "노드 오프라인",
-    metric: "node_ready",
-    condition: "==",
-    threshold: 0,
-    duration: "2m",
-    severity: "critical",
-    channels: ["email", "slack", "webhook"],
-    enabled: true,
-    target: "pool=pool-2",
+    id: "pol-004", name: "노드 NotReady",
+    metric: "resources.nodes.not_ready", condition: ">=", threshold: 1, duration: "2m",
+    severity: "critical", channels: ["email", "slack", "webhook"], enabled: true,
+    target: "cluster=mgmt", source: "/clusters/{c}/resource",
   },
   {
-    id: "pol-005",
-    name: "볼륨 사용률 경고",
-    metric: "volume_used_pct",
-    condition: ">=",
-    threshold: 85,
-    duration: "30m",
-    severity: "info",
-    channels: ["email"],
-    enabled: false,
-    target: "type=SSD",
+    id: "pol-005", name: "노드 디스크 사용률",
+    metric: "disk_usage_percent", condition: ">=", threshold: 85, duration: "30m",
+    severity: "info", channels: ["email"], enabled: true,
+    target: "노드 전체", source: "/clusters/{c}/nodes/{n}/metrics",
+  },
+  {
+    id: "pol-006", name: "TDP 대비 전력 과다",
+    metric: "tdp_ratio_pct", condition: ">=", threshold: 90, duration: "10m",
+    severity: "warning", channels: ["slack"], enabled: false,
+    target: "벤더 전체", source: "/monitoring/power/efficiency",
+  },
+  {
+    id: "pol-007", name: "오류 로그 급증",
+    metric: "log_level=error 건수 / 5m", condition: ">=", threshold: 20, duration: "5m",
+    severity: "warning", channels: ["slack"], enabled: true,
+    target: "cluster 전체", source: "/logs/search",
+  },
+  // ── 이상감지 시나리오 6종 (CR-OBS-11) — 평가 가능한 필드로 표현 ──
+  {
+    id: "pol-008", name: "알림 묶기 — 같은 노드의 동시 이상을 하나로",
+    metric: "healthy=false + error 로그 동시 발생", condition: ">=", threshold: 2, duration: "5m",
+    severity: "critical", channels: ["slack", "webhook"], enabled: true,
+    target: "노드 단위", source: "/…/accelerators/{id}/metrics + /logs/search",
+    scenario: "가속기 비정상과 오류 로그가 같은 노드에서 함께 뜨면 하나의 사건으로 묶어 한 번만 알린다.",
+  },
+  {
+    id: "pol-009", name: "상대 비교 — 같은 클러스터 중앙값 이탈",
+    metric: "utilization_percent 중앙값 대비 편차(%p)", condition: ">", threshold: 30, duration: "10m",
+    severity: "warning", channels: ["slack"], enabled: true,
+    target: "cluster 단위", source: "/clusters/{c}/nodes/{n}/accelerators",
+    scenario: "임계값 대신 같은 묶음 안의 다른 카드와 비교해 혼자 튀는 것을 잡는다.",
+  },
+  {
+    id: "pol-010", name: "알람 억제 — 노드가 죽으면 하위 알림 정지",
+    metric: "resources.nodes.not_ready", condition: ">=", threshold: 1, duration: "1m",
+    severity: "critical", channels: ["email", "slack"], enabled: true,
+    target: "노드 하위 전체", source: "/clusters/{c}/resource",
+    scenario: "노드가 NotReady면 그 노드에 속한 가속기·Pod 알림은 억제해 한 사건만 남긴다.",
+  },
+  {
+    id: "pol-011", name: "시간대별 정상 범위 이탈",
+    metric: "utilization_percent 시계열 표준편차", condition: ">", threshold: 2, duration: "15m",
+    severity: "warning", channels: ["email"], enabled: false,
+    target: "가속기 전체", source: "/monitoring/metrics/timeseries",
+    scenario: "같은 요일·시간대의 평소 범위를 기준선으로 두고 벗어날 때만 알린다.",
+  },
+  {
+    id: "pol-012", name: "spike 무시 — 지속될 때만 알림",
+    metric: "temperature_celsius", condition: ">=", threshold: 80, duration: "5m",
+    severity: "warning", channels: ["slack"], enabled: true,
+    target: "가속기 전체", source: "/…/accelerators/{id}/metrics",
+    scenario: "순간 튐은 무시하고 임계값 초과가 지속 시간 동안 이어질 때만 올린다.",
+  },
+  {
+    id: "pol-013", name: "NPU 신규 지표 — 규칙 기반 시작",
+    metric: "healthy", condition: "==", threshold: 0, duration: "2m",
+    severity: "critical", channels: ["slack"], enabled: true,
+    target: "vendor=furiosa | rebellions", source: "/…/accelerators/{id}/metrics",
+    scenario: "기준선을 쌓기 전까지는 정상 여부 규칙으로 시작하고, 데이터가 모이면 baseline으로 옮긴다.",
   },
 ];
 
@@ -134,10 +164,18 @@ export default function AlertsPage() {
 
   return (
     <div className="space-y-4">
+      <ChangeMark ids={["CR-OBS-10", "CR-OBS-11", "CR-OBS-09"]}>
       <PageHeader
         title="알람"
-        description="알람 정책 관리 · 채널 설정 · 활성 알람 조회"
+        description="임계 규칙 평가 · 채널 설정 · 활성 알람 조회"
       />
+      </ChangeMark>
+
+      <div className="rounded-md border border-sky-200 bg-sky-50/60 px-3 py-2 text-[11px] text-sky-900">
+        <strong>구성 기준</strong> — 모니터링 API v2는 지표·로그 조회까지 제공하고 알람 자체는 제공하지 않는다. 그래서 포털이
+        <span className="mx-1 font-mono">/monitoring/metrics/query</span>·<span className="mx-1 font-mono">/clusters/…/accelerators/{"{id}"}/metrics</span>·<span className="mx-1 font-mono">/logs/search</span>를 주기 조회해
+        <strong>임계 규칙을 직접 평가</strong>하고, 정책·채널·발생 이력은 포털에 저장한다. 정책 조건은 API가 실제로 주는 필드만 쓴다.
+      </div>
 
       <Tabs defaultValue="active">
         <TabsList>
@@ -204,7 +242,7 @@ export default function AlertsPage() {
         <TabsContent value="policies">
           <div className="mb-3 flex items-center justify-between">
             <div className="text-xs text-muted-foreground">
-              메트릭 임계값 초과 시 지정된 채널로 알림을 발송한다.
+              포털이 조회 API를 주기 호출해 조건을 평가하고 지정 채널로 보낸다. pol-008~013은 이상감지 시나리오 6종을 평가 가능한 필드로 옮긴 것이다. 기록 → 이벤트 → 알림 3단계 승격. SLO는 이번 과제에서 제외.
             </div>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
               <Plus className="size-3.5" /> 정책 생성
@@ -217,6 +255,7 @@ export default function AlertsPage() {
                   <TableHead className="w-12">활성</TableHead>
                   <TableHead>정책 이름</TableHead>
                   <TableHead>조건</TableHead>
+                  <TableHead>평가 경로</TableHead>
                   <TableHead>대상</TableHead>
                   <TableHead>지속</TableHead>
                   <TableHead>심각도</TableHead>
@@ -238,6 +277,7 @@ export default function AlertsPage() {
                     </TableCell>
                     <TableCell>
                       <div className="font-medium">{p.name}</div>
+                      {p.scenario && <div className="mt-0.5 max-w-md text-[10px] leading-snug text-muted-foreground">{p.scenario}</div>}
                       <div className="font-mono text-[10px] text-muted-foreground">{p.id}</div>
                     </TableCell>
                     <TableCell>
@@ -245,6 +285,7 @@ export default function AlertsPage() {
                         {p.metric} <span className="text-brand-indigo-600">{p.condition}</span> {p.threshold}
                       </span>
                     </TableCell>
+                    <TableCell className="max-w-[240px] truncate font-mono text-[10px] text-muted-foreground" title={p.source}>{p.source}</TableCell>
                     <TableCell className="font-mono text-xs">{p.target}</TableCell>
                     <TableCell className="font-mono text-xs">{p.duration}</TableCell>
                     <TableCell>
@@ -402,6 +443,7 @@ function PolicyDialog({
       channels: ["email"],
       enabled: true,
       target: "",
+      source: "/monitoring/metrics/query",
     },
   );
 
@@ -419,6 +461,7 @@ function PolicyDialog({
         channels: ["email"],
         enabled: true,
         target: "",
+        source: "/monitoring/metrics/query",
       });
   }, [editing, open]);
 
