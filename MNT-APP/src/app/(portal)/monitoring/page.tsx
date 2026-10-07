@@ -23,6 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
 import { cn, formatNumber } from "@/lib/utils";
+import { useAcceleratorSummary, type VendorMetrics } from "@/lib/obs-api";
 
 // Datadog "Top List" style data
 const TOP_HOSTS = [
@@ -110,6 +111,36 @@ const COMMON_METRICS = [
   { name: "TDP 대비 전력(파생)", unit: "%", rngd: "65.9", atom: "72.0", l40s: "69.4", note: "TDP 180W · 85W · 350W" },
 ];
 
+// MNT-OBS 가속기 공통 지표 응답(벤더별)을 표 8행으로 변환. 데이터 없으면 목업 폴백.
+function fmtGB(bytes: number | null | undefined) {
+  return bytes ? `${(bytes / 1e9).toFixed(1)} GB` : "—";
+}
+function buildAccelRows(v?: Record<string, VendorMetrics>) {
+  if (!v) return COMMON_METRICS;
+  const cell = (vendor: string, fn: (m: VendorMetrics) => string) => {
+    const m = v[vendor];
+    return m ? fn(m) : "—";
+  };
+  const defs: { name: string; unit: string; note: string; get: (m: VendorMetrics) => string }[] = [
+    { name: "온도", unit: "℃", note: "임계 85", get: (m) => m.temperature_celsius.toFixed(1) },
+    { name: "전력", unit: "W", note: "장치당 평균", get: (m) => m.power_watts.toFixed(1) },
+    { name: "사용률", unit: "%", note: "코어 사용률", get: (m) => m.utilization_percent.toFixed(0) },
+    { name: "메모리 사용량", unit: "", note: "총량 대비", get: (m) => fmtGB(m.memory_used_bytes) },
+    { name: "메모리 총량", unit: "", note: "장치 탑재 용량", get: (m) => fmtGB(m.memory_total_bytes) },
+    { name: "health", unit: "", note: "정상/전체", get: (m) => `${m.healthy_count}/${m.count} 정상` },
+    { name: "전력효율(파생)", unit: "%/W", note: "사용률 ÷ 전력", get: (m) => m.efficiency_pct_per_watt.toFixed(2) },
+    { name: "TDP 대비 전력(파생)", unit: "%", note: "전력 ÷ TDP", get: (m) => m.tdp_ratio_pct.toFixed(1) },
+  ];
+  return defs.map((d) => ({
+    name: d.name,
+    unit: d.unit,
+    note: d.note,
+    rngd: cell("furiosa", d.get),
+    atom: cell("rebellions", d.get),
+    l40s: cell("nvidia", d.get),
+  }));
+}
+
 // Sparkline series
 function sparkline(seed: number, len = 24, base = 50, amp = 30) {
   return Array.from({ length: len }, (_, i) => ({
@@ -119,6 +150,8 @@ function sparkline(seed: number, len = 24, base = 50, amp = 30) {
 }
 
 export default function MonitoringOverviewPage() {
+  const { data: accel } = useAcceleratorSummary("mgmt");
+  const commonMetrics = buildAccelRows(accel?.vendors);
   return (
     <div className="space-y-4">
       {/* KPI band — Datadog "Query Value" widgets */}
@@ -160,7 +193,7 @@ export default function MonitoringOverviewPage() {
               </tr>
             </thead>
             <tbody className="[&_td]:py-1.5 [&_td]:pr-3 [&_td]:align-top">
-              {COMMON_METRICS.map((m) => (
+              {commonMetrics.map((m) => (
                 <tr key={m.name} className="border-b border-border/60 last:border-0">
                   <td className="font-medium">{m.name}<span className="ml-1 text-muted-foreground">{m.unit}</span></td>
                   <td className="font-mono tabular-nums">{m.rngd}</td>

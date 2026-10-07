@@ -6,6 +6,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
+from .routers import monitoring
 
 app = FastAPI(title="MNT-OBS", version="0.1.0")
 
@@ -29,7 +30,8 @@ router = APIRouter()
 
 @router.get("/")
 def root():
-    return {"service": settings.service_name, "message": "스캐폴드 — 엔드포인트는 추후 구현"}
+    return {"service": settings.service_name, "message": "MNT-OBS"}
 
 
 app.include_router(router, prefix=settings.api_prefix)
+app.include_router(monitoring.router, prefix=settings.api_prefix)

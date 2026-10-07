@@ -3,11 +3,13 @@ import * as React from "react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Clock, RefreshCw } from "lucide-react";
+import { Clock, RefreshCw } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useScope, isFeatureVisible } from "@/lib/scope";
+import { usePollingInterval } from "@/lib/polling";
 
 const TABS = [
   { href: "/monitoring", label: "인프라 모니터링" },
@@ -26,7 +28,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const tabs = TABS.filter((t) => !t.feature || isFeatureVisible(visible, t.feature));
   const tracesOn = isFeatureVisible(visible, "monitoring.traces.internal");
   const [range, setRange] = React.useState(1);
-  const [auto, setAuto] = React.useState(true);
+  // 자동 새로고침 = 포털 폴링 주기 스토어(실제 쿼리 refetchInterval 을 구동)
+  const qc = useQueryClient();
+  const intervalMs = usePollingInterval((s) => s.intervalMs);
+  const setIntervalMs = usePollingInterval((s) => s.setIntervalMs);
+  const auto = intervalMs > 0;
+  const autoSecs = auto ? Math.round(intervalMs / 1000) : 30;
   return (
     <div className="space-y-6">
       <PageHeader
@@ -37,8 +44,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Button variant="outline" size="sm" onClick={() => { const next = (range + 1) % RANGES.length; setRange(next); toast.success(`조회 구간 ${RANGES[next]}`); }} title="누를 때마다 조회 구간이 바뀐다">
               <Clock className="size-3.5" /> {RANGES[range]}
             </Button>
-            <Button variant={auto ? "outline" : "ghost"} size="sm" onClick={() => { setAuto((a) => !a); toast.success(auto ? "자동 새로고침 중지" : "자동 새로고침 30s 재개"); }}>
-              <RefreshCw className={cn("size-3.5", auto && "text-brand-mint-600")} /> {auto ? "자동 새로고침 30s" : "자동 새로고침 꺼짐"}
+            <Button
+              variant={auto ? "outline" : "ghost"}
+              size="sm"
+              onClick={() => {
+                if (auto) {
+                  setIntervalMs(0);
+                  toast.success("자동 새로고침 중지");
+                } else {
+                  setIntervalMs(30000);
+                  qc.invalidateQueries({ queryKey: ["obs-accel-summary"] });
+                  toast.success("자동 새로고침 30s 재개");
+                }
+              }}
+            >
+              <RefreshCw className={cn("size-3.5", auto && "text-brand-mint-600")} /> {auto ? `자동 새로고침 ${autoSecs}s` : "자동 새로고침 꺼짐"}
             </Button>
           </>
         }
