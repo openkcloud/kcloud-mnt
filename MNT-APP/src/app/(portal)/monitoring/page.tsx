@@ -1,4 +1,5 @@
 "use client";
+import { ChangeMark } from "@/components/change-mark";
 import * as React from "react";
 import {
   Activity,
@@ -11,10 +12,7 @@ import {
   Zap,
 } from "lucide-react";
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
-  Cell,
   Line,
   LineChart,
   Tooltip as RTooltip,
@@ -35,11 +33,57 @@ const TOP_HOSTS = [
   { name: "npu-node-01.openkcloud", value: 42, unit: "%" },
   { name: "pim-node-01.openkcloud", value: 18, unit: "%" },
 ];
-const TOP_SVCS = [
-  { name: "vllm-solar-10b", value: 1240, unit: "req/m" },
-  { name: "stt-atom-edge", value: 880, unit: "req/m" },
-  { name: "stt-rngd-prod", value: 560, unit: "req/m" },
-  { name: "kserve-furiosa-rngd", value: 320, unit: "req/m" },
+// 전력 분해 — dimension=vendor|cluster|node|accelerator
+const POWER_BREAKDOWN: Record<string, { key: string; watts: number; layer: string }[]> = {
+  vendor: [
+    { key: "nvidia", watts: 144.9, layer: "accelerator" },
+    { key: "furiosa", watts: 78.0, layer: "accelerator" },
+    { key: "rebellions", watts: 18.4, layer: "accelerator" },
+  ],
+  cluster: [
+    { key: "mgmt", watts: 2306.0, layer: "server" },
+    { key: "l40s", watts: 144.9, layer: "accelerator" },
+    { key: "furiosa", watts: 41.3, layer: "accelerator" },
+    { key: "furiosa-1348", watts: 36.7, layer: "accelerator" },
+    { key: "rebellions", watts: 18.4, layer: "accelerator" },
+  ],
+  node: [
+    { key: "innogrid-gpu", watts: 108.8, layer: "accelerator" },
+    { key: "compute1", watts: 612.4, layer: "server" },
+    { key: "compute2", watts: 584.1, layer: "server" },
+    { key: "innogrid-npu", watts: 78.0, layer: "accelerator" },
+  ],
+  accelerator: [
+    { key: "GPU-fe5ba66d…", watts: 108.8, layer: "accelerator" },
+    { key: "GPU-9a21c7d4…", watts: 36.1, layer: "accelerator" },
+    { key: "RNGD-0", watts: 41.3, layer: "accelerator" },
+    { key: "ATOM-0", watts: 18.4, layer: "accelerator" },
+  ],
+};
+
+// 전력 시계열 — layers: server | cpu | accelerator
+const POWER_SERIES = Array.from({ length: 24 }, (_, i) => ({
+  t: `${String(i).padStart(2, "0")}:00`,
+  server: Math.round(2200 + Math.sin(i / 3.2) * 180 + (i % 5) * 12),
+  cpu: Math.round(1550 + Math.sin(i / 2.8 + 1) * 140 + (i % 4) * 8),
+  accelerator: Math.round(230 + Math.sin(i / 2.4 + 2) * 60 + (i % 3) * 6),
+}));
+
+// 클러스터 자원 현황 — GET /clusters/{cluster}/resource
+const CLUSTER_RESOURCE = [
+  { cluster: "mgmt", type: "management", nodes: "8 / 8", cpu: "1.8%", mem: "6.5%", acc: "4장 · 0%", watts: 2306.0 },
+  { cluster: "l40s", type: "service", nodes: "1 / 1", cpu: "—", mem: "12.4%", acc: "1장 · 0%", watts: 144.9 },
+  { cluster: "furiosa", type: "service", nodes: "1 / 1", cpu: "—", mem: "8.1%", acc: "2장 · 0%", watts: 41.3 },
+  { cluster: "furiosa-1348", type: "service", nodes: "1 / 1", cpu: "—", mem: "7.3%", acc: "1장 · 0%", watts: 36.7 },
+  { cluster: "rebellions", type: "service", nodes: "1 / 1", cpu: "—", mem: "5.2%", acc: "1장 · 0%", watts: 18.4 },
+];
+
+// 최근 오류 로그 — GET /logs/search?log_level=error
+const RECENT_ERRORS = [
+  { ts: "16:22:41", level: "error", cluster: "mgmt", message: "neutron-server: connection to RabbitMQ timed out (attempt 3/5)", field: "" },
+  { ts: "16:19:08", level: "error", cluster: "l40s", message: "NVRM: Xid (PCI:0000:00:05): 43, pid=12894, Ch 00000018", field: "XID 43" },
+  { ts: "16:14:52", level: "warning", cluster: "furiosa", message: "furiosa-device-plugin: device npu0 temperature 79C approaching limit", field: "" },
+  { ts: "16:08:30", level: "error", cluster: "mgmt", message: "kubelet: Memory cgroup out of memory: Killed process 20481 (python3)", field: "OOM" },
 ];
 
 // Heatmap data — 24h × hosts
@@ -54,12 +98,17 @@ const HEATMAP = HOST_NAMES.map((h) =>
   })),
 );
 
-// Distribution data
-const LATENCY_DIST = Array.from({ length: 20 }, (_, i) => ({
-  bucket: `${i * 50}-${(i + 1) * 50}`,
-  ms: i * 50 + 25,
-  count: Math.round(Math.exp(-Math.pow(i - 6, 2) / 8) * 1200 + Math.random() * 80),
-}));
+// 가속기 3종 공통 지표 — 공통 6종 + 파생 2종
+const COMMON_METRICS = [
+  { name: "온도", unit: "℃", rngd: "54", atom: "47", l40s: "63", note: "임계 85" },
+  { name: "전력", unit: "W", rngd: "118.6", atom: "61.2", l40s: "242.8", note: "실시간" },
+  { name: "사용률", unit: "%", rngd: "48", atom: "39", l40s: "71", note: "코어 사용률" },
+  { name: "메모리 사용량", unit: "", rngd: "22.6 GB", atom: "7.8 GB", l40s: "28.4 GiB", note: "총량 대비" },
+  { name: "메모리 총량", unit: "", rngd: "51.0 GB", atom: "16.9 GB", l40s: "46.1 GiB", note: "장치 탑재 용량" },
+  { name: "health", unit: "", rngd: "1 정상", atom: "1 정상", l40s: "1 정상", note: "1 = 정상" },
+  { name: "전력효율(파생)", unit: "%/W", rngd: "0.40", atom: "0.64", l40s: "0.29", note: "사용률 ÷ 전력" },
+  { name: "TDP 대비 전력(파생)", unit: "%", rngd: "65.9", atom: "72.0", l40s: "69.4", note: "TDP 180W · 85W · 350W" },
+];
 
 // Sparkline series
 function sparkline(seed: number, len = 24, base = 50, amp = 30) {
@@ -73,21 +122,68 @@ export default function MonitoringOverviewPage() {
   return (
     <div className="space-y-4">
       {/* KPI band — Datadog "Query Value" widgets */}
-      <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <QueryValue label="Avg P99 지연" value="820" unit="ms" delta={-12} sparkData={sparkline(1, 24, 800, 100)} color="indigo" />
-        <QueryValue label="에러율" value="0.34" unit="%" delta={-8} sparkData={sparkline(2, 24, 0.4, 0.2)} color="rose" />
-        <QueryValue label="추론 RPS" value="2.3K" unit="req/s" delta={18} sparkData={sparkline(3, 24, 60, 30)} color="mint" />
-        <QueryValue label="GPU 사용률" value="68" unit="%" delta={5} sparkData={sparkline(4, 24, 65, 15)} color="violet" />
-        <QueryValue label="전력 (실시간)" value="9.2" unit="kW" delta={-3} sparkData={sparkline(5, 24, 9, 1.2)} color="amber" />
-        <QueryValue label="활성 호스트" value="6" unit="대" delta={0} sparkData={sparkline(6, 24, 6, 0)} color="sky" />
+      <ChangeMark ids={["CR-OBS-01", "CR-OBS-02", "CR-OBS-03"]}>
+<div className="rounded-md border border-sky-200 bg-sky-50/60 px-3 py-2 text-[11px] text-sky-900">
+        <strong>구성 기준</strong> — 이 화면의 모든 항목은 <strong>모니터링 API v2</strong>가 실제로 주는 응답 필드로만 구성했다. 카드·표마다 조회 경로를 함께 표시한다.
+        서비스 응답 지연(P50/P95/P99)·에러율·추론 RPS는 API에 없어 화면에서 뺐고, 전력 효율 · 저장소 사용률 · 쓰로틀링 횟수로 대신한다.
+        저장소 사용률은 노드 로컬 디스크 기준이며(공유 스토리지 용량 API는 준비 중), 쓰로틀링 횟수는 가속기 부가 메트릭이라 벤더에 따라 값이 없을 수 있다.
       </div>
+</ChangeMark>
+      <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
+        <QueryValue label="전력 효율" value="0.42" unit="%/W" delta={6} sparkData={sparkline(1, 24, 42, 6)} color="mint" note="power/efficiency" />
+        <QueryValue label="저장소 사용률" value="62" unit="%" delta={3} sparkData={sparkline(2, 24, 60, 4)} color="indigo" note="nodes/{n}/metrics" />
+        <QueryValue label="쓰로틀링 횟수" value="14" unit="회" delta={-9} sparkData={sparkline(3, 24, 12, 8)} color="rose" note="accelerators/{id}/metrics" />
+        <QueryValue label="가속기 사용률" value="68" unit="%" delta={5} sparkData={sparkline(4, 24, 65, 15)} color="violet" note="clusters/{c}/resource" />
+        <QueryValue label="서버 총 전력" value="2.31" unit="kW" delta={-3} sparkData={sparkline(5, 24, 9, 1.2)} color="amber" note="power/summary" />
+        <QueryValue label="정상 노드" value="12 / 12" unit="" delta={0} sparkData={sparkline(6, 24, 6, 0)} color="sky" note="monitoring/overview" />
+      </div>
+
+      {/* 가속기 3종 공통 지표 — 2차 워크샵 이노그리드 p.22~23 (CR-OBS-04) */}
+      <ChangeMark ids={["CR-OBS-04"]}>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between text-base">
+            가속기 공통 지표
+            <Badge variant="ghost" className="font-mono text-[10px]">/clusters/{"{c}"}/…/accelerators</Badge>
+          </CardTitle>
+          <CardDescription>공통 6종 + 파생 2종을 GPU·NPU 같은 지표 이름으로 조회한다.</CardDescription>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-left text-[11px] text-muted-foreground">
+                <th className="py-1.5 pr-3 font-medium">지표</th>
+                <th className="py-1.5 pr-3 font-medium">Furiosa RNGD (NPU)</th>
+                <th className="py-1.5 pr-3 font-medium">Rebellions ATOM (NPU)</th>
+                <th className="py-1.5 pr-3 font-medium">NVIDIA L40S (GPU)</th>
+                <th className="py-1.5 font-medium">비고</th>
+              </tr>
+            </thead>
+            <tbody className="[&_td]:py-1.5 [&_td]:pr-3 [&_td]:align-top">
+              {COMMON_METRICS.map((m) => (
+                <tr key={m.name} className="border-b border-border/60 last:border-0">
+                  <td className="font-medium">{m.name}<span className="ml-1 text-muted-foreground">{m.unit}</span></td>
+                  <td className="font-mono tabular-nums">{m.rngd}</td>
+                  <td className="font-mono tabular-nums">{m.atom}</td>
+                  <td className="font-mono tabular-nums">{m.l40s}</td>
+                  <td className="text-muted-foreground">{m.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
+      </ChangeMark>
 
       {/* Hexagonal host map + Heatmap */}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">
           <CardHeader>
-            <CardTitle>호스트 맵</CardTitle>
-            <CardDescription>가속기 활용률 — 색상 = 부하</CardDescription>
+            <CardTitle className="flex items-center justify-between text-base">
+              호스트 맵
+              <Badge variant="ghost" className="font-mono text-[10px]">/clusters/{"{c}"}/nodes</Badge>
+            </CardTitle>
+            <CardDescription>노드별 가속기 사용률 — 색상 = 부하</CardDescription>
           </CardHeader>
           <CardContent>
             <HexHostMap />
@@ -107,8 +203,11 @@ export default function MonitoringOverviewPage() {
 
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>활용률 히트맵 (24h × 호스트)</CardTitle>
-            <CardDescription>Datadog 스타일 — 시간×자원 부하 분포</CardDescription>
+            <CardTitle className="flex items-center justify-between text-base">
+              활용률 히트맵 (24h × 호스트)
+              <Badge variant="ghost" className="font-mono text-[10px]">/monitoring/metrics/timeseries</Badge>
+            </CardTitle>
+            <CardDescription>metric=gpu_utilization · period=24h · step=1h 응답을 호스트×시간으로 편다.</CardDescription>
           </CardHeader>
           <CardContent>
             <Heatmap />
@@ -122,7 +221,7 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               상위 호스트 — 가속기 사용률
-              <Badge variant="ghost" className="font-mono">avg(rate.gpu.util)</Badge>
+              <Badge variant="ghost" className="font-mono text-[10px]">sort_by=utilization_percent</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -132,93 +231,165 @@ export default function MonitoringOverviewPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between text-base">
-              상위 추론 서비스 — 분당 요청
-              <Badge variant="ghost" className="font-mono">sum(serving.requests)</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {TOP_SVCS.map((h, i) => (
-              <TopRow key={h.name} idx={i + 1} name={h.name} value={h.value} unit={h.unit} max={1500} color="mint" />
-            ))}
-          </CardContent>
-        </Card>
+        <PowerBreakdownCard />
       </div>
 
-      {/* Distribution + Errors */}
+      {/* 전력 시계열 + 최근 오류 로그 */}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>응답 시간 분포 (지난 1시간)</CardTitle>
-            <CardDescription>모든 추론 서비스 합산 · P50/P95/P99 표시</CardDescription>
+            <CardTitle className="flex items-center justify-between text-base">
+              전력 시계열 — 계층별
+              <Badge variant="ghost" className="font-mono text-[10px]">/monitoring/power/timeseries</Badge>
+            </CardTitle>
+            <CardDescription>server(IPMI 실측) · cpu(추정) · accelerator(벤더 exporter) 세 계층을 같은 축에 둔다. period·step·aggregation으로 구간을 바꾼다.</CardDescription>
           </CardHeader>
           <CardContent>
             <ChartContainer
-              config={{ count: { label: "요청 수", color: "var(--brand-indigo-500)" } }}
+              config={{
+                server: { label: "server", color: "var(--brand-indigo-500)" },
+                cpu: { label: "cpu", color: "#f59e0b" },
+                accelerator: { label: "accelerator", color: "var(--brand-mint-500)" },
+              }}
               className="h-[220px] w-full"
             >
-              <BarChart data={LATENCY_DIST}>
+              <LineChart data={POWER_SERIES}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="ms" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}ms`} />
-                <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                <XAxis dataKey="t" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} interval={3} />
+                <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}W`} />
                 <RTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="count" radius={[3, 3, 0, 0]}>
-                  {LATENCY_DIST.map((d, i) => (
-                    <Cell
-                      key={i}
-                      fill={
-                        d.ms > 900 ? "#dc2626" :
-                          d.ms > 600 ? "#f59e0b" : "var(--brand-indigo-500)"
-                      }
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
+                <Line type="monotone" dataKey="server" stroke="var(--brand-indigo-500)" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="cpu" stroke="#f59e0b" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="accelerator" stroke="var(--brand-mint-500)" strokeWidth={2} dot={false} />
+              </LineChart>
             </ChartContainer>
             <div className="mt-3 flex items-center gap-6 text-xs">
-              <Marker label="P50" value="220ms" color="bg-brand-indigo-500" />
-              <Marker label="P95" value="620ms" color="bg-amber-500" />
-              <Marker label="P99" value="820ms" color="bg-rose-500" />
+              <Marker label="server" value="2,306 W" color="bg-brand-indigo-500" />
+              <Marker label="cpu" value="1,603 W" color="bg-amber-500" />
+              <Marker label="accelerator" value="241 W" color="bg-brand-mint-500" />
             </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>활성 문제</CardTitle>
-            <CardDescription>옵저버빌리티 알람 · 자동 우선순위</CardDescription>
+            <CardTitle className="flex items-center justify-between text-base">
+              최근 오류 로그
+              <Badge variant="ghost" className="font-mono text-[10px]">/logs/search</Badge>
+            </CardTitle>
+            <CardDescription>log_level=error 최신순. 자동 추출 필드(XID·OOM)는 배지로 표시.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            {[
-              { sev: "critical", title: "Neutron API 지연 > 1s", svc: "pool-3", ago: "12m" },
-              { sev: "warning", title: "GPU 온도 78°C 임계 근접", svc: "acc-a100-1-2", ago: "30m" },
-              { sev: "warning", title: "테넌트 쿼터 92% 도달", svc: "proj-llm-serving", ago: "1h" },
-              { sev: "info", title: "K8s 1.30.5 업그레이드 진행", svc: "k8s-3", ago: "2h" },
-            ].map((p, i) => (
+            {RECENT_ERRORS.map((e, i) => (
               <div key={i} className="flex items-start gap-2.5 rounded-lg border border-border p-2.5">
-                <AlertCircle
-                  className={cn(
-                    "size-4 shrink-0 mt-0.5",
-                    p.sev === "critical" ? "text-rose-600" :
-                      p.sev === "warning" ? "text-amber-600" : "text-sky-600",
-                  )}
-                />
-                <div className="flex-1 space-y-0.5">
-                  <div className="text-sm font-medium leading-tight">{p.title}</div>
-                  <div className="font-mono text-[11px] text-muted-foreground">{p.svc} · {p.ago}</div>
+                <AlertCircle className={cn("mt-0.5 size-4 shrink-0", e.level === "error" ? "text-rose-600" : "text-amber-600")} />
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="truncate text-[12px] leading-tight">{e.message}</div>
+                  <div className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+                    <span>{e.ts}</span>
+                    <span>·</span>
+                    <span>{e.cluster}</span>
+                    {e.field && <Badge variant="warning" className="ml-0.5 px-1 py-0 text-[9px]">{e.field}</Badge>}
+                  </div>
                 </div>
               </div>
             ))}
           </CardContent>
         </Card>
       </div>
+
+      {/* 클러스터 자원 현황 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between text-base">
+            클러스터 자원 현황
+            <Badge variant="ghost" className="font-mono text-[10px]">/clusters/{"{c}"}/resource</Badge>
+          </CardTitle>
+          <CardDescription>관리 클러스터 1개 + 서비스 클러스터 4개. 서비스 클러스터는 쿠버네티스·IPMI가 없어 CPU·서버 전력이 비어 있다.</CardDescription>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-left text-[11px] text-muted-foreground">
+                <th className="py-1.5 pr-3 font-medium">클러스터</th>
+                <th className="py-1.5 pr-3 font-medium">종류</th>
+                <th className="py-1.5 pr-3 font-medium">노드 (Ready/전체)</th>
+                <th className="py-1.5 pr-3 font-medium">CPU 사용률</th>
+                <th className="py-1.5 pr-3 font-medium">메모리 사용률</th>
+                <th className="py-1.5 pr-3 font-medium">가속기</th>
+                <th className="py-1.5 font-medium">전력</th>
+              </tr>
+            </thead>
+            <tbody className="[&_td]:py-1.5 [&_td]:pr-3">
+              {CLUSTER_RESOURCE.map((c) => (
+                <tr key={c.cluster} className="border-b border-border/60 last:border-0">
+                  <td className="font-mono font-medium">{c.cluster}</td>
+                  <td>
+                    <Badge variant={c.type === "management" ? "default" : "outline"} className="text-[10px]">
+                      {c.type === "management" ? "관리" : "서비스"}
+                    </Badge>
+                  </td>
+                  <td className="font-mono tabular-nums">{c.nodes}</td>
+                  <td className="font-mono tabular-nums">{c.cpu}</td>
+                  <td className="font-mono tabular-nums">{c.mem}</td>
+                  <td className="font-mono tabular-nums">{c.acc}</td>
+                  <td className="font-mono tabular-nums">{formatNumber(c.watts)} W</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
+
     </div>
   );
 }
 
 // ────── Datadog-style components ──────
+/** 전력 분해 — dimension 파라미터를 바꿔 같은 응답을 다른 기준으로 본다 */
+function PowerBreakdownCard() {
+  const DIMS = [
+    { key: "vendor", label: "벤더별" },
+    { key: "cluster", label: "클러스터별" },
+    { key: "node", label: "노드별" },
+    { key: "accelerator", label: "카드별" },
+  ];
+  const [dim, setDim] = React.useState("vendor");
+  const items = POWER_BREAKDOWN[dim];
+  const max = Math.max(...items.map((i) => i.watts));
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between text-base">
+          전력 분해
+          <Badge variant="ghost" className="font-mono text-[10px]">/monitoring/power/breakdown</Badge>
+        </CardTitle>
+        <CardDescription>dimension 파라미터로 쪼개는 기준을 바꾼다.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="flex flex-wrap gap-1">
+          {DIMS.map((d) => (
+            <button
+              key={d.key}
+              type="button"
+              onClick={() => setDim(d.key)}
+              className={cn(
+                "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                dim === d.key ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
+        {items.map((it, i) => (
+          <TopRow key={it.key} idx={i + 1} name={`${it.key}  ·  ${it.layer}`} value={it.watts} unit="W" max={max} color="mint" />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 function QueryValue({
   label,
   value,
@@ -226,12 +397,15 @@ function QueryValue({
   delta,
   sparkData,
   color,
+  note,
 }: {
   label: string;
   value: string;
   unit: string;
   delta: number;
   sparkData: { i: number; v: number }[];
+  /** 지표 보조 설명 (산출식·단위·수집 주기) */
+  note?: string;
   color: "indigo" | "mint" | "rose" | "violet" | "amber" | "sky";
 }) {
   const colorMap = {
@@ -244,7 +418,12 @@ function QueryValue({
   };
   const positive = delta > 0;
   return (
-    <Card className="p-3">
+    <Card className="relative p-3">
+      {note && (
+        <span className="absolute right-2 top-2 rounded border border-sky-200 bg-sky-50 px-1 text-[9px] text-sky-800" title="대체 지표 검토 중">
+          {note}
+        </span>
+      )}
       <div className="text-[11px] text-muted-foreground">{label}</div>
       <div className="mt-0.5 flex items-baseline gap-1">
         <span className="text-2xl font-bold tabular-nums">{value}</span>
