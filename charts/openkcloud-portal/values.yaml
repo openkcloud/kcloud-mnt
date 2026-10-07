@@ -6,7 +6,7 @@ global:
   namespace: openkcloud-mnt
   image:
     registry: harbor.io:7443/mnt   # Harbor 프로젝트 mnt
-    tag: develop                   # 공통 태그(배포 시 -set global.image.tag=<git-sha> 로 덮기)
+    tag: c12e187                   # 현재 배포 태그(재빌드 시 교체 또는 --set global.image.tag=<git-sha>)
     pullPolicy: IfNotPresent
   # Harbor pull 자격증명 시크릿(docker-registry 타입) — 별도 생성 필요
   imagePullSecrets:
@@ -45,16 +45,16 @@ backends:
       API_PREFIX: /api/iaas
       CORS_ORIGINS: ""
       CORE_API_BASE: http://mnt-core.openkcloud-mnt.svc.cluster.local
-      # OpenStack (2026-10-02 도메인: *.openstack.internal:25443, 사내 root CA 서명)
-      OS_AUTH_URL: https://keystone-api.openstack.internal:25443/v3
+      # OpenStack: 클러스터 내부는 ingressgateway 443 (25443은 외부 NAT 전용!).
+      # CoreDNS가 *-api.openstack.internal → 192.168.90.252(ingressgateway)로 해석.
+      OS_AUTH_URL: https://keystone-api.openstack.internal/v3
       OS_PROJECT_NAME: admin
       OS_USER_DOMAIN_NAME: Default
       OS_PROJECT_DOMAIN_NAME: Default
       OS_REGION_NAME: ""
-      OS_INSECURE: "true"              # 초기: verify off. root CA 마운트 후 false 로.
-      # 엔드포인트 해석: override = ingress 직접(검증된 패턴). catalog 로 바꾸려면 교체.
-      OS_ENDPOINT_MODE: override
-      OS_ENDPOINT_TEMPLATE: "https://{service}-api.openstack.internal:25443"
+      OS_INSECURE: "true"              # 초기: verify off. 사내 root CA 신뢰 후 false 로.
+      OS_ENDPOINT_MODE: override       # ingress 직접(검증된 패턴)
+      OS_ENDPOINT_TEMPLATE: "https://{service}-api.openstack.internal"
       OS_INTERFACE: internal
 
   paas:
@@ -87,15 +87,15 @@ frontend:
 # ── Istio 게이트웨이(single-origin 라우팅) ──────────────────────────
 gateway:
   enabled: true
-  # 포털 접속 호스트 (TODO: 실제 도메인으로. /etc/hosts → 210.114.95.50 매핑)
-  host: portal.kcloud.cluster.local
-  # VirtualService 를 바인딩할 Gateway 리소스 이름
-  gatewayName: openkcloud-portal
-  # true 면 아래 설정으로 Gateway 리소스도 생성. 기존 게이트웨이에 붙이려면 false + gatewayName 지정.
-  create: true
+  # 포털 접속 호스트 — portal-gateway 가 *.kcloud.etri 와일드카드 + TLS 제공
+  host: portal.kcloud.etri
+  # 기존 게이트웨이 재사용(새로 안 만듦). VirtualService 만 여기에 바인딩.
+  gatewayName: istio-system/portal-gateway
+  create: false
+  # 아래는 create: true 일 때만 사용(참고용)
   istioSelector:
     istio: ingressgateway
   port: 443
   tls:
     mode: SIMPLE
-    credentialName: openkcloud-portal-tls   # istio-system 의 TLS Secret 이름
+    credentialName: portal-wildcard-tls
