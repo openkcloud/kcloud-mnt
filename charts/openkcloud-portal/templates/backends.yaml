@@ -2,8 +2,8 @@
 {{- $root := . -}}
 {{- range $name, $b := .Values.backends }}
 {{- if ne (toString $b.enabled) "false" }}
-{{- $full := printf "mnt-%s" $name -}}
-{{- $port := default 8000 $b.port -}}
+{{- $full := printf "mnt-%s" $name }}
+{{- $port := default 8000 $b.port }}
 ---
 apiVersion: v1
 kind: ConfigMap
