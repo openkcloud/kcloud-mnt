@@ -1,5 +1,8 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import type {
+  Flavor, MyProject, Org, ProvisionSpec, ProvisionStepsResp, ProvNetwork, SecurityGroup, SshKey, TemplateImage,
+} from "@/lib/types";
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
@@ -53,17 +56,62 @@ export const api = {
       const search = q ? "?" + new URLSearchParams(q).toString() : "";
       return useQuery({
         queryKey: ["ticket", "requests", q],
-        queryFn: () => get(`/api/ticket/requests${search}`),
+        queryFn: () => get<{ items: { status: string }[] }>(`/api/ticket/requests${search}`),
+        // 승인·생성 중인 티켓이 있으면 상태가 바뀔 때까지 2초마다 다시 조회
+        refetchInterval: (query) =>
+          query.state.data?.items.some((r) => r.status === "approved" || r.status === "provisioning") ? 2000 : false,
       });
     },
     reviewRequest: () => {
       const qc = useQueryClient();
       return useMutation({
-        mutationFn: ({ id, action, reason }: { id: string; action: "approve" | "reject"; reason?: string }) =>
-          patch(`/api/ticket/requests/${id}`, { action, reason }),
-        onSuccess: () => qc.invalidateQueries({ queryKey: ["ticket", "requests"] }),
+        mutationFn: ({ id, ...body }: {
+          id: string;
+          action: "approve" | "reject";
+          reason?: string;
+          provisionSpec?: ProvisionSpec;
+          reviewedBy?: string;
+          reviewedByName?: string;
+        }) => patch(`/api/ticket/requests/${id}`, body),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ["ticket"] }),
       });
     },
+    // 프로비저닝 진행 단계 — 진행 중이면 폴링
+    steps: (id: string | undefined) =>
+      useQuery({
+        queryKey: ["ticket", "steps", id],
+        queryFn: () => get<ProvisionStepsResp>(`/api/ticket/requests/${id}/steps`),
+        enabled: !!id,
+        refetchInterval: (q) => {
+          const st = q.state.data?.status;
+          return st === "approved" || st === "provisioning" ? 1000 : false;
+        },
+      }),
+    retry: () => {
+      const qc = useQueryClient();
+      return useMutation({
+        mutationFn: (id: string) => post(`/api/ticket/requests/${id}/retry`, {}),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ["ticket"] }),
+      });
+    },
+    // 신청 마법사 · 승인 폼 조회
+    myProjects: (userId: string) =>
+      useQuery({
+        queryKey: ["ticket", "my-projects", userId],
+        queryFn: () => get<{ items: MyProject[] }>(`/api/core/users/${userId}/projects`),
+        enabled: !!userId,
+      }),
+    // VM 이름 중복 확인 (같은 프로젝트)
+    vmNameCheck: (projectId: string, name: string, enabled: boolean) =>
+      useQuery({
+        queryKey: ["ticket", "vm-name-check", projectId, name],
+        queryFn: () =>
+          get<{ available: boolean; reason: string | null }>(
+            `/api/ticket/vm-name-check?${new URLSearchParams({ projectId, name })}`,
+          ),
+        enabled,
+      }),
+    orgs: () => useQuery({ queryKey: ["core", "orgs"], queryFn: () => get<{ items: Org[] }>("/api/core/orgs") }),
     createRequest: () => {
       const qc = useQueryClient();
       return useMutation({
@@ -87,6 +135,38 @@ export const api = {
     networks: () => useQuery({ queryKey: ["iaas", "networks"], queryFn: () => get("/api/iaas/networks") }),
     centers: () => useQuery({ queryKey: ["iaas", "centers"], queryFn: () => get("/api/iaas/centers") }),
     zones: () => useQuery({ queryKey: ["iaas", "zones"], queryFn: () => get("/api/iaas/zones") }),
+    flavors: () => useQuery({ queryKey: ["iaas", "flavors"], queryFn: () => get<{ items: Flavor[] }>("/api/iaas/flavors") }),
+    templateImages: () =>
+      useQuery({ queryKey: ["iaas", "template-images"], queryFn: () => get<{ items: TemplateImage[] }>("/api/iaas/template-images") }),
+    // 신청자 조직의 키페어
+    orgKeypairs: (userId: string | undefined) =>
+      useQuery({
+        queryKey: ["iaas", "keypairs", userId],
+        queryFn: () => get<{ items: SshKey[] }>(`/api/iaas/keypairs?userId=${userId}`),
+        enabled: !!userId,
+      }),
+    projectNetworks: (projectId: string | undefined) =>
+      useQuery({
+        queryKey: ["iaas", "project-networks", projectId],
+        queryFn: () => get<{ items: ProvNetwork[] }>(`/api/iaas/projects/${projectId}/networks`),
+        enabled: !!projectId,
+      }),
+    // Static IP 사용 여부 (Neutron 포트 조회)
+    ipCheck: (networkId: string, ip: string, enabled: boolean) =>
+      useQuery({
+        queryKey: ["iaas", "ip-check", networkId, ip],
+        queryFn: () =>
+          get<{ available: boolean; reason: string | null }>(
+            `/api/iaas/networks/${networkId}/ip-check?${new URLSearchParams({ ip })}`,
+          ),
+        enabled,
+      }),
+    projectSecurityGroups: (projectId: string | undefined) =>
+      useQuery({
+        queryKey: ["iaas", "project-sgs", projectId],
+        queryFn: () => get<{ items: SecurityGroup[] }>(`/api/iaas/projects/${projectId}/security-groups`),
+        enabled: !!projectId,
+      }),
   },
   paas: {
     clusters: () => useQuery({ queryKey: ["paas", "clusters"], queryFn: () => get("/api/paas/clusters") }),

@@ -14,6 +14,7 @@ import {
   HardDrive,
   KeyRound,
   Boxes,
+  Disc3,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -32,18 +33,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
-import { keypairs as ALL_KEYPAIRS } from "@/mocks/fixtures";
+import type { Flavor, TemplateImage } from "@/lib/types";
 
 const STEPS = [
   { key: "project", title: "프로젝트", icon: FolderKanban, desc: "OpenStack 프로젝트 선택" },
-  { key: "network", title: "네트워크", icon: Network, desc: "Neutron 네트워크·Floating IP" },
+  { key: "network", title: "네트워크", icon: Network, desc: "희망 망 · 공인 IP" },
   { key: "spec", title: "스펙", icon: Server, desc: "스펙 — vCPU·RAM·Disk·가속기" },
+  { key: "template", title: "템플릿", icon: Disc3, desc: "OS 이미지 · 볼륨 · 키페어" },
   { key: "review", title: "확인", icon: CheckCircle2, desc: "요청 검토 및 제출" },
 ] as const;
 
 type StepKey = typeof STEPS[number]["key"];
 
-// CMP 자체 DB(project_accelerator_allocations) — NodeDeviceReport 기반 할당 결과
+// CMP 자체 DB(project_accelerator_allocations) — NodeDeviceReport 기반 할당 결과 (서비스 클러스터 신청용)
 const PROJECTS = [
   {
     id: "proj-ai-research",
@@ -94,26 +96,12 @@ const USER_NETWORKS = [
   },
 ];
 
-// Flavor extra spec에 pci_passthrough:alias 또는 Cyborg resource request가 포함됨
-const FLAVORS = [
-  { name: "m1.small",   vcpu: 4,  ramGb: 16,  diskGb: 100,  accel: null },
-  { name: "m1.large",   vcpu: 8,  ramGb: 32,  diskGb: 200,  accel: null },
-  { name: "m1.xlarge",  vcpu: 16, ramGb: 64,  diskGb: 500,  accel: null },
-  { name: "m1.2xlarge", vcpu: 32, ramGb: 128, diskGb: 1000, accel: null },
-  { name: "g1.a100",    vcpu: 32, ramGb: 128, diskGb: 1000, accel: { kind: "GPU", label: "NVIDIA A100 × 1" } },
-  { name: "g1.l40s",    vcpu: 16, ramGb: 64,  diskGb: 500,  accel: { kind: "GPU", label: "NVIDIA L40S × 1" } },
-  { name: "n1.rngd-1",  vcpu: 16, ramGb: 64,  diskGb: 500,  accel: { kind: "NPU", label: "Furiosa RNGD × 1" } },
-  { name: "n1.rngd-2",  vcpu: 32, ramGb: 128, diskGb: 1000, accel: { kind: "NPU", label: "Furiosa RNGD × 2" } },
-  { name: "n1.atom-1",  vcpu: 16, ramGb: 64,  diskGb: 500,  accel: { kind: "NPU", label: "Rebellions ATOM × 1" } },
-];
+// 부팅 볼륨 최대 크기 (GB)
+const MAX_VOLUME_GB = 500;
 
-// 루트 디스크(스펙 내장)와 별개로 붙는 추가 데이터 스토리지(GB)
-const STORAGE_PRESETS = [
-  { label: "없음", gb: 0 },
-  { label: "512 GB", gb: 512 },
-  { label: "1 TB", gb: 1024 },
-  { label: "2 TB", gb: 2048 },
-];
+// VM 이름 = 서버 이름 = hostname. Nova hostname 규칙(^[a-zA-Z0-9]+[a-zA-Z0-9-]*[a-zA-Z0-9]+$, 2~63자)에서
+// 영문은 소문자만 허용. 생성 시 hostname 에도 같은 값을 지정한다(microversion 2.90+).
+const VM_NAME_RE = /^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$/;
 
 interface ResourceRequestWizardProps {
   open: boolean;
@@ -134,7 +122,7 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && close()}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>자원 신청</DialogTitle>
           <DialogDescription>
@@ -188,11 +176,13 @@ const K8S_FLAVORS = [
 
 // ── 가상머신 신청 탭 ──────────────────────────────────────────
 // 탭이 바뀌거나 모달이 닫히면 언마운트되므로 입력값은 자동으로 초기화된다.
+// 프로젝트 = 포털 DB(할당분), 스펙·템플릿·키페어 = OpenStack 라이브 조회
 function VmRequestForm({ onDone }: { onDone: () => void }) {
   const user = useAuth((s) => s.user);
-  const isAdmin = user?.role === "admin";
-  const myId = user?.email?.split("@")[0] ?? "";
   const createRequest = api.ticket.createRequest();
+  const { data: projData } = api.ticket.myProjects(user?.id ?? "");
+  const { data: flavorData } = api.iaas.flavors();
+  const { data: imageData } = api.iaas.templateImages();
 
   const [step, setStep] = React.useState<StepKey>("project");
   const [vmName, setVmName] = React.useState("");
@@ -200,16 +190,36 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
   const [network, setNetwork] = React.useState<string>("");
   const [floatingIp, setFloatingIp] = React.useState(false);
   const [flavor, setFlavor] = React.useState<string>("");
-  const [extraStorage, setExtraStorage] = React.useState<number>(0); // GB, 0 = 없음
-  const [customStorage, setCustomStorage] = React.useState(false); // 직접 입력 모드
-  const [keypair, setKeypair] = React.useState<string>("");
+  const [image, setImage] = React.useState<string>("");
+  const [volumeGb, setVolumeGb] = React.useState<number>(0);
+  const [keypair, setKeypair] = React.useState<string>(""); // 키페어 이름
+
+  const projects = projData?.items ?? [];
+  const flavors = flavorData?.items ?? [];
+  const images = imageData?.items ?? [];
+
+  // 이름 형식 검사 후 입력이 멈추면(0.4초) 중복 확인
+  const [debouncedName, setDebouncedName] = React.useState("");
+  React.useEffect(() => {
+    const t = setTimeout(() => setDebouncedName(vmName), 400);
+    return () => clearTimeout(t);
+  }, [vmName]);
+  const nameFormatOk = VM_NAME_RE.test(vmName);
+  const nameCheckReady = nameFormatOk && debouncedName === vmName && !!project;
+  const { data: nameCheck, isFetching: nameChecking } = api.ticket.vmNameCheck(project, debouncedName, nameCheckReady);
+  const nameOk = nameCheckReady && !nameChecking && nameCheck?.available === true;
 
   const stepIdx = STEPS.findIndex((s) => s.key === step);
-
   const selectedNetworkObj = USER_NETWORKS.find((n) => n.id === network);
+  const selectedProject = projects.find((p) => p.id === project);
+  const selectedFlavor = flavors.find((f) => f.name === flavor);
+  const selectedImage = images.find((i) => i.id === image);
+  const needVolume = !!selectedFlavor && selectedFlavor.diskGb === 0;
+  const minVolume = Math.max(1, selectedImage?.minDiskGb ?? 1);
 
-  // 내 키페어만 (관리자는 전체) — VM 소유자와 키페어 소유자 정합
-  const myKeypairs = isAdmin ? ALL_KEYPAIRS : ALL_KEYPAIRS.filter((k) => k.owner === myId);
+  // 키페어 — 라이브 목록을 신청자 조직의 키페어로 필터
+  const { data: kpData } = api.iaas.orgKeypairs(user?.id);
+  const orgKeypairs = kpData?.items ?? [];
 
   function handleNetworkSelect(id: string) {
     setNetwork(id);
@@ -217,22 +227,37 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
     if (net && !net.fipAvailable) setFloatingIp(false);
   }
 
-  // 프로젝트 변경 시 네트워크·FIP·스펙·키페어 초기화
+  // 프로젝트 변경 시 이후 단계 입력 초기화
   function handleProjectSelect(id: string) {
     setProject(id);
     setNetwork("");
     setFloatingIp(false);
     setFlavor("");
-    setExtraStorage(0);
-    setCustomStorage(false);
+    setImage("");
+    setVolumeGb(0);
     setKeypair("");
   }
+
+  // 부팅 볼륨 크기는 템플릿을 바꿀 때마다 그 템플릿의 최소 디스크로 맞춘다
+  function handleImageSelect(img: TemplateImage) {
+    setImage(img.id);
+    if (!img.cloudInit) setKeypair(""); // cloud-init 없으면 키페어 주입 불가
+    setVolumeGb(Math.max(1, img.minDiskGb));
+  }
+
+  function handleFlavorSelect(f: Flavor) {
+    setFlavor(f.name);
+    // 템플릿을 먼저 고른 뒤 디스크 없는 스펙으로 바꾼 경우에도 최소 크기로 맞춘다
+    if (f.diskGb === 0 && selectedImage) setVolumeGb(Math.max(1, selectedImage.minDiskGb));
+  }
+
+  const volumeValid = !needVolume || (volumeGb >= minVolume && volumeGb <= MAX_VOLUME_GB);
 
   const canProceed: Record<StepKey, boolean> = {
     project: !!project,
     network: !!network,
-    // 공인 IP를 신청하면 SSH용 키페어 필수
-    spec: !!flavor && !!vmName && (!floatingIp || !!keypair),
+    spec: !!flavor && nameOk,
+    template: !!image && volumeValid,
     review: true,
   };
 
@@ -244,11 +269,10 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
     if (stepIdx > 0) setStep(STEPS[stepIdx - 1].key);
   }
   function submit() {
-    const proj = PROJECTS.find((p) => p.id === project);
-    const flv = FLAVORS.find((f) => f.name === flavor);
-    if (!proj || !flv) return;
-    // 사용자에겐 내부망/인터넷망으로 노출하되, 실제 기록은 프로젝트의 네트워크로 매핑
-    const networkName = network === "internet" ? `${proj.name}-public` : `${proj.name}-private`;
+    const proj = selectedProject;
+    const flv = selectedFlavor;
+    const img = selectedImage;
+    if (!proj || !flv || !img) return;
     const accelCount = flv.accel ? Number(flv.accel.label.match(/×\s*(\d+)/)?.[1] ?? 1) : 0;
     createRequest.mutate(
       {
@@ -258,37 +282,38 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
         projectId: proj.id,
         projectName: proj.name,
         vmName,
-        flavorName: flavor,
+        networkType: network,
+        floatingIp,
+        flavorId: flv.id, // Nova 생성 시 flavorRef
+        flavorName: flv.name,
         vcpu: flv.vcpu,
         ramGb: flv.ramGb,
         diskGb: flv.diskGb,
-        storageGb: extraStorage,
-        networkName,
+        volumeGb: needVolume ? volumeGb : undefined,
+        imageId: img.id,
+        imageName: img.name,
+        cloudInit: !!img.cloudInit,
+        keypairId: orgKeypairs.find((k) => k.name === keypair)?.id,
         keypairName: keypair || undefined,
-        floatingIp,
         acceleratorKind: flv.accel?.kind,
         acceleratorCount: accelCount,
       },
       {
         onSuccess: () => {
           toast.success("자원 요청이 접수되었습니다", {
-            description: `${vmName} (${flavor}) · 승인 대기 중`,
+            description: `${vmName} (${flv.name}) · 승인 대기 중`,
           });
           onDone();
         },
-        onError: () => toast.error("요청 접수에 실패했습니다. 다시 시도해주세요."),
+        onError: (e) =>
+          toast.error(e.message.startsWith("409") ? "같은 이름의 가상머신이 있습니다. 이름을 바꿔 주세요." : "요청 접수에 실패했습니다. 다시 시도해주세요."),
       },
     );
   }
 
-  const selectedFlavor = FLAVORS.find((f) => f.name === flavor);
-  const selectedProject = PROJECTS.find((p) => p.id === project);
-
-  const filteredFlavors = React.useMemo(() => {
-    if (!selectedProject) return FLAVORS;
-    const accelLabels = new Set(selectedProject.accelerators.map((a) => a.label));
-    return FLAVORS.filter((f) => !f.accel || accelLabels.has(f.accel.label));
-  }, [selectedProject]);
+  // 프로젝트에 할당된 가속기를 쓰는 스펙만 노출
+  const accelLabels = new Set(selectedProject?.accelerators.map((a) => a.label) ?? []);
+  const filteredFlavors = flavors.filter((f) => !f.accel || accelLabels.has(f.accel.label));
 
   return (
     <>
@@ -301,9 +326,15 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
       {step === "project" && (
         <>
           <div className="text-sm font-semibold">프로젝트 선택</div>
-          <p className="text-xs text-muted-foreground">접근 권한이 부여된 프로젝트 목록입니다. 가상머신을 생성할 프로젝트를 선택하세요.</p>
+          <p className="text-xs text-muted-foreground">할당된 프로젝트 목록입니다. 가상머신을 생성할 프로젝트를 선택하세요.</p>
           <div className="grid gap-2">
-            {PROJECTS.map((p) => (
+            {projects.length === 0 && (
+              <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
+                <p className="text-xs text-amber-800">할당된 프로젝트가 없습니다. 조직 관리자에게 프로젝트 할당을 요청하세요.</p>
+              </div>
+            )}
+            {projects.map((p) => (
               <button
                 key={p.id}
                 onClick={() => handleProjectSelect(p.id)}
@@ -314,23 +345,28 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               >
                 <FolderKanban className="size-5 text-brand-indigo-600" />
                 <div className="flex-1">
-                  <div className="font-mono font-semibold">{p.name}</div>
-                  <div className="text-xs text-muted-foreground">쿼터: {p.quota}</div>
-                  <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] text-muted-foreground/70">할당 가속기:</span>
-                    {p.accelerators.map((a) => (
-                      <Badge
-                        key={a.label}
-                        variant="ghost"
-                        className={cn(
-                          "h-5 px-1.5 font-mono text-[10px]",
-                          a.kind === "GPU" ? "bg-green-100 text-green-800" : "bg-purple-100 text-purple-800",
-                        )}
-                      >
-                        {a.kind} · {a.label}
-                      </Badge>
-                    ))}
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-semibold">{p.name}</span>
+                    {p.orgName && <span className="text-xs text-muted-foreground">{p.orgName}</span>}
                   </div>
+                  <div className="text-xs text-muted-foreground">쿼터: {p.quota}</div>
+                  {p.accelerators.length > 0 && (
+                    <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] text-muted-foreground/70">할당 가속기:</span>
+                      {p.accelerators.map((a) => (
+                        <Badge
+                          key={a.label}
+                          variant="ghost"
+                          className={cn(
+                            "h-5 px-1.5 font-mono text-[10px]",
+                            a.kind === "GPU" ? "bg-green-100 text-green-800" : "bg-purple-100 text-purple-800",
+                          )}
+                        >
+                          {a.kind} · {a.label}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {project === p.id && <CheckCircle2 className="size-4 text-brand-mint-600" />}
               </button>
@@ -342,9 +378,9 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
       {/* ── 2. 네트워크 ── */}
       {step === "network" && (
         <>
-          <div className="text-sm font-semibold">네트워크 유형 선택</div>
+          <div className="text-sm font-semibold">희망 네트워크 선택</div>
           <p className="text-xs text-muted-foreground">
-            <span className="font-mono text-foreground">{selectedProject?.name}</span> 프로젝트의 네트워크 용도를 선택하세요. IP는 자동으로 할당됩니다.
+            <span className="font-mono text-foreground">{selectedProject?.name}</span> 프로젝트에서 사용할 네트워크 용도를 선택하세요. 실제 네트워크와 IP는 관리자가 승인 시 지정합니다.
           </p>
           <div className="grid gap-2">
             {USER_NETWORKS.map((n) => (
@@ -369,7 +405,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
             ))}
           </div>
 
-          {/* 공인 IP 옵션 — 인터넷망 선택 시만 활성 */}
+          {/* 공인 IP 희망 — 인터넷망 선택 시만 활성 */}
           <button
             type="button"
             onClick={() => selectedNetworkObj?.fipAvailable && setFloatingIp((v) => !v)}
@@ -382,9 +418,9 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
           >
             <Globe className="size-5 shrink-0 text-amber-600" />
             <div className="flex-1">
-              <div className="font-semibold text-sm">외부 접속용 공인 IP 발급</div>
+              <div className="font-semibold text-sm">외부 접속용 공인 IP 희망</div>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                가상머신에 공인 IP를 1:1 매핑합니다. 인터넷망 선택 시에만 신청 가능합니다.
+                외부에서 접속 가능한 IP를 요청합니다. 인터넷망 선택 시에만 신청 가능하며, 할당 방식은 관리자가 결정합니다.
               </p>
             </div>
             <div className={cn(
@@ -395,23 +431,12 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
             </div>
           </button>
 
-          {/* SSH 접속 가이드 — 선택 상태에 따라 맥락 문구 변경 */}
           {network === "internal" && (
             <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
               <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
               <p className="text-xs text-amber-800">
-                <span className="font-semibold">외부 SSH 접속 불가</span> — 내부망 가상머신은 사설 IP(10.0.0.0/16)만 부여되어 데이터센터 외부에서 패킷이 도달하지 않습니다.
-                외부에서 SSH로 직접 접속해야 한다면 <span className="font-semibold">인터넷망</span>을 선택하고 공인 IP를 발급받으세요.
-              </p>
-            </div>
-          )}
-          {network === "internet" && floatingIp && (
-            <div className="flex gap-2.5 rounded-lg border border-sky-200 bg-sky-50 p-3">
-              <Info className="mt-0.5 size-4 shrink-0 text-sky-600" />
-              <p className="text-xs text-sky-800">
-                공인 IP가 가상머신 사설 IP에 1:1 NAT로 매핑됩니다. 승인 완료 후 발급된 공인 IP로
-                <span className="font-mono mx-1">ssh -i key.pem ubuntu@{"<공인 IP>"}</span>
-                형태로 접속할 수 있습니다.
+                <span className="font-semibold">외부 SSH 접속 불가</span> — 내부망 가상머신은 사설 IP만 부여되어 데이터센터 외부에서 접근할 수 없습니다.
+                외부 접속이 필요하다면 <span className="font-semibold">인터넷망</span>을 선택하고 공인 IP를 희망하세요.
               </p>
             </div>
           )}
@@ -419,8 +444,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
             <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
               <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
               <p className="text-xs text-amber-800">
-                인터넷망을 선택했지만 공인 IP를 발급하지 않으면 외부에서 직접 SSH 접속이 불가능합니다.
-                외부 접속이 필요하다면 위 <span className="font-semibold">공인 IP 발급</span> 옵션을 켜세요.
+                공인 IP를 희망하지 않으면 외부에서 직접 SSH 접속이 불가능할 수 있습니다.
               </p>
             </div>
           )}
@@ -432,8 +456,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
         <>
           <div className="text-sm font-semibold">스펙 선택</div>
           <p className="text-xs text-muted-foreground">
-            가상머신 이름을 입력하고 컴퓨트 스펙을 선택하세요. 스펙은 vCPU · RAM · 디스크 크기와
-            가속기(GPU/NPU) 장착 여부를 함께 결정합니다.
+            가상머신 이름을 입력하고 컴퓨트 스펙을 선택하세요. 디스크가 없는 스펙은 다음 단계에서 부팅 볼륨 크기를 지정합니다.
           </p>
 
           <div className="flex gap-2.5 rounded-lg border border-sky-200 bg-sky-50 p-3">
@@ -441,7 +464,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
             <p className="text-xs text-sky-800 leading-relaxed">
               <span className="font-semibold">가속기가 필요한 경우</span> — <span className="font-mono">g1.*</span> (GPU) 또는
               <span className="font-mono mx-1">n1.*</span> (NPU) 스펙을 선택하세요. 가속기는 스펙에 내장되어 있으며
-              별도로 선택할 필요가 없습니다. 일반 CPU 작업에는 <span className="font-mono">m1.*</span> 스펙을 사용하세요.
+              별도로 선택할 필요가 없습니다.
             </p>
           </div>
 
@@ -451,15 +474,27 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               id="vmname"
               placeholder="예: research-trainer-04"
               value={vmName}
-              onChange={(e) => setVmName(e.target.value)}
+              maxLength={63}
+              onChange={(e) => setVmName(e.target.value.trim())}
             />
+            {!vmName ? (
+              <p className="text-xs text-muted-foreground">영문 소문자·숫자·하이픈(-) 2~63자, 하이픈으로 시작하거나 끝날 수 없습니다. 서버 이름과 hostname으로 함께 사용됩니다.</p>
+            ) : !nameFormatOk ? (
+              <p className="text-xs text-rose-500">영문 소문자·숫자·하이픈(-)만 2~63자로 입력하세요. 하이픈으로 시작하거나 끝날 수 없습니다.</p>
+            ) : !nameCheckReady || nameChecking ? (
+              <p className="text-xs text-muted-foreground">이름 중복 확인 중…</p>
+            ) : nameCheck?.available ? (
+              <p className="text-xs text-brand-mint-700">사용 가능한 이름입니다.</p>
+            ) : (
+              <p className="text-xs text-rose-500">{nameCheck?.reason ?? "이름을 확인할 수 없습니다."}</p>
+            )}
           </div>
           <div className="space-y-2 pt-2">
             <Label>스펙</Label>
             {filteredFlavors.map((f) => (
               <button
-                key={f.name}
-                onClick={() => setFlavor(f.name)}
+                key={f.id}
+                onClick={() => handleFlavorSelect(f)}
                 className={cn(
                   "flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border p-2.5 text-left transition-colors",
                   flavor === f.name ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
@@ -482,116 +517,132 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
                     )}
                   </div>
                   <div className="font-mono text-xs text-muted-foreground tabular-nums">
-                    {f.vcpu} vCPU · {f.ramGb} GB RAM · {f.diskGb} GB Disk
+                    {f.vcpu} vCPU · {f.ramGb} GB RAM · {f.diskGb > 0 ? `${f.diskGb} GB Disk` : "Disk 볼륨 지정"}
                   </div>
                 </div>
                 {flavor === f.name && <CheckCircle2 className="size-4 text-brand-mint-600" />}
               </button>
             ))}
           </div>
+        </>
+      )}
 
-          {/* 추가 스토리지 */}
-          <div className="space-y-2 pt-2">
-            <Label>추가 스토리지</Label>
-            <p className="text-xs text-muted-foreground">
-              스펙에 포함된 디스크는 OS·시스템용입니다. 데이터셋·모델·체크포인트처럼 용량이 크고
-              영속적으로 보관할 데이터가 있으면 스토리지를 추가하세요.
-            </p>
-            <div className="grid grid-cols-4 gap-2">
-              {STORAGE_PRESETS.map((s) => {
-                const active = !customStorage && extraStorage === s.gb;
-                return (
-                  <button
-                    key={s.label}
-                    type="button"
-                    onClick={() => { setCustomStorage(false); setExtraStorage(s.gb); }}
-                    className={cn(
-                      "cursor-pointer rounded-lg border p-2.5 text-center text-sm font-medium transition-colors",
-                      active ? "border-primary bg-brand-indigo-50/40" : "border-border hover:bg-secondary/40",
+      {/* ── 4. 템플릿 ── */}
+      {step === "template" && (
+        <>
+          <div className="text-sm font-semibold">템플릿 선택</div>
+          <p className="text-xs text-muted-foreground">가상머신에 설치할 OS 이미지를 선택하세요.</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {images.map((img) => (
+              <button
+                key={img.id}
+                onClick={() => handleImageSelect(img)}
+                className={cn(
+                  "flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border p-2.5 text-left transition-colors",
+                  image === img.id ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
+                )}
+              >
+                <Disc3 className="size-5 shrink-0 text-indigo-600" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate font-mono font-semibold">{img.name}</span>
+                    {!img.cloudInit && (
+                      <Badge variant="ghost" className="h-5 bg-amber-100 px-1.5 text-[10px] text-amber-800">cloud-init 없음</Badge>
                     )}
-                  >
-                    {s.label}
-                  </button>
-                );
-              })}
-            </div>
-            <button
-              type="button"
-              onClick={() => { setCustomStorage(true); setExtraStorage(0); }}
-              className={cn(
-                "flex w-full cursor-pointer items-center gap-3 rounded-lg border p-3 text-left transition-colors",
-                customStorage ? "border-primary bg-brand-indigo-50/40" : "border-border hover:bg-secondary/40",
-              )}
-            >
-              <HardDrive className="size-5 shrink-0 text-indigo-600" />
-              <div className="flex-1">
-                <div className="text-sm font-medium">직접 입력</div>
-                <p className="text-xs text-muted-foreground">필요한 용량을 GB 단위로 직접 지정합니다.</p>
-              </div>
-              {customStorage && (
-                <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                  <Input
-                    type="number"
-                    min={0}
-                    step={100}
-                    value={extraStorage || ""}
-                    onChange={(e) => setExtraStorage(Math.max(0, Number(e.target.value)))}
-                    placeholder="0"
-                    className="h-8 w-24 text-right"
-                  />
-                  <span className="text-xs text-muted-foreground">GB</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {img.os} · 최소 디스크 {img.minDiskGb} GB
+                  </div>
                 </div>
-              )}
-            </button>
+                {image === img.id && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
+              </button>
+            ))}
           </div>
 
-          {/* SSH 키페어 */}
+          {selectedImage && !selectedImage.cloudInit && (
+            <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
+              <p className="text-xs text-amber-800">
+                <span className="font-semibold">키페어 미적용</span> — cloud-init이 없는 이미지는 키페어가 주입되지 않습니다. 이미지의 기본 계정으로 접속하세요.
+              </p>
+            </div>
+          )}
+
+          {/* 부팅 볼륨 — 디스크 없는 스펙 */}
+          {needVolume && (
+            <div className="space-y-2 pt-2">
+              <Label htmlFor="volume">부팅 볼륨 크기</Label>
+              <p className="text-xs text-muted-foreground">
+                선택한 스펙(<span className="font-mono">{selectedFlavor?.name}</span>)에 디스크가 없어 부팅 볼륨을 생성합니다.
+                {selectedImage ? ` ${minVolume} ~ ${MAX_VOLUME_GB} GB` : ` 최대 ${MAX_VOLUME_GB} GB`}
+              </p>
+              <div className="flex items-center gap-2">
+                <HardDrive className="size-5 shrink-0 text-indigo-600" />
+                <Input
+                  id="volume"
+                  type="number"
+                  min={minVolume}
+                  max={MAX_VOLUME_GB}
+                  value={volumeGb || ""}
+                  onChange={(e) => setVolumeGb(Math.max(0, Number(e.target.value)))}
+                  placeholder={String(minVolume)}
+                  className="h-9 w-32 text-right"
+                />
+                <span className="text-xs text-muted-foreground">GB</span>
+              </div>
+              {volumeGb > 0 && !volumeValid && (
+                <p className="text-xs text-rose-500">
+                  {volumeGb > MAX_VOLUME_GB ? `최대 ${MAX_VOLUME_GB} GB까지 신청할 수 있습니다.` : `이미지 최소 디스크(${minVolume} GB) 이상이어야 합니다.`}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* SSH 키페어 (선택) */}
           <div className="space-y-2 pt-2">
-            <Label>
-              SSH 키페어 {floatingIp && <span className="text-rose-500">*</span>}
-            </Label>
+            <Label>SSH 키페어 <span className="text-muted-foreground">(선택)</span></Label>
             <p className="text-xs text-muted-foreground">
-              부팅 시 주입되어 SSH 접속에 사용됩니다. 공개키만 VM에 저장되며 개인키는 본인이 보관합니다.
+              부팅 시 공개키가 주입되어 SSH 접속에 사용됩니다. 개인키는 키페어 생성 시 내려받은 파일을 사용하세요.
             </p>
-            {myKeypairs.length === 0 ? (
+            {orgKeypairs.length === 0 ? (
               <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
                 <p className="text-xs text-amber-800">
-                  등록된 키페어가 없습니다. <span className="font-semibold">키페어</span> 메뉴에서 먼저 키페어를 생성·등록한 뒤 신청하세요.
+                  조직에 등록된 키페어가 없습니다. <span className="font-semibold">키페어</span> 메뉴에서 생성할 수 있습니다.
                 </p>
               </div>
             ) : (
               <div className="grid gap-2 sm:grid-cols-2">
-                {myKeypairs.map((k) => (
-                  <button
-                    key={k.id}
-                    type="button"
-                    onClick={() => setKeypair(k.name)}
-                    className={cn(
-                      "flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors",
-                      keypair === k.name ? "border-primary bg-brand-indigo-50/40" : "border-border hover:bg-secondary/40",
-                    )}
-                  >
-                    <KeyRound className="size-4 shrink-0 text-amber-600" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-mono text-sm font-medium">{k.name}</div>
-                      <div className="truncate text-[10px] text-muted-foreground">{k.type}</div>
-                    </div>
-                    {keypair === k.name && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
-                  </button>
-                ))}
+                {orgKeypairs.map((k) => {
+                  const disabled = !!selectedImage && !selectedImage.cloudInit;
+                  return (
+                    <button
+                      key={k.id}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => setKeypair((cur) => (cur === k.name ? "" : k.name))}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors",
+                        disabled && "cursor-not-allowed opacity-40",
+                        keypair === k.name ? "border-primary bg-brand-indigo-50/40" : "border-border hover:bg-secondary/40",
+                      )}
+                    >
+                      <KeyRound className="size-4 shrink-0 text-amber-600" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-mono text-sm font-medium">{k.name}</div>
+                        <div className="truncate text-[10px] text-muted-foreground">{k.type} · {k.owner}</div>
+                      </div>
+                      {keypair === k.name && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
+                    </button>
+                  );
+                })}
               </div>
-            )}
-            {floatingIp && !keypair && (
-              <p className="text-xs text-rose-500">
-                공인 IP로 외부 SSH 접속을 하려면 키페어 선택이 필요합니다.
-              </p>
             )}
           </div>
         </>
       )}
 
-      {/* ── 4. 확인 ── */}
+      {/* ── 5. 확인 ── */}
       {step === "review" && (
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground">아래 내용을 확인하고 신청하세요.</p>
@@ -605,22 +656,21 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
           </div>
 
           <div className="rounded-xl border border-border overflow-hidden">
-            <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">네트워크</div>
+            <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">네트워크 (희망)</div>
             <div className="divide-y divide-border">
               <ReviewRow label="유형" value={selectedNetworkObj ? `${selectedNetworkObj.label} (${selectedNetworkObj.sublabel})` : undefined} />
-              <ReviewRow label="공인 IP" value={floatingIp ? "발급 요청" : "미신청"} accent={floatingIp ? "green" : undefined} />
-              <ReviewRow label="SSH 키페어" value={keypair || "미선택"} mono />
+              <ReviewRow label="공인 IP" value={floatingIp ? "희망" : "미희망"} accent={floatingIp ? "green" : undefined} />
             </div>
           </div>
 
           <div className="rounded-xl border border-border overflow-hidden">
-            <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">스펙</div>
+            <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">스펙 · 템플릿</div>
             <div className="divide-y divide-border">
               <ReviewRow label="Flavor" value={selectedFlavor?.name} mono />
-              <ReviewRow label="컴퓨트" value={selectedFlavor ? `${selectedFlavor.vcpu} vCPU · ${selectedFlavor.ramGb} GB RAM · ${selectedFlavor.diskGb} GB Disk` : undefined} mono />
+              <ReviewRow label="컴퓨트" value={selectedFlavor ? `${selectedFlavor.vcpu} vCPU · ${selectedFlavor.ramGb} GB RAM` : undefined} mono />
               <ReviewRow
-                label="추가 스토리지"
-                value={extraStorage > 0 ? (extraStorage >= 1024 ? `${(extraStorage / 1024).toLocaleString()} TB` : `${extraStorage.toLocaleString()} GB`) : "없음"}
+                label="디스크"
+                value={selectedFlavor ? (needVolume ? `부팅 볼륨 ${volumeGb} GB` : `${selectedFlavor.diskGb} GB`) : undefined}
                 mono
               />
               <ReviewRow
@@ -628,11 +678,17 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
                 value={selectedFlavor?.accel ? `${selectedFlavor.accel.kind} · ${selectedFlavor.accel.label}` : "없음"}
                 accent={selectedFlavor?.accel ? (selectedFlavor.accel.kind === "GPU" ? "green" : "purple") : undefined}
               />
+              <ReviewRow label="템플릿" value={selectedImage?.name} mono />
+              <ReviewRow
+                label="SSH 키페어"
+                value={selectedImage && !selectedImage.cloudInit ? "미적용 (cloud-init 없음)" : keypair || "미선택"}
+                mono
+              />
             </div>
           </div>
 
           <div className="flex items-center justify-center gap-1.5 pt-1 text-[11px] text-muted-foreground">
-            {["신청 접수", "관리자 승인", "가상머신 생성", "부팅 완료"].map((s, i, arr) => (
+            {["신청 접수", "관리자 승인", "가상머신 생성", "완료"].map((s, i, arr) => (
               <React.Fragment key={s}>
                 <span className="rounded-full bg-secondary px-2.5 py-0.5">{s}</span>
                 {i < arr.length - 1 && <span className="text-muted-foreground/40">→</span>}
