@@ -70,10 +70,15 @@ backends:
     image: mnt-obs
     port: 8000
     replicas: 1
+    secretName: mnt-obs-secret         # MONITOR_USERNAME / MONITOR_PASSWORD 제공
     env:
       SERVICE_NAME: mnt-obs
       API_PREFIX: /api/obs
       CORS_ORIGINS: ""
+      # KCloud Monitor v2 (이노그리드) — master3 의 Docker 컨테이너(k8s 파드 아님).
+      # 파드에서 닿는 주소 = master3 노드IP:8000. ⚠️ 파드 도달 확인 필요(netcheck);
+      # 안 되면 Service/Endpoints(→172.29.236.153:8000) 구성 후 그 DNS 로 교체.
+      MONITOR_BASE_URL: http://172.29.236.153:8000/api/v2
 
 # ── 프론트(Next 정적 + nginx) ───────────────────────────────────────
 frontend:
