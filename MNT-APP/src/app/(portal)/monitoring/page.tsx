@@ -30,6 +30,7 @@ import {
   useMonitoringOverview,
   usePowerBreakdown,
   usePowerTimeseries,
+  useClusterResources,
   type VendorMetrics,
 } from "@/lib/obs-api";
 
@@ -42,15 +43,6 @@ const TOP_HOSTS = [
   { name: "npu-node-01.openkcloud", value: 42, unit: "%" },
   { name: "pim-node-01.openkcloud", value: 18, unit: "%" },
 ];
-// 클러스터 자원 현황 — GET /clusters/{cluster}/resource
-const CLUSTER_RESOURCE = [
-  { cluster: "mgmt", type: "management", nodes: "8 / 8", cpu: "1.8%", mem: "6.5%", acc: "4장 · 0%", watts: 2306.0 },
-  { cluster: "l40s", type: "service", nodes: "1 / 1", cpu: "—", mem: "12.4%", acc: "1장 · 0%", watts: 144.9 },
-  { cluster: "furiosa", type: "service", nodes: "1 / 1", cpu: "—", mem: "8.1%", acc: "2장 · 0%", watts: 41.3 },
-  { cluster: "furiosa-1348", type: "service", nodes: "1 / 1", cpu: "—", mem: "7.3%", acc: "1장 · 0%", watts: 36.7 },
-  { cluster: "rebellions", type: "service", nodes: "1 / 1", cpu: "—", mem: "5.2%", acc: "1장 · 0%", watts: 18.4 },
-];
-
 // 최근 오류 로그 — GET /logs/search?log_level=error
 const RECENT_ERRORS = [
   { ts: "16:22:41", level: "error", cluster: "mgmt", message: "neutron-server: connection to RabbitMQ timed out (attempt 3/5)", field: "" },
@@ -130,6 +122,7 @@ export default function MonitoringOverviewPage() {
   const { data: ov } = useMonitoringOverview("mgmt");
   const { data: powerTs } = usePowerTimeseries();
   const psLast = powerTs?.series?.[powerTs.series.length - 1];
+  const { data: clusters } = useClusterResources();
   return (
     <div className="space-y-4">
       {/* KPI band — Datadog "Query Value" widgets */}
@@ -326,9 +319,9 @@ export default function MonitoringOverviewPage() {
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-base">
             클러스터 자원 현황
-            <StatusTag api="/api/v2/clusters  ·  /api/v2/clusters/{c}/resource" />
+            <StatusTag connected={!!clusters} api="/api/v2/clusters  ·  /api/v2/clusters/{c}/resource" />
           </CardTitle>
-          <CardDescription>관리 클러스터 1개 + 서비스 클러스터 4개. 서비스 클러스터는 쿠버네티스·IPMI가 없어 CPU·서버 전력이 비어 있다.</CardDescription>
+          <CardDescription>관리 클러스터 1개 + 서비스 클러스터 4개. 서비스 클러스터는 IPMI가 없어 서버 전력이 비어 있다(—).</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -344,7 +337,7 @@ export default function MonitoringOverviewPage() {
               </tr>
             </thead>
             <tbody className="[&_td]:py-1.5 [&_td]:pr-3">
-              {CLUSTER_RESOURCE.map((c) => (
+              {(clusters?.clusters ?? []).map((c) => (
                 <tr key={c.cluster} className="border-b border-border/60 last:border-0">
                   <td className="font-mono font-medium">{c.cluster}</td>
                   <td>
@@ -352,13 +345,16 @@ export default function MonitoringOverviewPage() {
                       {c.type === "management" ? "관리" : "서비스"}
                     </Badge>
                   </td>
-                  <td className="font-mono tabular-nums">{c.nodes}</td>
-                  <td className="font-mono tabular-nums">{c.cpu}</td>
-                  <td className="font-mono tabular-nums">{c.mem}</td>
-                  <td className="font-mono tabular-nums">{c.acc}</td>
-                  <td className="font-mono tabular-nums">{formatNumber(c.watts)} W</td>
+                  <td className="font-mono tabular-nums">{c.nodes_ready != null ? `${c.nodes_ready} / ${c.nodes_total}` : "—"}</td>
+                  <td className="font-mono tabular-nums">{c.cpu_percent != null ? `${c.cpu_percent}%` : "—"}</td>
+                  <td className="font-mono tabular-nums">{c.memory_percent != null ? `${c.memory_percent}%` : "—"}</td>
+                  <td className="font-mono tabular-nums">{c.accelerator_total ? `${c.accelerator_total}장 · ${fmtN(c.accelerator_util_percent, 0)}%` : "—"}</td>
+                  <td className="font-mono tabular-nums">{c.power_watts != null ? `${formatNumber(c.power_watts)} W` : "—"}</td>
                 </tr>
               ))}
+              {(clusters?.clusters?.length ?? 0) === 0 && (
+                <tr><td colSpan={7} className="py-6 text-center text-muted-foreground">데이터 없음</td></tr>
+              )}
             </tbody>
           </table>
         </CardContent>

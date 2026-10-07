@@ -147,3 +147,41 @@ def power_timeseries(period: str = Query("24h"), step: str = Query("1h"), aggreg
                 pass
     series = [merged[k] for k in sorted(merged.keys())]
     return {"series": series}
+
+
+@router.get("/monitoring/clusters")
+def clusters():
+    """클러스터 자원 현황 — /clusters 목록 + 클러스터별 /resource 병합.
+    서비스 클러스터는 IPMI 없어 power.total_watts=null(화면 '—')."""
+    try:
+        lst = monitor.get("/clusters").get("data", [])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    rows = []
+    for c in lst:
+        name = c.get("name")
+        res: dict = {}
+        try:
+            res = monitor.get(f"/clusters/{name}/resource").get("data", {})
+        except Exception:  # noqa: BLE001 — 개별 클러스터 실패는 건너뜀
+            pass
+        resources = res.get("resources", {}) or {}
+        nodes = resources.get("nodes", {}) or {}
+        cpu = resources.get("cpu", {}) or {}
+        mem = resources.get("memory", {}) or {}
+        accel = resources.get("accelerators", {}) or {}
+        power = res.get("power", {}) or {}
+        rows.append({
+            "cluster": name,
+            "type": c.get("type"),
+            "parent_cluster": c.get("parent_cluster"),
+            "nodes_ready": nodes.get("ready"),
+            "nodes_total": nodes.get("total"),
+            "cpu_percent": cpu.get("utilization_percent"),
+            "memory_percent": mem.get("utilization_percent"),
+            "accelerator_total": accel.get("total"),
+            "accelerator_util_percent": accel.get("avg_utilization_percent"),
+            "power_watts": power.get("total_watts"),
+            "status": c.get("status"),
+        })
+    return {"clusters": rows}
