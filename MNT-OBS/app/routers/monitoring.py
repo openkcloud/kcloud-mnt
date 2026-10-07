@@ -82,6 +82,8 @@ def accelerator_summary(cluster: str = Query("mgmt")):
         "vendors": vendors,
         "accelerator_count": len(accels),
         "throttled_count": sum(1 for a in accels if a.get("throttled")),
+        # 집계에 포함된 실제 클러스터(인포 아이콘 표시용)
+        "source_clusters": sorted({a.get("cluster") for a in accels if a.get("cluster")}),
     }
 
 
@@ -106,3 +108,39 @@ def overview(cluster: str = Query("mgmt")):
         "nodes_ready": nodes.get("ready"),
         "nodes_total": nodes.get("total"),
     }
+
+
+@router.get("/monitoring/power/breakdown")
+def power_breakdown(dimension: str = Query("vendor")):
+    """전력 분해 — dimension(vendor|cluster|node|accelerator)별 watts/layer 목록."""
+    try:
+        d = monitor.get("/monitoring/power/breakdown", params={"dimension": dimension})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    return {"dimension": d.get("dimension", dimension), "items": d.get("items", [])}
+
+
+@router.get("/monitoring/power/timeseries")
+def power_timeseries(period: str = Query("24h"), step: str = Query("1h"), aggregation: str = Query("avg")):
+    """전력 시계열 3계층(server/cpu/accelerator) — 타임스탬프 기준으로 병합, 문자열 watts→수치."""
+    try:
+        d = monitor.get(
+            "/monitoring/power/timeseries",
+            params={"period": period, "step": step, "aggregation": aggregation},
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    merged: dict[str, dict] = {}
+    for layer in d.get("layers", []):
+        name = layer.get("layer")
+        for point in layer.get("values", []):
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                continue
+            ts, val = point[0], point[1]
+            row = merged.setdefault(ts, {"t": ts[11:16] if isinstance(ts, str) else ts})
+            try:
+                row[name] = round(float(val), 1)
+            except (TypeError, ValueError):
+                pass
+    series = [merged[k] for k in sorted(merged.keys())]
+    return {"series": series}

@@ -10,6 +10,7 @@ import {
   Database,
   HardDrive,
   Zap,
+  Info,
 } from "lucide-react";
 import {
   CartesianGrid,
@@ -23,7 +24,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
 import { cn, formatNumber } from "@/lib/utils";
-import { useAcceleratorSummary, useMonitoringOverview, type VendorMetrics } from "@/lib/obs-api";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import {
+  useAcceleratorSummary,
+  useMonitoringOverview,
+  usePowerBreakdown,
+  usePowerTimeseries,
+  type VendorMetrics,
+} from "@/lib/obs-api";
 
 // Datadog "Top List" style data
 const TOP_HOSTS = [
@@ -34,42 +42,6 @@ const TOP_HOSTS = [
   { name: "npu-node-01.openkcloud", value: 42, unit: "%" },
   { name: "pim-node-01.openkcloud", value: 18, unit: "%" },
 ];
-// 전력 분해 — dimension=vendor|cluster|node|accelerator
-const POWER_BREAKDOWN: Record<string, { key: string; watts: number; layer: string }[]> = {
-  vendor: [
-    { key: "nvidia", watts: 144.9, layer: "accelerator" },
-    { key: "furiosa", watts: 78.0, layer: "accelerator" },
-    { key: "rebellions", watts: 18.4, layer: "accelerator" },
-  ],
-  cluster: [
-    { key: "mgmt", watts: 2306.0, layer: "server" },
-    { key: "l40s", watts: 144.9, layer: "accelerator" },
-    { key: "furiosa", watts: 41.3, layer: "accelerator" },
-    { key: "furiosa-1348", watts: 36.7, layer: "accelerator" },
-    { key: "rebellions", watts: 18.4, layer: "accelerator" },
-  ],
-  node: [
-    { key: "innogrid-gpu", watts: 108.8, layer: "accelerator" },
-    { key: "compute1", watts: 612.4, layer: "server" },
-    { key: "compute2", watts: 584.1, layer: "server" },
-    { key: "innogrid-npu", watts: 78.0, layer: "accelerator" },
-  ],
-  accelerator: [
-    { key: "GPU-fe5ba66d…", watts: 108.8, layer: "accelerator" },
-    { key: "GPU-9a21c7d4…", watts: 36.1, layer: "accelerator" },
-    { key: "RNGD-0", watts: 41.3, layer: "accelerator" },
-    { key: "ATOM-0", watts: 18.4, layer: "accelerator" },
-  ],
-};
-
-// 전력 시계열 — layers: server | cpu | accelerator
-const POWER_SERIES = Array.from({ length: 24 }, (_, i) => ({
-  t: `${String(i).padStart(2, "0")}:00`,
-  server: Math.round(2200 + Math.sin(i / 3.2) * 180 + (i % 5) * 12),
-  cpu: Math.round(1550 + Math.sin(i / 2.8 + 1) * 140 + (i % 4) * 8),
-  accelerator: Math.round(230 + Math.sin(i / 2.4 + 2) * 60 + (i % 3) * 6),
-}));
-
 // 클러스터 자원 현황 — GET /clusters/{cluster}/resource
 const CLUSTER_RESOURCE = [
   { cluster: "mgmt", type: "management", nodes: "8 / 8", cpu: "1.8%", mem: "6.5%", acc: "4장 · 0%", watts: 2306.0 },
@@ -156,6 +128,8 @@ export default function MonitoringOverviewPage() {
   const { data: accel } = useAcceleratorSummary("mgmt");
   const commonMetrics = buildAccelRows(accel?.vendors);
   const { data: ov } = useMonitoringOverview("mgmt");
+  const { data: powerTs } = usePowerTimeseries();
+  const psLast = powerTs?.series?.[powerTs.series.length - 1];
   return (
     <div className="space-y-4">
       {/* KPI band — Datadog "Query Value" widgets */}
@@ -181,7 +155,16 @@ export default function MonitoringOverviewPage() {
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-base">
             가속기 공통 지표
-            <StatusTag connected />
+            <span className="flex items-center gap-1.5">
+              <InfoHint
+                text={
+                  accel?.source_clusters?.length
+                    ? `집계 클러스터 (${accel.source_clusters.length}개)\n${accel.source_clusters.join(", ")}\n\nmgmt 관리도메인 하위 서비스클러스터의 가속기를 벤더(RNGD·ATOM·L40S)로 묶어 집계합니다.`
+                    : "mgmt 관리도메인 하위 서비스클러스터의 가속기를 벤더별로 집계합니다."
+                }
+              />
+              <StatusTag connected />
+            </span>
           </CardTitle>
           <CardDescription>공통 6종 + 파생 2종을 GPU·NPU 같은 지표 이름으로 조회한다.</CardDescription>
         </CardHeader>
@@ -277,7 +260,10 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               전력 시계열 — 계층별
-              <StatusTag />
+              <span className="flex items-center gap-1.5">
+                <InfoHint text={"server(IPMI 실측) ⊃ cpu(Kepler 추정) + accelerator(벤더 exporter) + 기타.\n포함 관계라 합산하지 않고 독립 3라인으로 표시합니다.\n원천: /monitoring/power/timeseries (24h·1h·avg)"} />
+                <StatusTag connected={!!powerTs} />
+              </span>
             </CardTitle>
             <CardDescription>server(IPMI 실측) · cpu(추정) · accelerator(벤더 exporter) 세 계층을 같은 축에 둔다. period·step·aggregation으로 구간을 바꾼다.</CardDescription>
           </CardHeader>
@@ -290,7 +276,7 @@ export default function MonitoringOverviewPage() {
               }}
               className="h-[220px] w-full"
             >
-              <LineChart data={POWER_SERIES}>
+              <LineChart data={powerTs?.series ?? []}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="t" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} interval={3} />
                 <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}W`} />
@@ -301,9 +287,9 @@ export default function MonitoringOverviewPage() {
               </LineChart>
             </ChartContainer>
             <div className="mt-3 flex items-center gap-6 text-xs">
-              <Marker label="server" value="2,306 W" color="bg-brand-indigo-500" />
-              <Marker label="cpu" value="1,603 W" color="bg-amber-500" />
-              <Marker label="accelerator" value="241 W" color="bg-brand-mint-500" />
+              <Marker label="server" value={psLast?.server != null ? `${Math.round(psLast.server).toLocaleString()} W` : "—"} color="bg-brand-indigo-500" />
+              <Marker label="cpu" value={psLast?.cpu != null ? `${Math.round(psLast.cpu).toLocaleString()} W` : "—"} color="bg-amber-500" />
+              <Marker label="accelerator" value={psLast?.accelerator != null ? `${Math.round(psLast.accelerator).toLocaleString()} W` : "—"} color="bg-brand-mint-500" />
             </div>
           </CardContent>
         </Card>
@@ -392,14 +378,18 @@ function PowerBreakdownCard() {
     { key: "accelerator", label: "카드별" },
   ];
   const [dim, setDim] = React.useState("vendor");
-  const items = POWER_BREAKDOWN[dim];
-  const max = Math.max(...items.map((i) => i.watts));
+  const { data } = usePowerBreakdown(dim);
+  const items = data?.items ?? [];
+  const max = items.length ? Math.max(...items.map((i) => i.watts)) : 1;
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between text-base">
           전력 분해
-          <StatusTag />
+          <span className="flex items-center gap-1.5">
+            <InfoHint text={"dimension(벤더·클러스터·노드·카드)으로 쪼개는 기준을 바꿉니다.\nlayer: server(IPMI) / cpu(추정) / accelerator(벤더).\n원천: /monitoring/power/breakdown"} />
+            <StatusTag connected={!!data} />
+          </span>
         </CardTitle>
         <CardDescription>dimension 파라미터로 쪼개는 기준을 바꾼다.</CardDescription>
       </CardHeader>
@@ -419,9 +409,13 @@ function PowerBreakdownCard() {
             </button>
           ))}
         </div>
-        {items.map((it, i) => (
-          <TopRow key={it.key} idx={i + 1} name={`${it.key}  ·  ${it.layer}`} value={it.watts} unit="W" max={max} color="mint" />
-        ))}
+        {items.length === 0 ? (
+          <div className="py-6 text-center text-xs text-muted-foreground">데이터 없음</div>
+        ) : (
+          items.map((it, i) => (
+            <TopRow key={`${it.key}-${i}`} idx={i + 1} name={`${it.key}  ·  ${it.layer}`} value={it.watts} unit="W" max={max} color="mint" />
+          ))
+        )}
       </CardContent>
     </Card>
   );
@@ -442,6 +436,20 @@ function StatusTag({ connected }: { connected?: boolean }) {
       <span className={cn("size-1.5 rounded-full", connected ? "bg-brand-mint-500" : "bg-muted-foreground/40")} />
       {connected ? "연동" : "목업"}
     </span>
+  );
+}
+
+// 집계 범위/소스 안내 — 인포 아이콘에 올리면 툴팁으로 포함 클러스터·산출 기준 표시
+function InfoHint({ text }: { text: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" className="inline-flex cursor-help text-muted-foreground hover:text-foreground" aria-label="집계 정보">
+          <Info className="size-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs whitespace-pre-line text-xs leading-relaxed">{text}</TooltipContent>
+    </Tooltip>
   );
 }
 

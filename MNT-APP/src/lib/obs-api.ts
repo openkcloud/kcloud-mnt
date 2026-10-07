@@ -33,6 +33,26 @@ export interface AcceleratorSummary {
   vendors: Record<string, VendorMetrics>;
   accelerator_count: number;
   throttled_count: number;
+  source_clusters: string[];
+}
+
+export interface PowerBreakdownItem {
+  key: string;
+  watts: number;
+  layer: string;
+}
+export interface PowerBreakdown {
+  dimension: string;
+  items: PowerBreakdownItem[];
+}
+export interface PowerSeriesRow {
+  t: string;
+  server?: number;
+  cpu?: number;
+  accelerator?: number;
+}
+export interface PowerTimeseries {
+  series: PowerSeriesRow[];
 }
 
 async function obsFetch<T>(path: string): Promise<T> {
@@ -64,6 +84,24 @@ export function useMonitoringOverview(cluster = "mgmt") {
   return useQuery({
     queryKey: ["obs-overview", cluster],
     queryFn: () => obsFetch<MonitoringOverview>(`/monitoring/overview?cluster=${cluster}`),
+    refetchInterval: pollMs || false,
+  });
+}
+
+export function usePowerBreakdown(dimension: string) {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-power-breakdown", dimension],
+    queryFn: () => obsFetch<PowerBreakdown>(`/monitoring/power/breakdown?dimension=${dimension}`),
+    refetchInterval: pollMs || false,
+  });
+}
+
+export function usePowerTimeseries(period = "24h", step = "1h") {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-power-timeseries", period, step],
+    queryFn: () => obsFetch<PowerTimeseries>(`/monitoring/power/timeseries?period=${period}&step=${step}&aggregation=avg`),
     refetchInterval: pollMs || false,
   });
 }
