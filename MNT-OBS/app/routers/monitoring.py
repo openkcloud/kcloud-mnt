@@ -78,3 +78,26 @@ def accelerator_summary(cluster: str = Query("mgmt")):
         }
 
     return {"cluster": cluster, "vendors": vendors}
+
+
+@router.get("/monitoring/overview")
+def overview(cluster: str = Query("mgmt")):
+    """상단 KPI — 전력효율·가속기사용률·서버총전력·정상노드 (제공 중 4종)."""
+    try:
+        res = monitor.get(f"/clusters/{cluster}/resource").get("data", {})
+        eff = monitor.get("/monitoring/power/efficiency").get("data", {})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+
+    resources = res.get("resources", {}) or {}
+    accel = resources.get("accelerators", {}) or {}
+    nodes = resources.get("nodes", {}) or {}
+    power = res.get("power", {}) or {}
+    return {
+        "cluster": cluster,
+        "power_efficiency_pct_per_watt": eff.get("avg_efficiency_pct_per_watt"),
+        "accelerator_utilization_percent": accel.get("avg_utilization_percent"),
+        "total_power_watts": power.get("total_watts"),
+        "nodes_ready": nodes.get("ready"),
+        "nodes_total": nodes.get("total"),
+    }

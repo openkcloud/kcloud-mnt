@@ -47,3 +47,21 @@ export function useAcceleratorSummary(cluster = "mgmt") {
     refetchInterval: pollMs || false,
   });
 }
+
+export interface MonitoringOverview {
+  cluster: string;
+  power_efficiency_pct_per_watt: number | null;
+  accelerator_utilization_percent: number | null;
+  total_power_watts: number | null;
+  nodes_ready: number | null;
+  nodes_total: number | null;
+}
+
+export function useMonitoringOverview(cluster = "mgmt") {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-overview", cluster],
+    queryFn: () => obsFetch<MonitoringOverview>(`/monitoring/overview?cluster=${cluster}`),
+    refetchInterval: pollMs || false,
+  });
+}
