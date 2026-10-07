@@ -364,6 +364,7 @@ function CreateNetworkDialog({
 }
 
 function NetworkDetailPanel({ network, projectLabel, onClose }: { network: IaasNetwork; projectLabel: string; onClose: () => void }) {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
   const { data: detail, isLoading, isError } = useNetwork(network.id);
   const [addSubnetOpen, setAddSubnetOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
@@ -514,7 +515,7 @@ function NetworkDetailPanel({ network, projectLabel, onClose }: { network: IaasN
                     </div>
                     <div className="text-xs text-muted-foreground">{sg.desc}</div>
                   </div>
-                  <Button variant="ghost" size="sm" onClick={() => setSgEditId(sg.id)}>규칙 편집</Button>
+                  {isAdmin && <Button variant="ghost" size="sm" onClick={() => setSgEditId(sg.id)}>규칙 편집</Button>}
                 </div>
               </Card>
             ))}
@@ -542,15 +543,17 @@ function NetworkDetailPanel({ network, projectLabel, onClose }: { network: IaasN
           </TabsContent>
 
           <TabsContent value="fip" className="mt-3">
-            <FipTab projectId={detail.tenantId} fips={detail.floatingIps} copy={copy} />
+            <FipTab projectId={detail.tenantId} fips={detail.floatingIps} copy={copy} canWrite={isAdmin} />
           </TabsContent>
         </Tabs>
 
-        {/* Actions */}
-        <div className="flex items-center gap-2 border-t border-border pt-4">
-          <Button variant="outline" size="sm" onClick={() => setAddSubnetOpen(true)}>서브넷 추가</Button>
-          <Button variant="destructive" size="sm" className="ml-auto" onClick={() => setDeleteOpen(true)}>네트워크 삭제</Button>
-        </div>
+        {/* Actions — 네트워크 생성·관리는 관리자 기능(회의록). 사용자는 조회·선택만. */}
+        {isAdmin && (
+          <div className="flex items-center gap-2 border-t border-border pt-4">
+            <Button variant="outline" size="sm" onClick={() => setAddSubnetOpen(true)}>서브넷 추가</Button>
+            <Button variant="destructive" size="sm" className="ml-auto" onClick={() => setDeleteOpen(true)}>네트워크 삭제</Button>
+          </div>
+        )}
 
         <AddSubnetDialog networkId={network.id} open={addSubnetOpen} onClose={() => setAddSubnetOpen(false)} />
         <DeleteNetworkDialog
@@ -670,11 +673,12 @@ function DeleteNetworkDialog({
 }
 
 function FipTab({
-  projectId, fips, copy,
+  projectId, fips, copy, canWrite,
 }: {
   projectId: string;
   fips: NetworkDetail["floatingIps"];
   copy: (text: string, label: string) => void;
+  canWrite: boolean;
 }) {
   const allocate = useAllocateFip();
   const release = useReleaseFip();
@@ -687,23 +691,25 @@ function FipTab({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">공인 IP {fips.length}개</span>
-        <Button
-          size="sm"
-          disabled={busy}
-          onClick={async () => {
-            if (!(await confirm({
-              title: "공인 IP 확보",
-              description: "외부 풀에서 공인 IP를 1개 확보합니다. (프로젝트 쿼터를 소비)",
-              confirmLabel: "확보",
-            }))) return;
-            allocate.mutate(projectId, {
-              onSuccess: (f) => toast.success(`공인 IP 확보됨`, { description: (f as { floating_ip_address?: string }).floating_ip_address }),
-              onError: (e) => toast.error("확보 실패", { description: String((e as Error).message) }),
-            });
-          }}
-        >
-          <Plus className="size-3.5" /> 공인 IP 확보
-        </Button>
+        {canWrite && (
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={async () => {
+              if (!(await confirm({
+                title: "공인 IP 확보",
+                description: "외부 풀에서 공인 IP를 1개 확보합니다. (프로젝트 쿼터를 소비)",
+                confirmLabel: "확보",
+              }))) return;
+              allocate.mutate(projectId, {
+                onSuccess: (f) => toast.success(`공인 IP 확보됨`, { description: (f as { floating_ip_address?: string }).floating_ip_address }),
+                onError: (e) => toast.error("확보 실패", { description: String((e as Error).message) }),
+              });
+            }}
+          >
+            <Plus className="size-3.5" /> 공인 IP 확보
+          </Button>
+        )}
       </div>
 
       {fips.length === 0 ? (
@@ -741,7 +747,7 @@ function FipTab({
                         <Button variant="ghost" size="icon-sm" onClick={() => copy(f.ip, "공인 IP")} title="IP 복사">
                           <Copy className="size-3.5" />
                         </Button>
-                        {associated ? (
+                        {canWrite && (associated ? (
                           <Button
                             variant="ghost" size="sm" className="h-7 text-[11px]" disabled={busy}
                             onClick={async () => {
@@ -761,22 +767,24 @@ function FipTab({
                           <Button variant="ghost" size="sm" className="h-7 text-[11px]" disabled={busy} onClick={() => setAssocFor(f.id)}>
                             연결
                           </Button>
+                        ))}
+                        {canWrite && (
+                          <Button
+                            variant="ghost" size="sm" className="h-7 text-[11px] text-rose-600" disabled={busy}
+                            onClick={async () => {
+                              if (!(await confirm({
+                                title: "공인 IP 반납", destructive: true, confirmLabel: "반납",
+                                description: `${f.ip} 를 외부 풀로 반납할까요? 되돌릴 수 없습니다.`,
+                              }))) return;
+                              release.mutate(f.id, {
+                                onSuccess: () => toast.success(`${f.ip} 반납됨`),
+                                onError: (e) => toast.error("반납 실패", { description: String((e as Error).message) }),
+                              });
+                            }}
+                          >
+                            반납
+                          </Button>
                         )}
-                        <Button
-                          variant="ghost" size="sm" className="h-7 text-[11px] text-rose-600" disabled={busy}
-                          onClick={async () => {
-                            if (!(await confirm({
-                              title: "공인 IP 반납", destructive: true, confirmLabel: "반납",
-                              description: `${f.ip} 를 외부 풀로 반납할까요? 되돌릴 수 없습니다.`,
-                            }))) return;
-                            release.mutate(f.id, {
-                              onSuccess: () => toast.success(`${f.ip} 반납됨`),
-                              onError: (e) => toast.error("반납 실패", { description: String((e as Error).message) }),
-                            });
-                          }}
-                        >
-                          반납
-                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>

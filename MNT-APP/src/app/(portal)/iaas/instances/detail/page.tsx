@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm";
+import { useAuth } from "@/lib/auth";
 import {
   useServer, useServerDiagnostics, usePowerAction, useDeleteServer,
   useAttachVolume, useDetachVolume, useAttachInterface, useDetachInterface,
@@ -35,6 +36,7 @@ export default function Page() {
 
 function ServerDetailPage() {
   const router = useRouter();
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
   const id = useSearchParams().get("id") ?? undefined;
   const { data: s, isLoading, isError } = useServer(id);
   const { data: projData } = useProjects();
@@ -109,19 +111,19 @@ function ServerDetailPage() {
           <div className="truncate font-mono text-xs text-muted-foreground">{s.id} · 프로젝트 {projName(s.tenantId)}</div>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => setResizeOpen(true)}><SlidersHorizontal className="size-3.5" /> 스펙 변경</Button>
+          {isAdmin && <Button variant="outline" size="sm" disabled={busy} onClick={() => setResizeOpen(true)}><SlidersHorizontal className="size-3.5" /> 스펙 변경</Button>}
           {s.status === "SHUTOFF" ? (
             <Button variant="outline" size="sm" disabled={busy} onClick={() => doPower("start")}><Play className="size-3.5" /> 시작</Button>
           ) : (
             <Button variant="outline" size="sm" disabled={busy} onClick={() => doPower("stop")}><Square className="size-3.5" /> 정지</Button>
           )}
           <Button variant="outline" size="sm" disabled={busy} onClick={() => doPower("reboot")}><RotateCw className="size-3.5" /> 재부팅</Button>
-          <Button variant="destructive" size="sm" disabled={busy} onClick={doDelete}><Trash2 className="size-3.5" /> 삭제</Button>
+          {isAdmin && <Button variant="destructive" size="sm" disabled={busy} onClick={doDelete}><Trash2 className="size-3.5" /> 삭제</Button>}
         </div>
       </div>
 
-      {/* 스펙 변경 확정 대기 배너 */}
-      {s.status === "VERIFY_RESIZE" && (
+      {/* 스펙 변경 확정 대기 배너 (resize는 관리자 전용) */}
+      {isAdmin && s.status === "VERIFY_RESIZE" && (
         <Card className="flex items-center gap-3 border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
           <Gauge className="size-4 shrink-0" />
           <span className="flex-1">스펙 변경이 적용되었습니다. <strong>확정</strong>하거나 <strong>되돌리기</strong>를 선택하세요.</span>
@@ -232,7 +234,7 @@ function ServerDetailPage() {
 
       <AttachVolumeDialog serverId={s.id} projectId={s.tenantId} attached={new Set(s.attachedVolumes.map((v) => v.volumeId))} open={attachVolOpen} onClose={() => setAttachVolOpen(false)} />
       <AttachNetworkDialog serverId={s.id} projectId={s.tenantId} attached={new Set(s.interfaces.map((i) => i.netId))} open={attachNetOpen} onClose={() => setAttachNetOpen(false)} />
-      <ResizeDialog serverId={s.id} currentFlavor={s.flavorName} open={resizeOpen} onClose={() => setResizeOpen(false)} />
+      {isAdmin && <ResizeDialog serverId={s.id} currentFlavor={s.flavorName} open={resizeOpen} onClose={() => setResizeOpen(false)} />}
     </div>
   );
 }

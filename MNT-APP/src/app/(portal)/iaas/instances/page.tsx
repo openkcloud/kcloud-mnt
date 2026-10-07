@@ -138,7 +138,7 @@ export default function InstancesPage() {
                     )}
                     <Button variant="ghost" size="icon-sm" title="재부팅" disabled={busy} onClick={() => doPower(s, "reboot")}><RotateCw className="size-3.5" /></Button>
                     <Button variant="ghost" size="icon-sm" title="상세" onClick={() => open(s.id)}><Settings className="size-3.5" /></Button>
-                    <Button variant="ghost" size="icon-sm" title="삭제" disabled={busy} onClick={() => doDelete(s)}><Trash2 className="size-3.5 text-rose-600" /></Button>
+                    {isAdmin && <Button variant="ghost" size="icon-sm" title="삭제" disabled={busy} onClick={() => doDelete(s)}><Trash2 className="size-3.5 text-rose-600" /></Button>}
                   </div>
                 </TableCell>
               </TableRow>
