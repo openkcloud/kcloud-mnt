@@ -113,9 +113,11 @@ export default function VolumesPage() {
           <span className="text-xs text-muted-foreground">총 {items.length}개</span>
           <div className="ml-auto flex items-center gap-2">
             <RefreshControls queryKeys={[["iaas-volumes"], ["iaas-storage-capacity"]]} />
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus className="size-3.5" /> 볼륨 생성
-            </Button>
+            {isAdmin && (
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
+                <Plus className="size-3.5" /> 볼륨 생성
+              </Button>
+            )}
           </div>
         </div>
       </Card>
@@ -163,7 +165,7 @@ export default function VolumesPage() {
 
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
         <DialogContent className="max-w-2xl">
-          {selected && <VolumeDetailBody volume={selected} projectLabel={projName(selected.tenantId)} onClose={() => setSelected(undefined)} />}
+          {selected && <VolumeDetailBody volume={selected} projectLabel={projName(selected.tenantId)} canWrite={isAdmin} onClose={() => setSelected(undefined)} />}
         </DialogContent>
       </Dialog>
 
@@ -172,7 +174,7 @@ export default function VolumesPage() {
   );
 }
 
-function VolumeDetailBody({ volume, projectLabel, onClose }: { volume: VolumeSummary; projectLabel: string; onClose: () => void }) {
+function VolumeDetailBody({ volume, projectLabel, canWrite, onClose }: { volume: VolumeSummary; projectLabel: string; canWrite: boolean; onClose: () => void }) {
   const { data: d, isLoading, isError } = useVolume(volume.id);
   const del = useDeleteVolume();
   const confirm = useConfirm();
@@ -252,23 +254,25 @@ function VolumeDetailBody({ volume, projectLabel, onClose }: { volume: VolumeSum
             </TabsContent>
 
             <TabsContent value="snapshots" className="pt-3">
-              {d && <SnapshotsTab volumeId={d.id} volumeName={d.name} snapshots={d.snapshots} />}
+              {d && <SnapshotsTab volumeId={d.id} volumeName={d.name} snapshots={d.snapshots} canWrite={canWrite} />}
             </TabsContent>
           </Tabs>
         )}
       </div>
 
-      <DialogFooter className="border-t border-border pt-4">
-        <Button variant="outline" size="sm" onClick={() => setExtendOpen(true)}><Expand className="size-3.5" /> 확장</Button>
-        <Button variant="destructive" size="sm" className="ml-auto" disabled={del.isPending} onClick={remove}><Trash2 className="size-3.5" /> 삭제</Button>
-      </DialogFooter>
+      {canWrite && (
+        <DialogFooter className="border-t border-border pt-4">
+          <Button variant="outline" size="sm" onClick={() => setExtendOpen(true)}><Expand className="size-3.5" /> 확장</Button>
+          <Button variant="destructive" size="sm" className="ml-auto" disabled={del.isPending} onClick={remove}><Trash2 className="size-3.5" /> 삭제</Button>
+        </DialogFooter>
+      )}
 
-      <ExtendVolumeDialog volumeId={t.id} currentSize={t.size} open={extendOpen} onClose={() => setExtendOpen(false)} />
+      {canWrite && <ExtendVolumeDialog volumeId={t.id} currentSize={t.size} open={extendOpen} onClose={() => setExtendOpen(false)} />}
     </>
   );
 }
 
-function SnapshotsTab({ volumeId, volumeName, snapshots }: { volumeId: string; volumeName: string; snapshots: VolumeDetail["snapshots"] }) {
+function SnapshotsTab({ volumeId, volumeName, snapshots, canWrite }: { volumeId: string; volumeName: string; snapshots: VolumeDetail["snapshots"]; canWrite: boolean }) {
   const create = useCreateSnapshot();
   const del = useDeleteSnapshot();
   const confirm = useConfirm();
@@ -288,10 +292,12 @@ function SnapshotsTab({ volumeId, volumeName, snapshots }: { volumeId: string; v
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="스냅샷 이름" className="h-8" />
-        <Button size="sm" disabled={create.isPending} onClick={add}><Camera className="size-3.5" /> 생성</Button>
-      </div>
+      {canWrite && (
+        <div className="flex items-center gap-2">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="스냅샷 이름" className="h-8" />
+          <Button size="sm" disabled={create.isPending} onClick={add}><Camera className="size-3.5" /> 생성</Button>
+        </div>
+      )}
       {snapshots.length === 0 ? (
         <Card className="p-6 text-center text-sm text-muted-foreground">스냅샷이 없습니다.</Card>
       ) : (
@@ -305,9 +311,11 @@ function SnapshotsTab({ volumeId, volumeName, snapshots }: { volumeId: string; v
                   <TableCell className="text-center font-mono tabular-nums">{s.size}GB</TableCell>
                   <TableCell><Badge variant={STATUS_VARIANT[s.status] ?? "secondary"} className="text-[10px]">{s.status}</Badge></TableCell>
                   <TableCell>
-                    <Button variant="ghost" size="icon-sm" disabled={del.isPending} title="삭제" onClick={() => remove(s.id, s.name)}>
-                      <Trash2 className="size-3.5 text-rose-600" />
-                    </Button>
+                    {canWrite && (
+                      <Button variant="ghost" size="icon-sm" disabled={del.isPending} title="삭제" onClick={() => remove(s.id, s.name)}>
+                        <Trash2 className="size-3.5 text-rose-600" />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
