@@ -77,7 +77,12 @@ def accelerator_summary(cluster: str = Query("mgmt")):
             ]),
         }
 
-    return {"cluster": cluster, "vendors": vendors}
+    return {
+        "cluster": cluster,
+        "vendors": vendors,
+        "accelerator_count": len(accels),
+        "throttled_count": sum(1 for a in accels if a.get("throttled")),
+    }
 
 
 @router.get("/monitoring/overview")

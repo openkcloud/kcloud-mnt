@@ -31,6 +31,8 @@ export interface VendorMetrics {
 export interface AcceleratorSummary {
   cluster: string;
   vendors: Record<string, VendorMetrics>;
+  accelerator_count: number;
+  throttled_count: number;
 }
 
 async function obsFetch<T>(path: string): Promise<T> {
