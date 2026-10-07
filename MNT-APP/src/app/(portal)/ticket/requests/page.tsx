@@ -128,12 +128,36 @@ function TypeBadge({ type }: { type: "vm" | "cluster" }) {
   );
 }
 
-function specSummary(r: ResourceRequest) {
-  if (r.type === "vm") {
-    if (r.deviceProfile) return `${r.flavorName ?? "—"} · ${r.deviceProfile}`;
-    return `${r.flavorName ?? "—"} · ${r.acceleratorKind ?? "—"}×${r.acceleratorCount ?? 0}`;
-  }
-  return `Worker×${r.nodeCount ?? 0} · ${r.acceleratorKind ?? "—"}×${r.acceleratorCount ?? 0}`;
+// 목록 '프로젝트 · 신청자' 칸 — 두 줄: 프로젝트 / 신청자 (조직)
+function ProjectRequesterCell({ r }: { r: ResourceRequest }) {
+  return (
+    <div className="space-y-0.5">
+      <div className="font-mono text-xs">{r.projectName}</div>
+      <div className="text-[11px] text-muted-foreground">{r.requestedByName}{r.orgName ? ` (${r.orgName})` : ""}</div>
+    </div>
+  );
+}
+
+// 목록 스펙 칸 — VM: 플레이버 + 가속기 배지 / 클러스터: 워커 수 · 가속기
+function SpecCell({ r }: { r: ResourceRequest }) {
+  if (r.type !== "vm") return <>{`Worker×${r.nodeCount ?? 0} · ${r.acceleratorKind ?? "—"}×${r.acceleratorCount ?? 0}`}</>;
+  const accels = r.accelerators?.length ? r.accelerators
+    : r.acceleratorKind ? [{ kind: r.acceleratorKind, count: r.acceleratorCount ?? 1 }] // 목업 티켓
+    : [];
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      {r.flavorName ?? "—"}
+      {accels.map((a) => (
+        <Badge key={a.kind} variant="ghost" className={cn("h-5 gap-1 px-1.5 text-[10px]", accKindClass(a.kind))}>
+          <Cpu className="size-3" />{a.kind} × {a.count}
+        </Badge>
+      ))}
+      {/* 가속기는 있으나 종류를 모를 때(종류 저장 전 티켓) */}
+      {!accels.length && r.deviceProfile && (
+        <Badge variant="ghost" className={cn("h-5 gap-1 px-1.5 text-[10px]", accKindClass())}><Cpu className="size-3" />가속기</Badge>
+      )}
+    </span>
+  );
 }
 
 function fmtDt(iso: string) {
@@ -154,9 +178,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+// 가속기 종류 색 — 플랫폼 공통(대시보드·토폴로지·서버 상세): GPU 인디고, NPU 민트
+// (민트 100·700 단계는 Tailwind 테마에 없어 CSS 변수를 직접 참조)
 function accKindClass(kind?: string) {
-  return kind === "GPU" ? "bg-green-100 text-green-800"
-    : kind === "NPU" ? "bg-purple-100 text-purple-800"
+  return kind === "GPU" ? "bg-brand-indigo-100 text-brand-indigo-700"
+    : kind === "NPU" ? "bg-[var(--brand-mint-100)] text-[var(--brand-mint-700)]"
     : kind === "PIM" ? "bg-amber-100 text-amber-800"
     : "bg-slate-100 text-slate-700";
 }
@@ -217,8 +243,18 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
               <span className="font-mono">{r.diskGb ? `${r.diskGb} GB` : r.volumeGb ? `부팅 볼륨 ${r.volumeGb} GB` : "—"}</span>
             </Field>
             <Field label="가속기">
-              {r.deviceProfile
-                ? <Badge variant="ghost" className="gap-1 bg-purple-100 font-mono text-purple-800"><Cpu className="size-3" />{r.deviceProfile}</Badge>
+              {r.accelerators?.length
+                ? (
+                  <span className="inline-flex flex-wrap items-center justify-end gap-1">
+                    {r.accelerators.map((a) => (
+                      <Badge key={a.kind} variant="ghost" className={cn("gap-1 font-mono", accKindClass(a.kind))}>
+                        <Cpu className="size-3" />{a.kind} × {a.count}
+                      </Badge>
+                    ))}
+                  </span>
+                )
+                : r.deviceProfile
+                ? <Badge variant="ghost" className={cn("gap-1 font-mono", accKindClass())}><Cpu className="size-3" />가속기</Badge>
                 : r.acceleratorKind
                 ? <Badge variant="ghost" className={cn("gap-1 font-mono", accKindClass(r.acceleratorKind))}><Cpu className="size-3" />{r.acceleratorKind} × {r.acceleratorCount ?? 1}</Badge>
                 : <span className="text-muted-foreground">없음</span>}
@@ -906,9 +942,8 @@ function AdminView() {
               <TableRow>
                 <TableHead>신청 ID</TableHead>
                 <TableHead>유형</TableHead>
-                <TableHead>조직</TableHead>
-                <TableHead>신청자</TableHead>
-                <TableHead>프로젝트</TableHead>
+                <TableHead>프로젝트 · 신청자</TableHead>
+                <TableHead>가상서버/클러스터</TableHead>
                 <TableHead>스펙</TableHead>
                 <TableHead>신청 일시</TableHead>
                 <TableHead><StatusHelpHead /></TableHead>
@@ -924,10 +959,9 @@ function AdminView() {
                   <TableRow key={r.id} className="cursor-pointer" onClick={() => openDetail(r)}>
                     <TableCell className="font-mono text-xs text-muted-foreground">{r.id}</TableCell>
                     <TableCell><TypeBadge type={r.type} /></TableCell>
-                    <TableCell className="text-sm">{r.orgName ?? "—"}</TableCell>
-                    <TableCell className="text-sm">{r.requestedByName}</TableCell>
-                    <TableCell className="font-mono text-xs">{r.projectName}</TableCell>
-                    <TableCell className="font-mono text-xs">{specSummary(r)}</TableCell>
+                    <TableCell><ProjectRequesterCell r={r} /></TableCell>
+                    <TableCell className="font-mono text-xs">{(r.type === "vm" ? r.vmName : r.clusterName) || "—"}</TableCell>
+                    <TableCell className="font-mono text-xs"><SpecCell r={r} /></TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
                     <TableCell><StatusBadge status={r.status} /></TableCell>
                     <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
@@ -985,7 +1019,7 @@ function AdminView() {
               })}
               {items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className={cn("py-12 text-center text-sm", error ? "text-rose-600" : "text-muted-foreground")}>
+                  <TableCell colSpan={8} className={cn("py-12 text-center text-sm", error ? "text-rose-600" : "text-muted-foreground")}>
                     {error ? `신청 목록을 불러오지 못했습니다 (${error.message}).` : "조건에 맞는 신청이 없습니다."}
                   </TableCell>
                 </TableRow>
@@ -1138,11 +1172,11 @@ function UserView({ username }: { username: string }) {
               <TableRow>
                 <TableHead>신청 ID</TableHead>
                 <TableHead>유형</TableHead>
-                <TableHead>프로젝트</TableHead>
+                <TableHead>프로젝트 · 신청자</TableHead>
+                <TableHead>가상서버/클러스터</TableHead>
                 <TableHead>스펙</TableHead>
                 <TableHead>신청 일시</TableHead>
                 <TableHead><StatusHelpHead /></TableHead>
-                <TableHead>관리자 피드백</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1150,19 +1184,11 @@ function UserView({ username }: { username: string }) {
                 <TableRow key={r.id} className="cursor-pointer" onClick={() => { setDetail(r); setDetailOpen(true); }}>
                   <TableCell className="font-mono text-xs text-muted-foreground">{r.id}</TableCell>
                   <TableCell><TypeBadge type={r.type} /></TableCell>
-                  <TableCell className="font-mono text-xs">{r.projectName}</TableCell>
-                  <TableCell className="font-mono text-xs">{specSummary(r)}</TableCell>
+                  <TableCell><ProjectRequesterCell r={r} /></TableCell>
+                  <TableCell className="font-mono text-xs">{(r.type === "vm" ? r.vmName : r.clusterName) || "—"}</TableCell>
+                  <TableCell className="font-mono text-xs"><SpecCell r={r} /></TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
                   <TableCell><StatusBadge status={r.status} /></TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {r.status === "rejected" && rejectReasonOf(r) ? (
-                      <span className="text-rose-600">{rejectReasonOf(r)}</span>
-                    ) : r.provisioningByName ? (
-                      `${r.provisioningByName} · ${fmtDt(r.provisioningAt ?? "")}`
-                    ) : r.approvedByName ? (
-                      `${r.approvedByName} · ${fmtDt(r.approvedAt ?? "")}`
-                    ) : "—"}
-                  </TableCell>
                 </TableRow>
               ))}
               {items.length === 0 && (

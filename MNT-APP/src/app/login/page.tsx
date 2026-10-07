@@ -12,6 +12,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 
+// 계정 빠른 입력 — 목업 계정 + 실제 DB 계정 gy.yang (IAM 사용자 목업 화면에는 넣지 않으려고 여기서만 추가)
+const QUICK_LOGIN_USERS: typeof MOCK_USERS = {
+  ...MOCK_USERS,
+  "gy.yang": {
+    password: "gy.yang",
+    user: { id: "", username: "gy.yang", displayName: "양기영", email: "", org: "오케스트로", role: "user", projects: [] },
+  },
+};
+
 const schema = z.object({
   username: z.string().min(1, "아이디를 입력하세요."),
   password: z.string().min(1, "비밀번호를 입력하세요."),
@@ -159,7 +168,7 @@ export default function LoginPage() {
                 계정 선택 (클릭하여 자동 입력)
               </div>
               <div className="grid gap-1.5">
-                {Object.entries(MOCK_USERS).map(([key, { user }]) => (
+                {Object.entries(QUICK_LOGIN_USERS).map(([key, { user }]) => (
                   <button
                     type="button"
                     key={key}
@@ -171,7 +180,7 @@ export default function LoginPage() {
                   >
                     <div>
                       <div className="font-medium">{user.displayName}</div>
-                      <div className="text-muted-foreground">{user.email}</div>
+                      <div className="text-muted-foreground">{user.email || user.org}</div>
                     </div>
                     <div className="text-right">
                       <div className="font-medium text-primary">

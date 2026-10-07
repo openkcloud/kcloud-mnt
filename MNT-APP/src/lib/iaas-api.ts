@@ -617,6 +617,7 @@ export function useDeleteImage() {
 // ────── 플레이버 (Nova) — 전역 자원(프로젝트 없음) ──────
 export interface FlavorSummary {
   id: string; name: string; vcpus: number; ramMb: number; diskGb: number; isPublic: boolean; accelerator: string | null;
+  accelerators?: { kind: string; count: number }[]; // device-profile 의 가속기 종류(GPU/NPU)·개수
 }
 export interface DeviceProfile { name: string; uuid: string }
 

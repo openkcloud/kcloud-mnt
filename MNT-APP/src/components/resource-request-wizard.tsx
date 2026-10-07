@@ -15,6 +15,7 @@ import {
   KeyRound,
   Boxes,
   Disc3,
+  Cpu,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -100,6 +101,19 @@ const USER_NETWORKS = [
 
 // 부팅 볼륨 최대 크기 (GB)
 const MAX_VOLUME_GB = 500;
+
+// 가속기 종류 배지 색 — 플랫폼 공통(대시보드·토폴로지·서버 상세): GPU 인디고, NPU 민트
+// (민트 100·700 단계는 Tailwind 테마에 없어 CSS 변수를 직접 참조)
+function accelKindClass(kind: string) {
+  return kind === "GPU" ? "bg-brand-indigo-100 text-brand-indigo-700"
+    : kind === "NPU" ? "bg-[var(--brand-mint-100)] text-[var(--brand-mint-700)]"
+    : "bg-slate-100 text-slate-700";
+}
+
+// 예) "GPU × 1 + NPU × 1"
+function accelSummary(f: FlavorSummary) {
+  return (f.accelerators ?? []).map((a) => `${a.kind} × ${a.count}`).join(" + ");
+}
 
 // VM 이름 = 서버 이름 = hostname. Nova hostname 규칙(^[a-zA-Z0-9]+[a-zA-Z0-9-]*[a-zA-Z0-9]+$, 2~63자)에서
 // 영문은 소문자만 허용. 생성 시 hostname 에도 같은 값을 지정한다(microversion 2.90+).
@@ -435,7 +449,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
           <div className="flex gap-2.5 rounded-lg border border-sky-200 bg-sky-50 p-3">
             <Info className="mt-0.5 size-4 shrink-0 text-sky-600" />
             <p className="text-xs text-sky-800 leading-relaxed">
-              <span className="font-semibold">가속기가 필요한 경우</span> — 가속기(디바이스 프로파일)가 표시된 스펙을 선택하세요.
+              <span className="font-semibold">가속기가 필요한 경우</span> — GPU·NPU 가속기가 표시된 스펙을 선택하세요.
               가속기는 스펙에 내장되어 있으며 별도로 선택할 필요가 없습니다.
             </p>
           </div>
@@ -483,10 +497,14 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-mono font-semibold">{f.name}</span>
-                    {f.accelerator && (
-                      <Badge variant="ghost" className="h-5 bg-purple-100 px-1.5 font-mono text-[10px] text-purple-800">
-                        가속기 · {f.accelerator}
+                    {(f.accelerators ?? []).map((a) => (
+                      <Badge key={a.kind} variant="ghost" className={cn("h-5 gap-1 px-1.5 font-mono text-[10px]", accelKindClass(a.kind))}>
+                        <Cpu className="size-3" />{a.kind} × {a.count}
                       </Badge>
+                    ))}
+                    {/* 종류를 모를 때(Cyborg 조회 실패) — 가속기 없음으로 보이지 않게 */}
+                    {f.accelerator && !f.accelerators?.length && (
+                      <Badge variant="ghost" className={cn("h-5 gap-1 px-1.5 font-mono text-[10px]", accelKindClass(""))}><Cpu className="size-3" />가속기</Badge>
                     )}
                   </div>
                   <div className="font-mono text-xs text-muted-foreground tabular-nums">
@@ -653,8 +671,11 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               />
               <ReviewRow
                 label="가속기"
-                value={selectedFlavor?.accelerator ?? "없음"}
-                accent={selectedFlavor?.accelerator ? "purple" : undefined}
+                value={selectedFlavor?.accelerator ? accelSummary(selectedFlavor) || "가속기" : "없음"}
+                accent={(() => { // 한 종류면 그 색(GPU 인디고·NPU 민트), 섞이거나 모르면 기본색
+                  const kinds = new Set(selectedFlavor?.accelerators?.map((a) => a.kind));
+                  return kinds.size !== 1 ? undefined : kinds.has("GPU") ? "indigo" : kinds.has("NPU") ? "mint" : undefined;
+                })()}
               />
               <ReviewRow label="템플릿" value={selectedImage?.name} mono />
               <ReviewRow
@@ -708,13 +729,15 @@ function ReviewRow({ label, value, mono, accent }: {
   label: string;
   value?: string;
   mono?: boolean;
-  accent?: "green" | "purple";
+  accent?: "green" | "purple" | "indigo" | "mint";
 }) {
   const valueClass = cn(
     "text-right text-sm",
     mono && "font-mono",
     accent === "green" && "text-green-700 font-medium",
     accent === "purple" && "text-purple-700 font-medium",
+    accent === "indigo" && "text-brand-indigo-700 font-medium",
+    accent === "mint" && "text-[var(--brand-mint-700)] font-medium",
     !value && "text-rose-500",
   );
   return (
