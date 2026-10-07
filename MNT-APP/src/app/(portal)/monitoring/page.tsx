@@ -442,8 +442,8 @@ function StatusTag({ connected, api }: { connected?: boolean; api?: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>{badge}</TooltipTrigger>
-      <TooltipContent className="max-w-sm whitespace-pre-line text-[11px]">
-        <span className="text-muted-foreground">{connected ? "연동됨 · 데이터 원천" : "목업 · 연동 예정"}</span>
+      <TooltipContent className="max-w-sm whitespace-pre-line border border-border bg-popover text-[11px] text-popover-foreground shadow-md">
+        <span className="font-medium text-muted-foreground">{connected ? "연동됨 · 데이터 원천" : "목업 · 연동 예정"}</span>
         <br />
         <span className="font-mono">{api}</span>
       </TooltipContent>
@@ -460,7 +460,7 @@ function InfoHint({ text }: { text: string }) {
           <Info className="size-3.5" />
         </button>
       </TooltipTrigger>
-      <TooltipContent className="max-w-xs whitespace-pre-line text-xs leading-relaxed">{text}</TooltipContent>
+      <TooltipContent className="max-w-xs whitespace-pre-line border border-border bg-popover text-xs leading-relaxed text-popover-foreground shadow-md">{text}</TooltipContent>
     </Tooltip>
   );
 }
