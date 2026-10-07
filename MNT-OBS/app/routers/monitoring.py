@@ -89,23 +89,26 @@ def accelerator_summary(cluster: str = Query("mgmt")):
 
 @router.get("/monitoring/overview")
 def overview(cluster: str = Query("mgmt")):
-    """상단 KPI — 전력효율·가속기사용률·서버총전력·정상노드 (제공 중 4종)."""
+    """상단 KPI — 가이드 매핑대로:
+    전력효율=/monitoring/power/efficiency, 가속기사용률=/clusters/{c}/resource,
+    서버총전력=/monitoring/power/summary, 정상노드=/monitoring/overview.
+    """
     try:
         res = monitor.get(f"/clusters/{cluster}/resource").get("data", {})
         eff = monitor.get("/monitoring/power/efficiency").get("data", {})
+        psum = monitor.get("/monitoring/power/summary").get("data", {})
+        mov = monitor.get("/monitoring/overview").get("data", {})
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
 
-    resources = res.get("resources", {}) or {}
-    accel = resources.get("accelerators", {}) or {}
-    nodes = resources.get("nodes", {}) or {}
-    power = res.get("power", {}) or {}
+    accel = (res.get("resources", {}) or {}).get("accelerators", {}) or {}
+    nodes = mov.get("nodes", {}) or {}
     return {
         "cluster": cluster,
         "power_efficiency_pct_per_watt": eff.get("avg_efficiency_pct_per_watt"),
         "accelerator_utilization_percent": accel.get("avg_utilization_percent"),
-        "total_power_watts": power.get("total_watts"),
-        "nodes_ready": nodes.get("ready"),
+        "total_power_watts": psum.get("server_total_watts"),   # /monitoring/power/summary
+        "nodes_ready": nodes.get("healthy"),                   # /monitoring/overview
         "nodes_total": nodes.get("total"),
     }
 
@@ -144,3 +147,41 @@ def power_timeseries(period: str = Query("24h"), step: str = Query("1h"), aggreg
                 pass
     series = [merged[k] for k in sorted(merged.keys())]
     return {"series": series}
+
+
+@router.get("/monitoring/clusters")
+def clusters():
+    """클러스터 자원 현황 — /clusters 목록 + 클러스터별 /resource 병합.
+    서비스 클러스터는 IPMI 없어 power.total_watts=null(화면 '—')."""
+    try:
+        lst = monitor.get("/clusters").get("data", [])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    rows = []
+    for c in lst:
+        name = c.get("name")
+        res: dict = {}
+        try:
+            res = monitor.get(f"/clusters/{name}/resource").get("data", {})
+        except Exception:  # noqa: BLE001 — 개별 클러스터 실패는 건너뜀
+            pass
+        resources = res.get("resources", {}) or {}
+        nodes = resources.get("nodes", {}) or {}
+        cpu = resources.get("cpu", {}) or {}
+        mem = resources.get("memory", {}) or {}
+        accel = resources.get("accelerators", {}) or {}
+        power = res.get("power", {}) or {}
+        rows.append({
+            "cluster": name,
+            "type": c.get("type"),
+            "parent_cluster": c.get("parent_cluster"),
+            "nodes_ready": nodes.get("ready"),
+            "nodes_total": nodes.get("total"),
+            "cpu_percent": cpu.get("utilization_percent"),
+            "memory_percent": mem.get("utilization_percent"),
+            "accelerator_total": accel.get("total"),
+            "accelerator_util_percent": accel.get("avg_utilization_percent"),
+            "power_watts": power.get("total_watts"),
+            "status": c.get("status"),
+        })
+    return {"clusters": rows}

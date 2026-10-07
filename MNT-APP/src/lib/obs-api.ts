@@ -105,3 +105,29 @@ export function usePowerTimeseries(period = "24h", step = "1h") {
     refetchInterval: pollMs || false,
   });
 }
+
+export interface ClusterRow {
+  cluster: string;
+  type: string | null;
+  parent_cluster: string | null;
+  nodes_ready: number | null;
+  nodes_total: number | null;
+  cpu_percent: number | null;
+  memory_percent: number | null;
+  accelerator_total: number | null;
+  accelerator_util_percent: number | null;
+  power_watts: number | null;
+  status: string | null;
+}
+export interface ClusterResources {
+  clusters: ClusterRow[];
+}
+
+export function useClusterResources() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-clusters"],
+    queryFn: () => obsFetch<ClusterResources>(`/monitoring/clusters`),
+    refetchInterval: pollMs || false,
+  });
+}
