@@ -5,6 +5,7 @@ OpenStack 값(프로젝트·플레이버·이미지·서버 이름)은 MNT-IAAS 
 신청 시점의 이름·스펙을 request_spec 에 함께 저장한다(표시용 스냅샷).
 """
 import http.client
+import ipaddress
 import json
 import re
 import urllib.error
@@ -66,15 +67,26 @@ def _ticket_name_taken(db: Session, project_id: str, name: str) -> bool:
 
 _SELECT = """
     SELECT r.id, r.type, r.status, r.project_id, r.request_spec, r.provision_spec, r.result,
-           r.reviewed_at, r.reject_reason, r.error_message, r.created_at,
+           r.approved_at, r.provisioning_at, r.approved_reject_at, r.approved_reject_reason,
+           r.provisioning_reject_at, r.provisioning_reject_reason, r.error_message, r.created_at,
            u.username, u.name AS requester_name, o.id AS org_id, o.name AS org_name,
-           rv.username AS reviewer_username, rv.name AS reviewer_name
+           ap.username AS approved_by, ap.name AS approved_by_name,
+           pv.username AS provisioning_by, pv.name AS provisioning_by_name,
+           ar.username AS approved_reject_by, ar.name AS approved_reject_by_name,
+           pr.username AS provisioning_reject_by, pr.name AS provisioning_reject_by_name
       FROM tkt_request r
       JOIN iam_user u ON u.id = r.requested_by
       JOIN iam_project p ON p.project_id = r.project_id
       JOIN iam_org o ON o.id = p.org_id
-      LEFT JOIN iam_user rv ON rv.id = r.reviewed_by
+      LEFT JOIN iam_user ap ON ap.id = r.approved_by
+      LEFT JOIN iam_user pv ON pv.id = r.provisioning_by
+      LEFT JOIN iam_user ar ON ar.id = r.approved_reject_by
+      LEFT JOIN iam_user pr ON pr.id = r.provisioning_reject_by
 """
+
+
+def _iso(v) -> str | None:
+    return v.isoformat() if v else None
 
 
 def _to_item(r) -> dict:
@@ -92,10 +104,21 @@ def _to_item(r) -> dict:
         "projectId": r["project_id"],
         "provisionSpec": r["provision_spec"],
         "result": r["result"],
-        "reviewedBy": r["reviewer_username"],
-        "reviewedByName": r["reviewer_name"],
-        "reviewedAt": r["reviewed_at"].isoformat() if r["reviewed_at"] else None,
-        "rejectReason": r["reject_reason"],
+        # 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려)
+        "approvedBy": r["approved_by"],
+        "approvedByName": r["approved_by_name"],
+        "approvedAt": _iso(r["approved_at"]),
+        "provisioningBy": r["provisioning_by"],
+        "provisioningByName": r["provisioning_by_name"],
+        "provisioningAt": _iso(r["provisioning_at"]),
+        "approvedRejectBy": r["approved_reject_by"],
+        "approvedRejectByName": r["approved_reject_by_name"],
+        "approvedRejectAt": _iso(r["approved_reject_at"]),
+        "approvedRejectReason": r["approved_reject_reason"],
+        "provisioningRejectBy": r["provisioning_reject_by"],
+        "provisioningRejectByName": r["provisioning_reject_by_name"],
+        "provisioningRejectAt": _iso(r["provisioning_reject_at"]),
+        "provisioningRejectReason": r["provisioning_reject_reason"],
         "errorMessage": r["error_message"],
     }
 
@@ -259,3 +282,114 @@ def create_ticket(body: CreateTicketBody, db: Session = Depends(get_db)):
     db.commit()
     row = db.execute(text(_SELECT + " WHERE r.id = :id"), {"id": ticket_id}).mappings().one()
     return _to_item(row)
+
+
+class ReviewBody(BaseModel):
+    action: str                  # approve | reject
+    processedBy: str             # 처리자 username (admin 역할)
+    reason: str | None = None    # 반려 사유 (반려 시 필수)
+    expectedStatus: str | None = None  # 화면이 보고 있던 상태 — 다르면 다른 관리자가 먼저 처리한 것(409)
+
+
+# 반려 단계별 기록 컬럼 접두어 — 대기 → 반려 = 승인 단계 반려, 승인 → 반려 = 프로비저닝 단계 반려
+_REJECT_STAGE = {"pending": "approved_reject", "approved": "provisioning_reject"}
+
+
+@router.patch("/tickets/{ticket_id}")
+def review_ticket(ticket_id: str, body: ReviewBody, db: Session = Depends(get_db)):
+    """승인·반려(관리자).
+    - 승인: 대기(pending) → 승인(approved). 승인 설정(네트워크·보안그룹)은 프로비저닝 단계에서 입력한다.
+    - 반려: 대기 → 반려(approved_reject_*), 승인 → 반려(provisioning_reject_*). 사유 필수."""
+    if body.action not in ("approve", "reject"):
+        raise HTTPException(400, "action 은 approve 또는 reject 여야 합니다")
+    admin_id = db.execute(
+        text("""SELECT u.id FROM iam_user u
+                  JOIN iam_user_role ur ON ur.user_id = u.id
+                  JOIN iam_role r ON r.id = ur.role_id
+                 WHERE u.username = :u AND u.status = 'active' AND r.code = 'admin'"""),
+        {"u": body.processedBy},
+    ).scalar()
+    if admin_id is None:
+        raise HTTPException(403, "승인·반려는 관리자만 할 수 있습니다")
+    status = db.execute(text("SELECT status FROM tkt_request WHERE id = :id"), {"id": ticket_id}).scalar()
+    if status is None:
+        raise HTTPException(404, "신청을 찾을 수 없습니다")
+    if body.expectedStatus and body.expectedStatus != status:
+        raise HTTPException(409, "다른 관리자가 먼저 처리했습니다. 목록을 새로 고쳐 확인하세요")
+
+    params = {"id": ticket_id, "cur": status, "by": admin_id}
+    if body.action == "approve":
+        if status != "pending":
+            raise HTTPException(409, "대기중인 신청만 승인할 수 있습니다")
+        sets = "status = 'approved', approved_by = :by, approved_at = now()"
+    else:
+        stage = _REJECT_STAGE.get(status)
+        if stage is None:
+            raise HTTPException(409, "대기중이거나 승인된 신청만 반려할 수 있습니다")
+        params["reason"] = (body.reason or "").strip()
+        if not params["reason"]:
+            raise HTTPException(400, "반려 사유를 입력하세요")
+        sets = f"status = 'rejected', {stage}_by = :by, {stage}_at = now(), {stage}_reason = :reason"
+
+    # 읽은 상태 그대로일 때만 바꾼다 — 그사이 다른 관리자가 처리했으면 0건 → 409
+    res = db.execute(text(f"UPDATE tkt_request SET {sets} WHERE id = :id AND status = :cur"), params)
+    if res.rowcount == 0:
+        db.rollback()
+        raise HTTPException(409, "다른 관리자가 먼저 처리했습니다. 목록을 새로 고쳐 확인하세요")
+    db.commit()
+    return _to_item(db.execute(text(_SELECT + " WHERE r.id = :id"), {"id": ticket_id}).mappings().one())
+
+
+# ── 프로비저닝 단계 승인 설정 확인 — 프로비저닝 API(개발 중)에서 사용 ─────────────
+# 2-1 에서 승인 단계에 두었던 검증을 프로비저닝 단계로 옮겨 둔 것. 아직 호출하는 API 는 없다.
+
+class ProvisionSpecBody(BaseModel):
+    networkId: str
+    floatingNetworkId: str | None = None  # 내부·공유망 + Floating IP 일 때 FIP 풀(external 망)
+    fixedIp: str | None = None            # external 망 Static IP 직접 입력 (없으면 자동 할당)
+    securityGroups: list[str] = []        # 보안그룹 이름 (프로젝트 라이브 조회 기준)
+
+
+def _verified_provision_spec(project_id: str, spec: ProvisionSpecBody) -> dict:
+    """승인 설정을 라이브 조회로 다시 확인하고, 네트워크 이름·종류 등은 서버 값으로 채운다."""
+    nets = {n["id"]: n for n in _iaas(_project_path(project_id) + "/networks")["items"]}
+    net = nets.get(spec.networkId)
+    if not net:
+        raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
+    out = {"networkId": net["id"], "networkName": net["name"], "networkKind": net["kind"]}
+    if net["kind"] == "external":
+        if spec.floatingNetworkId:
+            raise HTTPException(400, "외부(external) 네트워크에는 Floating IP 를 함께 지정할 수 없습니다")
+        if spec.fixedIp:
+            chk = _iaas(f"/networks/{quote(net['id'], safe='')}/ip-check?ip={quote(spec.fixedIp, safe='')}")
+            if not chk["available"]:
+                raise HTTPException(409, f"Static IP {spec.fixedIp}: {chk['reason']}")
+            out["fixedIp"] = str(ipaddress.ip_address(spec.fixedIp))  # 정규화해서 저장
+    else:
+        if spec.fixedIp:
+            raise HTTPException(400, "Static IP 는 외부(external) 네트워크에서만 지정할 수 있습니다")
+        if spec.floatingNetworkId:
+            fip = nets.get(spec.floatingNetworkId)
+            if not fip or fip["kind"] != "external":
+                raise HTTPException(400, "Floating IP 풀은 외부(external) 네트워크여야 합니다")
+            out |= {"floatingNetworkId": fip["id"], "floatingNetworkName": fip["name"]}
+    sg_names = [g["name"] for g in _iaas(_project_path(project_id) + "/security-groups")["items"]]
+    for name in spec.securityGroups:
+        if sg_names.count(name) != 1:
+            raise HTTPException(400, f"보안그룹 '{name}'을(를) 프로젝트에서 찾을 수 없거나 같은 이름이 여러 개입니다")
+    out["securityGroups"] = list(dict.fromkeys(spec.securityGroups))  # 중복 제거, 순서 유지
+    return out
+
+
+def _check_fixed_ip_unassigned(db: Session, ticket_id: str, spec: dict) -> None:
+    """Neutron 포트는 VM 생성 때 생기므로, 같은 Static IP 가 지정된 다른 신청(생성 중·재시도 대상 실패)도 확인.
+    같은 IP 동시 지정은 잠금으로 직렬화(트랜잭션 종료 시 해제) — 저장과 같은 트랜잭션 안에서 호출할 것."""
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"tkt-ip:{spec['networkId']}:{spec['fixedIp']}"})
+    other = db.execute(
+        text("""SELECT id FROM tkt_request
+                 WHERE id <> :id AND status IN ('provisioning', 'failed')
+                   AND provision_spec->>'networkId' = :net AND provision_spec->>'fixedIp' = :ip"""),
+        {"id": ticket_id, "net": spec["networkId"], "ip": spec["fixedIp"]},
+    ).scalar()
+    if other:
+        raise HTTPException(409, f"Static IP {spec['fixedIp']}: 다른 신청({other})에 이미 지정된 IP입니다")

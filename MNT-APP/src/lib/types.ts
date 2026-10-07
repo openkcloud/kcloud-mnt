@@ -602,10 +602,20 @@ export interface ResourceRequest {
   k8sVersion?: string;
   nodeCount?: number;      // Worker 노드 수
   masterCount?: number;    // Control Plane 노드 수
-  // Review
-  reviewedBy?: string;
-  reviewedByName?: string;
-  reviewedAt?: string;
-  rejectReason?: string;
+  // 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려)
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  provisioningBy?: string;
+  provisioningByName?: string;
+  provisioningAt?: string;
+  approvedRejectBy?: string;
+  approvedRejectByName?: string;
+  approvedRejectAt?: string;
+  approvedRejectReason?: string;
+  provisioningRejectBy?: string;
+  provisioningRejectByName?: string;
+  provisioningRejectAt?: string;
+  provisioningRejectReason?: string;
   resultId?: string;
 }

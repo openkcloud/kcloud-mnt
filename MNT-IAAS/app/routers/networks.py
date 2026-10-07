@@ -8,6 +8,8 @@
 라우터·보안그룹·FIP 는 네트워크가 아니라 '프로젝트' 소속이므로 네트워크의 project_id 기준으로 묶는다.
 대역폭(telemetry)은 Neutron 범위 밖 → null.
 """
+import ipaddress
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -612,3 +614,68 @@ def list_project_subnets(project_id: str):
         for s in subnets
     ]
     return {"items": items, "count": len(items)}
+
+
+# ────── 자원신청 승인용 — 티켓 프로젝트 기준 라이브 조회 ──────
+
+@router.get("/projects/{project_id}/networks")
+def list_project_networks(project_id: str):
+    """승인 시 고를 네트워크 — 프로젝트 소유 + 공유 + 외부(external). kind: project|shared|external.
+    공유는 전체 공유(shared) + 이 프로젝트에만 RBAC 로 공유된 것(관리자 조회 시 shared=false 로 보이므로 따로 확인).
+    cidr 는 서브넷 CIDR(여러 개면 ', ' 로 연결)."""
+    try:
+        nets = _neutron_get("/networks")["networks"]
+        subnets = _neutron_get("/subnets")["subnets"]
+        rbac = _neutron_get("/rbac-policies", {"object_type": "network", "action": "access_as_shared"})["rbac_policies"]
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"네트워크 조회 실패: {type(e).__name__}: {e}")
+    shared_to_project = {p["object_id"] for p in rbac if p.get("target_tenant") in (project_id, "*")}
+    items = []
+    for n in nets:
+        kind = "project" if _net_type(n) == "tenant" else _net_type(n)
+        owner = n.get("project_id") or n.get("tenant_id") or ""
+        if kind == "project" and owner != project_id:
+            if n["id"] not in shared_to_project:
+                continue
+            kind = "shared"
+        cidrs = [sn["cidr"] for sn in subnets if sn["network_id"] == n["id"]]
+        items.append({"id": n["id"], "name": n.get("name") or n["id"], "kind": kind,
+                      "projectId": owner, "cidr": ", ".join(cidrs)})
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/projects/{project_id}/security-groups")
+def list_project_security_groups(project_id: str):
+    """승인 시 고를 보안그룹 — 프로젝트 소유분."""
+    try:
+        sgs = _neutron_get("/security-groups", {"project_id": project_id})["security_groups"]
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"보안 그룹 조회 실패: {type(e).__name__}: {e}")
+    items = [{"id": sg["id"], "name": sg.get("name") or sg["id"], "projectId": project_id,
+              "description": sg.get("description") or ""} for sg in sgs]
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/networks/{network_id}/ip-check")
+def ip_check(network_id: str, ip: str):
+    """Static IP 사용 가능 여부 — 서브넷 범위·네트워크/브로드캐스트·게이트웨이·사용 중 포트."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return {"available": False, "reason": "IP 주소 형식이 올바르지 않습니다."}
+    try:
+        subnets = _neutron_get("/subnets", {"network_id": network_id})["subnets"]
+        sub = next((sn for sn in subnets if addr in ipaddress.ip_network(sn["cidr"])), None)
+        if sub is None:
+            return {"available": False, "reason": "네트워크의 서브넷 범위를 벗어난 IP입니다."}
+        cidr = ipaddress.ip_network(sub["cidr"])
+        if addr in (cidr.network_address, cidr.broadcast_address):
+            return {"available": False, "reason": "네트워크·브로드캐스트 주소는 쓸 수 없습니다."}
+        if sub.get("gateway_ip") == str(addr):
+            return {"available": False, "reason": "게이트웨이 주소입니다."}
+        ports = _neutron_get("/ports", {"network_id": network_id, "fixed_ips": f"ip_address={addr}"})["ports"]
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"IP 사용 여부 조회 실패: {type(e).__name__}: {e}")
+    if ports:
+        return {"available": False, "reason": "이미 사용 중인 IP입니다."}
+    return {"available": True, "reason": None}

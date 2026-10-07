@@ -48,7 +48,8 @@ export function useVmNameCheck(projectId: string, name: string, enabled: boolean
 }
 
 /** 신청 목록 — filters: requestedBy(username)·status·type·orgId. requestedBy 가 없으면 전체(관리자).
- *  승인·생성 중인 티켓이 있으면 상태가 바뀔 때까지 2초마다 다시 조회. */
+ *  생성 중인 티켓이 있으면 상태가 바뀔 때까지 2초마다 다시 조회.
+ *  (프로비저닝 연결 전에는 approved 가 끝나지 않으므로 provisioning 만 — 연결 시 approved 도 포함) */
 export function useTickets(filters: Record<string, string>, enabled = true) {
   return useQuery({
     queryKey: ["tickets", "list", filters],
@@ -56,7 +57,7 @@ export function useTickets(filters: Record<string, string>, enabled = true) {
     queryFn: () => coreFetch<{ items: ResourceRequest[]; total: number }>(`/tickets?${new URLSearchParams(filters)}`),
     retry: 0,
     refetchInterval: (query) =>
-      query.state.data?.items.some((r) => r.status === "approved" || r.status === "provisioning") ? 2000 : false,
+      query.state.data?.items.some((r) => r.status === "provisioning") ? 2000 : false,
   });
 }
 
@@ -66,6 +67,25 @@ export function useOrgs() {
     queryKey: ["tickets", "orgs"],
     queryFn: async (): Promise<Org[]> => (await coreFetch<{ items: Org[] }>(`/orgs`)).items,
     retry: 0,
+  });
+}
+
+export interface ReviewTicketInput {
+  id: string;
+  action: "approve" | "reject";
+  processedBy: string;     // 처리자 username (admin 역할)
+  reason?: string;         // 반려 사유 (반려 시 필수)
+  expectedStatus: string;  // 화면이 보고 있던 상태 — 그사이 바뀌었으면 서버가 409
+}
+
+/** 승인(대기 → 승인)·반려(대기·승인 → 반려) — 관리자. 승인 설정은 프로비저닝 단계에서 입력. */
+export function useReviewTicket() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: ReviewTicketInput) =>
+      coreFetch<ResourceRequest>(`/tickets/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
+    // 실패(예: 다른 관리자가 먼저 처리 → 409)해도 목록을 다시 받아 최신 상태를 보여준다
+    onSettled: () => qc.invalidateQueries({ queryKey: ["tickets", "list"] }),
   });
 }
 

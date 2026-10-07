@@ -1,21 +1,9 @@
 "use client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type {
-  ProvisionSpec, ProvisionStepsResp, ProvNetwork, SecurityGroup,
-} from "@/lib/types";
+import type { ProvisionStepsResp } from "@/lib/types";
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return (await res.json()) as T;
-}
-
-async function patch<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return (await res.json()) as T;
 }
@@ -52,20 +40,6 @@ export const api = {
   },
   // 자원 신청(티켓) — VM·서비스 클러스터 공통
   ticket: {
-    reviewRequest: () => {
-      const qc = useQueryClient();
-      return useMutation({
-        mutationFn: ({ id, ...body }: {
-          id: string;
-          action: "approve" | "reject";
-          reason?: string;
-          provisionSpec?: ProvisionSpec;
-          reviewedBy?: string;
-          reviewedByName?: string;
-        }) => patch(`/api/ticket/requests/${id}`, body),
-        onSuccess: () => qc.invalidateQueries({ queryKey: ["ticket"] }),
-      });
-    },
     // 프로비저닝 진행 단계 — 진행 중이면 폴링
     steps: (id: string | undefined) =>
       useQuery({
@@ -107,29 +81,6 @@ export const api = {
     networks: () => useQuery({ queryKey: ["iaas", "networks"], queryFn: () => get("/api/iaas/networks") }),
     centers: () => useQuery({ queryKey: ["iaas", "centers"], queryFn: () => get("/api/iaas/centers") }),
     zones: () => useQuery({ queryKey: ["iaas", "zones"], queryFn: () => get("/api/iaas/zones") }),
-    projectNetworks: (projectId: string | undefined) =>
-      useQuery({
-        queryKey: ["iaas", "project-networks", projectId],
-        queryFn: () => get<{ items: ProvNetwork[] }>(`/api/iaas/projects/${projectId}/networks`),
-        enabled: !!projectId,
-      }),
-    // Static IP 사용 여부 (Neutron 포트 조회)
-    ipCheck: (networkId: string, ip: string, enabled: boolean) =>
-      useQuery({
-        queryKey: ["iaas", "ip-check", networkId, ip],
-        queryFn: () =>
-          get<{ available: boolean; reason: string | null }>(
-            `/api/iaas/networks/${networkId}/ip-check?${new URLSearchParams({ ip })}`,
-          ),
-        enabled,
-        retry: 1,
-      }),
-    projectSecurityGroups: (projectId: string | undefined) =>
-      useQuery({
-        queryKey: ["iaas", "project-sgs", projectId],
-        queryFn: () => get<{ items: SecurityGroup[] }>(`/api/iaas/projects/${projectId}/security-groups`),
-        enabled: !!projectId,
-      }),
   },
   paas: {
     clusters: () => useQuery({ queryKey: ["paas", "clusters"], queryFn: () => get("/api/paas/clusters") }),
