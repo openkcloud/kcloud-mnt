@@ -14,7 +14,16 @@ export default function PortalLayout({
   const pathname = usePathname();
   const user = useAuth((s) => s.user);
 
+  // persist(localStorage) 복원이 끝날 때까지 로그인 판단을 미룬다.
+  // (새로고침 시 복원 전에 가드가 돌아 /login 으로 튕기는 문제 방지)
+  const [hydrated, setHydrated] = React.useState(false);
   React.useEffect(() => {
+    if (useAuth.persist.hasHydrated()) setHydrated(true);
+    return useAuth.persist.onFinishHydration(() => setHydrated(true));
+  }, []);
+
+  React.useEffect(() => {
+    if (!hydrated) return;
     if (!user) {
       router.replace("/login");
       return;
@@ -22,9 +31,9 @@ export default function PortalLayout({
     if (!canAccess(user.role, pathname)) {
       router.replace("/dashboard");
     }
-  }, [user, pathname, router]);
+  }, [hydrated, user, pathname, router]);
 
-  if (!user) {
+  if (!hydrated || !user) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-background">
         <div className="size-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />

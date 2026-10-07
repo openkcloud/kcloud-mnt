@@ -13,11 +13,18 @@ export default function FullscreenLayout({
   const router = useRouter();
   const user = useAuth((s) => s.user);
 
+  // persist 복원 완료 후 판단 (새로고침 시 /login 튕김 방지)
+  const [hydrated, setHydrated] = React.useState(false);
   React.useEffect(() => {
-    if (!user) router.replace("/login");
-  }, [user, router]);
+    if (useAuth.persist.hasHydrated()) setHydrated(true);
+    return useAuth.persist.onFinishHydration(() => setHydrated(true));
+  }, []);
 
-  if (!user) {
+  React.useEffect(() => {
+    if (hydrated && !user) router.replace("/login");
+  }, [hydrated, user, router]);
+
+  if (!hydrated || !user) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-slate-950">
         <div className="size-8 animate-spin rounded-full border-2 border-brand-mint-500 border-t-transparent" />
