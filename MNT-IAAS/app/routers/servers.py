@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import settings
-from ..openstack_client import get_conn, get_conn_for_project
+from ..openstack_client import get_conn, get_conn_for_project, os_request
 from .flavors import _cyborg
 from .volumes import CreateVolumeBody, _cinder_req, create_volume, delete_volume
 
@@ -26,20 +26,15 @@ _NOVA_MV = "2.72"  # flavor.original_name·host 등 포함 마이크로버전
 def _nova_req(method: str, path: str, *, json=None, project_id: str | None = None, microversion: str = _NOVA_MV,
               timeout: int = 20):
     """project_id 지정 시 그 프로젝트로 스코프해 호출(생성이 그 프로젝트 소유로 들어감 — volumes._cinder_req 와 같은 방식).
-    조회(GET)만 연결 끊김 시 1회 재시도 — 생성·조작 요청은 중복 실행 위험이 있어 재시도하지 않는다."""
+    조회는 연결 끊김 시 1회 재시도, 생성·조작은 재시도 없이 새 연결로 보낸다(os_request)."""
     conn = get_conn_for_project(project_id) if project_id else get_conn()
     headers = {"X-OpenStack-Nova-API-Version": microversion}
-    retries = 1 if method == "GET" else 0
     if settings.os_endpoint_mode == "catalog":
-        r = conn.session.request(
-            path, method, json=json, headers=headers, raise_exc=False,
-            endpoint_filter={"service_type": "compute", "interface": settings.os_interface}, timeout=timeout,
-            connect_retries=retries,
-        )
+        r = os_request(conn, path, method, json=json, headers=headers, raise_exc=False,
+                       endpoint_filter={"service_type": "compute", "interface": settings.os_interface}, timeout=timeout)
     else:  # override
         base = settings.os_endpoint_template.format(service="nova") + "/v2.1"
-        r = conn.session.request(f"{base}{path}", method, json=json, headers=headers, raise_exc=False, timeout=timeout,
-                                 connect_retries=retries)
+        r = os_request(conn, f"{base}{path}", method, json=json, headers=headers, raise_exc=False, timeout=timeout)
     if not r.ok:
         raise RuntimeError((r.text or f"HTTP {r.status_code}")[:300])
     return r
@@ -135,17 +130,24 @@ def _cloud_init_user_data(public_key: str) -> str:
     return base64.b64encode(cfg.encode()).decode()
 
 
-def _wait_volume_available(project_id: str, volume_id: str, *, timeout: int = 600, interval: int = 3):
-    """볼륨이 사용 가능(available)해질 때까지 대기 — 이미지 내려받기·변환(creating·downloading) 포함."""
+class VolumeNotReady(RuntimeError):
+    """볼륨이 error 가 됐거나 제한 시간 안에 준비되지 않음 — 다시 확인해도 소용없는 실패(조회 오류와 구분)."""
+
+
+def _wait_volume_available(project_id: str, volume_id: str, *, timeout: float = 300, interval: int = 3, tick=None):
+    """볼륨이 사용 가능(available)해질 때까지 대기 — 이미지 내려받기·변환(creating·downloading) 포함.
+    tick 은 확인할 때마다 호출(워크플로 작업의 heartbeat)."""
     deadline = time.monotonic() + timeout
     while True:
         status = _cinder_req("GET", f"/volumes/{volume_id}", project_id=project_id).json()["volume"]["status"]
         if status == "available":
             return
         if status == "error":
-            raise RuntimeError("Cinder 볼륨 생성 오류(status=error)")
+            raise VolumeNotReady("Cinder 볼륨 생성 오류(status=error)")
         if time.monotonic() > deadline:
-            raise RuntimeError(f"{timeout}초 안에 준비되지 않음(status={status})")
+            raise VolumeNotReady(f"{round(timeout)}초 안에 준비되지 않음(status={status})")
+        if tick:
+            tick(status)
         time.sleep(interval)
 
 
@@ -171,13 +173,18 @@ def create_server(project_id: str, body: CreateServerBody):
         _wait_volume_available(project_id, vol["id"])
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"부팅 볼륨 준비 실패: {e}" + _discard_volume(vol["id"]))
+    return {"id": _boot_server(project_id, body, vol["id"])}
+
+
+def _boot_server(project_id: str, body: CreateServerBody, volume_id: str) -> str:
+    """준비된 부팅 볼륨으로 Nova 생성 요청(1회) → 서버 ID. 실패하면 그 볼륨을 지우고 502."""
     network = {"uuid": body.networkId, **({"fixed_ip": body.fixedIp} if body.fixedIp else {})}
     server = {
         "name": body.name,
         "hostname": body.name,
         "flavorRef": body.flavorId,
         "block_device_mapping_v2": [{
-            "boot_index": 0, "uuid": vol["id"], "source_type": "volume", "destination_type": "volume",
+            "boot_index": 0, "uuid": volume_id, "source_type": "volume", "destination_type": "volume",
             "delete_on_termination": True,
         }],
         "networks": [network],
@@ -189,8 +196,8 @@ def create_server(project_id: str, body: CreateServerBody):
         s = _nova_req("POST", "/servers", json={"server": server}, project_id=project_id, microversion="2.90",
                       timeout=60).json()["server"]
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"가상서버 생성 요청 실패: {e}" + _discard_volume(vol["id"]))
-    return {"id": s["id"]}
+        raise HTTPException(502, f"가상서버 생성 요청 실패: {e}" + _discard_volume(volume_id))
+    return s["id"]
 
 
 @router.get("/servers/{server_id}/accelerator-requests")
@@ -206,13 +213,18 @@ def list_server_arqs(server_id: str):
 
 @router.get("/servers/{server_id}")
 def get_server(server_id: str):
+    return _server_detail(server_id, _accel_map())
+
+
+def _server_detail(server_id: str, accel_map: dict) -> dict:
+    """서버 + 연결 볼륨·인터페이스·보안그룹."""
     try:
         s = _nova_req("GET", f"/servers/{server_id}").json()["server"]
         vols = _nova_req("GET", f"/servers/{server_id}/os-volume_attachments").json().get("volumeAttachments", [])
         ifaces = _nova_req("GET", f"/servers/{server_id}/os-interface").json().get("interfaceAttachments", [])
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"가상서버 상세 조회 실패: {e}")
-    d = _to_server(s, _accel_map())
+    d = _to_server(s, accel_map)
     d["attachedVolumes"] = [{"volumeId": v.get("volumeId") or v.get("id"), "device": v.get("device")} for v in vols]
     d["interfaces"] = [
         {"portId": i.get("port_id"), "netId": i.get("net_id"), "state": i.get("port_state"),

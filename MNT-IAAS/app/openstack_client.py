@@ -4,6 +4,7 @@
 연결은 토큰 재사용을 위해 프로세스 1회 생성 후 캐시한다.
 """
 import openstack
+from keystoneauth1 import session as ks_session
 from openstack.config import loader as _loader  # noqa: F401 (사이드이펙트 없음, 버전 호환 확인용)
 
 from .config import settings
@@ -47,3 +48,18 @@ def get_conn_for_project(project_id: str) -> "openstack.connection.Connection":
         )
         _proj_conns[project_id] = conn
     return conn
+
+
+def os_request(conn, url: str, method: str, **kwargs):
+    """OpenStack API 요청 — 조회(GET)는 연결을 재사용하고 연결 오류 시 1회 재시도,
+    생성·변경은 매번 새 연결로 보낸다(인증 토큰은 conn 과 공유).
+    오래 쉬던 연결은 서버·NAT 가 이미 끊었을 수 있는데, 그 연결로 보낸 생성 요청은
+    'Remote end closed connection without response' 로 실패하고, 다시 보내면 중복 생성 위험이 있어 재시도할 수 없다.
+    새 연결로 보내면 이 경우가 생기지 않는다(추가 비용은 TLS 연결 1회)."""
+    if method == "GET":
+        return conn.session.request(url, method, connect_retries=1, **kwargs)
+    fresh = ks_session.Session(auth=conn.session.auth, verify=conn.session.verify)
+    try:
+        return fresh.request(url, method, connect_retries=0, **kwargs)
+    finally:
+        fresh.session.close()

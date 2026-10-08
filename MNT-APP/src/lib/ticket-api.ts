@@ -5,7 +5,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { coreFetch } from "@/lib/menu-api";
-import type { Org, ResourceRequest } from "@/lib/types";
+import type { Org, ProvisionSpec, ProvisionStepsResp, ResourceRequest } from "@/lib/types";
 
 /** 신청할 수 있는 프로젝트 — 내가 owner·member 인 프로젝트(이름은 OpenStack 라이브). */
 export interface TicketProject { id: string; name: string; role: string; orgId: string; orgName: string }
@@ -33,8 +33,8 @@ export function useVmNameCheck(projectId: string, name: string, enabled: boolean
 }
 
 /** 신청 목록 — filters: requestedBy(username)·status·type·orgId. requestedBy 가 없으면 전체(관리자).
- *  생성 중인 티켓이 있으면 상태가 바뀔 때까지 2초마다 다시 조회.
- *  (프로비저닝 연결 전에는 approved 가 끝나지 않으므로 provisioning 만 — 연결 시 approved 도 포함) */
+ *  생성 중(provisioning)인 티켓이 있으면 상태가 바뀔 때까지 2초마다 다시 조회.
+ *  (승인 → 생성 중은 관리자가 프로비저닝 버튼을 눌러야 바뀌므로 approved 는 다시 조회하지 않음) */
 export function useTickets(filters: Record<string, string>, enabled = true) {
   return useQuery({
     queryKey: ["tickets", "list", filters],
@@ -93,5 +93,34 @@ export function useCreateTicket() {
     mutationFn: (input: CreateTicketInput) =>
       coreFetch<ResourceRequest>(`/tickets`, { method: "POST", body: JSON.stringify(input) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tickets", "list"] }),
+  });
+}
+
+export interface ProvisionTicketInput {
+  id: string;
+  processedBy: string;     // 처리자 username (admin 역할)
+  expectedStatus: string;  // 화면이 보고 있던 상태 — 그사이 바뀌었으면 서버가 409
+  provisionSpec: Pick<ProvisionSpec, "networkId" | "floatingNetworkId" | "fixedIp" | "securityGroups">;
+}
+
+/** 프로비저닝 시작(승인 → 생성 중) · 재시도(실패 → 생성 중, 새 회차) — 서버가 승인 설정·VM 이름을 다시 확인한 뒤
+ *  Temporal 워크플로를 시작. 시작되면 그 티켓의 진행 기록을 비워(이전 회차가 남아 보이지 않게) 새 회차부터 다시 받는다. */
+export function useProvisionTicket() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: ProvisionTicketInput) =>
+      coreFetch<ResourceRequest>(`/tickets/${encodeURIComponent(id)}/provision`, { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: (_data, { id }) => qc.resetQueries({ queryKey: ["tickets", "steps", id], exact: true }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["tickets", "list"] }),
+  });
+}
+
+/** 프로비저닝 진행(최신 회차 단계·상세 단계) — 생성 중이면 2초마다 다시 조회. */
+export function useTicketSteps(id: string | undefined) {
+  return useQuery({
+    queryKey: ["tickets", "steps", id],
+    enabled: !!id,
+    queryFn: () => coreFetch<ProvisionStepsResp>(`/tickets/${encodeURIComponent(id!)}/steps`),
+    refetchInterval: (query) => (query.state.data?.status === "provisioning" ? 2000 : false),
   });
 }

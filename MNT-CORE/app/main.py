@@ -7,7 +7,11 @@
   pip install -r requirements.txt
   cp config.env.example config.env   # 값 수정
   uvicorn app.main:app --reload --port 8000
+  (TEMPORAL_API_BASE 가 있으면 Temporal 워커(VM 프로비저닝 워크플로 + DB 기록)도 함께 시작)
 """
+import asyncio
+from contextlib import asynccontextmanager, suppress
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -15,8 +19,20 @@ from sqlalchemy import text
 from .config import settings
 from .db import engine
 from .routers import auth, codes, members, menus, ssh_keys, tickets
+from .workflows.runtime import run_worker
 
-app = FastAPI(title="MNT-CORE", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    worker = asyncio.create_task(run_worker()) if settings.temporal_api_base else None
+    yield
+    if worker:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+
+
+app = FastAPI(title="MNT-CORE", version="0.1.0", lifespan=lifespan)
 
 if settings.cors_origins:
     app.add_middleware(

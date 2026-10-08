@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import settings
-from ..openstack_client import get_conn, get_conn_for_project
+from ..openstack_client import get_conn, get_conn_for_project, os_request
 
 router = APIRouter(tags=["volumes"])
 
@@ -31,18 +31,17 @@ def _cinder_err(r) -> str:
 
 def _cinder_req(method: str, path: str, *, json: dict | None = None, project_id: str | None = None):
     """project_id 지정 시 그 프로젝트로 스코프해 호출(생성이 그 프로젝트 소유로 들어감).
-    raise_exc=False 로 받아 Cinder 원본 에러 메시지를 그대로 노출한다."""
+    raise_exc=False 로 받아 Cinder 원본 에러 메시지를 그대로 노출한다.
+    조회는 연결 끊김 시 1회 재시도, 생성·변경은 재시도 없이 새 연결로 보낸다(os_request)."""
     conn = get_conn_for_project(project_id) if project_id else get_conn()
     if settings.os_endpoint_mode == "catalog":
-        r = conn.session.request(
-            path, method, json=json, raise_exc=False,
-            endpoint_filter={"service_type": "block-storage", "interface": settings.os_interface},
-            timeout=20,
-        )
+        r = os_request(conn, path, method, json=json, raise_exc=False,
+                       endpoint_filter={"service_type": "block-storage", "interface": settings.os_interface},
+                       timeout=20)
     else:  # override
         pid = project_id or conn.session.get_project_id()
         base = settings.os_endpoint_template.format(service="cinder") + f"/v3/{pid}"
-        r = conn.session.request(f"{base}{path}", method, json=json, timeout=20, raise_exc=False)
+        r = os_request(conn, f"{base}{path}", method, json=json, timeout=20, raise_exc=False)
     if not r.ok:
         raise RuntimeError(_cinder_err(r))
     return r
