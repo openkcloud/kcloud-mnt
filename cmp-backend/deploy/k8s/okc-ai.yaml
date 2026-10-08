@@ -1,0 +1,189 @@
+# ═══════════════════════════════════════════════════════════════════
+# openKcloud AI 노트북 — 클러스터 배포 (백엔드 + 포털)
+#   전제: Kubeflow 구성요소(Profile·Notebook 컨트롤러, Pipelines, Katib, KServe, MinIO)가
+#         이미 설치된 클러스터. 설치 순서는 docs/ETRI_포팅_가이드.md 참고
+#   적용: kubectl apply -f okc-ai.yaml
+#   바꿀 곳: ① Secret 값 ② ConfigMap의 PUBLIC_BASE_URL·CORS_ORIGINS·ACCEL_RESOURCE
+#            ③ 이미지 주소(사설 레지스트리에 올린 경우) ④ Ingress host
+# ═══════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: okc-ai
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: okc-ai-backend
+  namespace: okc-ai
+---
+# 백엔드가 쓰는 쿠버네티스 API (main.py 호출 목록 기준, 2026-09-28)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: okc-ai-backend
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, services, events, configmaps, persistentvolumeclaims,
+                resourcequotas, secrets, serviceaccounts]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods/exec, pods/portforward]
+    verbs: [get, create]
+  - apiGroups: [""]
+    resources: [namespaces, nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [kubeflow.org]
+    resources: [profiles, notebooks, poddefaults, experiments, trials, suggestions,
+                 scheduledworkflows]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [serving.kserve.io]
+    resources: [inferenceservices, servingruntimes, clusterservingruntimes]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [argoproj.io]
+    resources: [workflows]
+    verbs: [get, list, watch]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods, nodes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: okc-ai-backend
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: okc-ai-backend
+subjects:
+  - kind: ServiceAccount
+    name: okc-ai-backend
+    namespace: okc-ai
+---
+# 비밀 값 — 반드시 바꿔서 적용 (예시 값 그대로 쓰지 말 것)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: okc-ai-backend
+  namespace: okc-ai
+type: Opaque
+stringData:
+  CMP_SESSION_SECRET: "CHANGE-ME-임의의-긴-문자열"
+  # 아이디:비밀번호:역할(admin|user), 콤마로 구분
+  CMP_USERS: "admin:CHANGE-ME:admin"
+  MODEL_STORE_KEY: "minio"
+  MODEL_STORE_SECRET: "CHANGE-ME"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: okc-ai-backend
+  namespace: okc-ai
+data:
+  # 브라우저가 여는 포털 주소 (IDE 접속 주소 발급·CORS에 쓰인다)
+  PUBLIC_BASE_URL: "https://okc-ai.example.org"
+  CORS_ORIGINS: "https://okc-ai.example.org"
+  # 가속기 자원 이름 — NVIDIA GPU: nvidia.com/gpu / NPU: 장비 드라이버가 등록한 이름
+  ACCEL_RESOURCE: "nvidia.com/gpu"
+  # GPU Operator 클러스터는 빈 값, k3s+nvidia-container-runtime은 nvidia
+  GPU_RUNTIME_CLASS: ""
+  DEFAULT_NAMESPACE: "ai-research"
+  DEFAULT_NOTEBOOK_IMAGE: "kubeflownotebookswg/jupyter-scipy:v1.9.2"
+  MODEL_STORE_ENDPOINT: "minio-service.kubeflow:9000"
+  MODEL_STORE_BUCKET: "models"
+  MODEL_STORE_SA: "kserve-minio-sa"
+  SNAPSHOT_BUCKET: "snapshots"
+  LLM_SERVICE: "llm-serving/qwen-llm-predictor:80"
+  LLM_MODEL: "Qwen/Qwen2.5-0.5B-Instruct"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: okc-ai-backend
+  namespace: okc-ai
+spec:
+  replicas: 1   # port-forward·세션 상태를 프로세스에 들고 있어 1대로 운영
+  selector: { matchLabels: { app: okc-ai-backend } }
+  template:
+    metadata: { labels: { app: okc-ai-backend } }
+    spec:
+      serviceAccountName: okc-ai-backend
+      containers:
+        - name: backend
+          image: okc-ai-backend:0.1
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8000 }]
+          envFrom:
+            - configMapRef: { name: okc-ai-backend }
+            - secretRef: { name: okc-ai-backend }
+          readinessProbe:
+            httpGet: { path: /api/v1/profiles, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 10
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { cpu: "2", memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: okc-ai-backend
+  namespace: okc-ai
+spec:
+  selector: { app: okc-ai-backend }
+  ports: [{ port: 8000, targetPort: 8000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: okc-ai-portal
+  namespace: okc-ai
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: okc-ai-portal } }
+  template:
+    metadata: { labels: { app: okc-ai-portal } }
+    spec:
+      containers:
+        - name: portal
+          image: okc-ai-portal:0.1
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 3000 }]
+          readinessProbe:
+            httpGet: { path: /login/, port: 3000 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: okc-ai-portal
+  namespace: okc-ai
+spec:
+  selector: { app: okc-ai-portal }
+  ports: [{ port: 3000, targetPort: 3000 }]
+---
+# 한 주소로 포털과 백엔드를 함께 연다 (포털 이미지는 same-origin 모드로 빌드됨)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: okc-ai
+  namespace: okc-ai
+spec:
+  rules:
+    - host: okc-ai.example.org
+      http:
+        paths:
+          - { path: /api, pathType: Prefix, backend: { service: { name: okc-ai-backend, port: { number: 8000 } } } }
+          - { path: /notebook, pathType: Prefix, backend: { service: { name: okc-ai-backend, port: { number: 8000 } } } }
+          - { path: /, pathType: Prefix, backend: { service: { name: okc-ai-portal, port: { number: 3000 } } } }
