@@ -4,30 +4,40 @@
 환경독립: override=template.format(service="nova")+"/v2.1", catalog=service_type="compute".
 가속기는 flavor extra_spec(accel:device_profile)에서 도출.
 """
+import base64
+import json as _json
+import re
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import settings
-from ..openstack_client import get_conn
+from ..openstack_client import get_conn, get_conn_for_project
+from .flavors import _cyborg
 
 router = APIRouter(tags=["servers"])
 
 _NOVA_MV = "2.72"  # flavor.original_name·host 등 포함 마이크로버전
 
 
-def _nova_req(method: str, path: str, *, json=None):
-    conn = get_conn()
-    headers = {"X-OpenStack-Nova-API-Version": _NOVA_MV}
+def _nova_req(method: str, path: str, *, json=None, project_id: str | None = None, microversion: str = _NOVA_MV,
+              timeout: int = 20):
+    """project_id 지정 시 그 프로젝트로 스코프해 호출(생성이 그 프로젝트 소유로 들어감 — volumes._cinder_req 와 같은 방식).
+    조회(GET)만 연결 끊김 시 1회 재시도 — 생성·조작 요청은 중복 실행 위험이 있어 재시도하지 않는다."""
+    conn = get_conn_for_project(project_id) if project_id else get_conn()
+    headers = {"X-OpenStack-Nova-API-Version": microversion}
+    retries = 1 if method == "GET" else 0
     if settings.os_endpoint_mode == "catalog":
         r = conn.session.request(
             path, method, json=json, headers=headers, raise_exc=False,
-            endpoint_filter={"service_type": "compute", "interface": settings.os_interface}, timeout=20,
+            endpoint_filter={"service_type": "compute", "interface": settings.os_interface}, timeout=timeout,
+            connect_retries=retries,
         )
     else:  # override
         base = settings.os_endpoint_template.format(service="nova") + "/v2.1"
-        r = conn.session.request(f"{base}{path}", method, json=json, headers=headers, raise_exc=False, timeout=20)
+        r = conn.session.request(f"{base}{path}", method, json=json, headers=headers, raise_exc=False, timeout=timeout,
+                                 connect_retries=retries)
     if not r.ok:
         raise RuntimeError((r.text or f"HTTP {r.status_code}")[:300])
     return r
@@ -64,6 +74,8 @@ def _to_server(s: dict, accel_map: dict) -> dict:
         "tenantId": s.get("tenant_id") or "",
         "status": s.get("status", ""),
         "vmState": s.get("OS-EXT-STS:vm_state", ""),
+        "taskState": s.get("OS-EXT-STS:task_state"),  # scheduling·networking·block_device_mapping·spawning … (진행 중일 때)
+        "fault": (s.get("fault") or {}).get("message"),  # 빌드 실패 사유(ERROR 일 때)
         "powerState": s.get("OS-EXT-STS:power_state", 0),
         "flavorName": fname,
         "vcpus": f.get("vcpus", 0),
@@ -90,13 +102,73 @@ def list_servers():
 
 
 @router.get("/projects/{project_id}/server-names")
-def list_server_names(project_id: str):
-    """프로젝트의 가상서버 이름 목록(경량, Nova 1회) — 자원신청 VM 이름 중복 확인용."""
+def list_server_names(project_id: str, name: str | None = None):
+    """프로젝트의 가상서버 이름 목록(경량, Nova 1회) — 자원신청 VM 이름 중복 확인용.
+    name 을 주면 Nova 이름 필터(정규식 ^이름$)로 그 이름의 서버만 조회 — VM 이 많아도 결과 0~1건, 목록 1000건 제한과 무관."""
+    query = f"all_tenants=1&project_id={quote(project_id, safe='')}"
+    if name:
+        query += f"&name={quote('^' + re.escape(name) + '$', safe='')}"
     try:
-        servers = _nova_req("GET", f"/servers?all_tenants=1&project_id={quote(project_id, safe='')}").json()["servers"]
+        servers = _nova_req("GET", f"/servers?{query}").json()["servers"]
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"가상서버 조회 실패: {e}")
     return {"names": [s.get("name") for s in servers]}
+
+
+class CreateServerBody(BaseModel):
+    name: str                         # 서버 이름 = hostname
+    flavorId: str
+    imageId: str
+    volumeGb: int                     # 부팅 볼륨 크기(GB) — 항상 Cinder 부팅 볼륨
+    networkId: str
+    fixedIp: str | None = None        # 고정 IP(없으면 자동 할당)
+    securityGroups: list[str] = []    # 보안그룹 이름(프로젝트 기준)
+    publicKey: str | None = None      # cloud-init 으로 주입할 SSH 공개키
+
+
+def _cloud_init_user_data(public_key: str) -> str:
+    """SSH 공개키를 등록하는 cloud-config(base64). Nova key_name 대신 사용 — 키는 포털 DB 가 원장."""
+    # 키를 JSON 문자열(= 유효한 YAML 문자열)로 감싼다 — 키 주석에 ': '·줄바꿈이 있어도 YAML 이 깨지지 않게
+    cfg = "#cloud-config\nssh_authorized_keys:\n  - " + _json.dumps(public_key.strip()) + "\n"
+    return base64.b64encode(cfg.encode()).decode()
+
+
+@router.post("/projects/{project_id}/servers", status_code=202)
+def create_server(project_id: str, body: CreateServerBody):
+    """VM 생성 요청(Nova 1회) — 부팅 볼륨(이미지→Cinder 볼륨, 인스턴스 삭제 시 볼륨 삭제)·네트워크(+고정 IP)·
+    보안그룹·hostname·SSH 공개키(cloud-init)를 한 번에 넣는다. 진행 상태는 GET /servers/{id} 의 taskState 로 확인.
+    hostname 지정은 마이크로버전 2.90 이상."""
+    network = {"uuid": body.networkId, **({"fixed_ip": body.fixedIp} if body.fixedIp else {})}
+    server = {
+        "name": body.name,
+        "hostname": body.name,
+        "flavorRef": body.flavorId,
+        "block_device_mapping_v2": [{
+            "boot_index": 0, "uuid": body.imageId, "source_type": "image", "destination_type": "volume",
+            "volume_size": body.volumeGb, "delete_on_termination": True,
+        }],
+        "networks": [network],
+        **({"security_groups": [{"name": n} for n in body.securityGroups]} if body.securityGroups else {}),
+        **({"user_data": _cloud_init_user_data(body.publicKey)} if body.publicKey else {}),
+    }
+    try:
+        # 응답 대기 60초 — 짧으면 Nova 는 만들었는데 포털은 실패로 알 수 있다(재시도 전 같은 이름 서버 확인은 호출부 몫)
+        s = _nova_req("POST", "/servers", json={"server": server}, project_id=project_id, microversion="2.90",
+                      timeout=60).json()["server"]
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"가상서버 생성 요청 실패: {e}")
+    return {"id": s["id"]}
+
+
+@router.get("/servers/{server_id}/accelerator-requests")
+def list_server_arqs(server_id: str):
+    """가상서버의 가속기 요청(Cyborg ARQ) — 상태: Initial → Bound(바인딩 완료) 등."""
+    try:
+        arqs = _cyborg("GET", f"/accelerator_requests?instance={quote(server_id, safe='')}").json().get("arqs", [])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"가속기 요청 조회 실패: {e}")
+    return {"items": [{"deviceProfile": a.get("device_profile_name"), "state": a.get("state"), "host": a.get("hostname")}
+                      for a in arqs]}
 
 
 @router.get("/servers/{server_id}")

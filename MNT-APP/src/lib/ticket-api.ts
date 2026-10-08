@@ -4,23 +4,8 @@
  * 티켓 관련 호출은 MSW 목업으로 폴백하지 않는다 — 실패하면 오류를 보여준다(실제 티켓과 목업 데이터가 섞이지 않게).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CORE_BASE } from "@/lib/menu-api";
+import { coreFetch } from "@/lib/menu-api";
 import type { Org, ResourceRequest } from "@/lib/types";
-
-async function coreFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${CORE_BASE}/api/core${path}`, { headers: { "Content-Type": "application/json" }, ...init });
-  } catch {
-    throw new Error("서버(MNT-CORE)에 연결할 수 없습니다");
-  }
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try { const j = await res.json(); if (typeof j.detail === "string") msg = j.detail; } catch {}
-    throw new Error(msg);
-  }
-  return (await res.json()) as T;
-}
 
 /** 신청할 수 있는 프로젝트 — 내가 owner·member 인 프로젝트(이름은 OpenStack 라이브). */
 export interface TicketProject { id: string; name: string; role: string; orgId: string; orgName: string }

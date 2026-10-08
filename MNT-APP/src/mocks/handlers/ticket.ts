@@ -220,8 +220,8 @@ function ipInUse(networkId: string, ip: string, exceptId?: string) {
 // 화면은 사용자를 username 으로 보낸다 (CORE API 와 동일) — 목업 데이터는 u-00x id 기준
 const userIdOf = (username: string | null) => portalUsers.find((u) => u.username === username)?.id;
 
-// 자원 신청(티켓) — VM·서비스 클러스터 공통. 유형은 type("vm" | "cluster")으로 구분한다.
-export const ticketHandlers = [
+// 실연동 API 와 경로가 겹치는 목업 — 배포(게이트웨이) 빌드처럼 실제 백엔드를 상대경로로 부를 때는 handlers.ts 에서 뺀다
+export const ticketCoreOverlapHandlers = [
   http.get("/api/core/orgs", async () => {
     await delay(80);
     return HttpResponse.json({ items: orgs });
@@ -242,12 +242,18 @@ export const ticketHandlers = [
       }));
     return HttpResponse.json({ items });
   }),
+];
+export const ticketIaasOverlapHandlers = [
   http.get("/api/iaas/networks/:networkId/ip-check", async ({ params, request }) => {
     await delay(150);
     const ip = new URL(request.url).searchParams.get("ip") ?? "";
     const reason = ipInUse(params.networkId as string, ip);
     return HttpResponse.json({ available: !reason, reason });
   }),
+];
+
+// 자원 신청(티켓) — VM·서비스 클러스터 공통. 유형은 type("vm" | "cluster")으로 구분한다.
+export const ticketHandlers = [
   http.get("/api/ticket/vm-name-check", async ({ request }) => {
     await delay(150);
     const url = new URL(request.url);

@@ -53,7 +53,7 @@ import {
 } from "@/components/ui/sheet";
 import Link from "next/link";
 import { ResourceRequestWizard } from "@/components/resource-request-wizard";
-import { cn } from "@/lib/utils";
+import { accKindClass, cn } from "@/lib/utils";
 import { nodes, vms, accelerators } from "@/mocks/fixtures";
 import type { ProvisionSpec, ProvisionStep, ProvStepStatus, ResourceRequest, RequestStatus } from "@/lib/types";
 
@@ -176,15 +176,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div className="text-right text-sm">{children}</div>
     </div>
   );
-}
-
-// 가속기 종류 색 — 플랫폼 공통(대시보드·토폴로지·서버 상세): GPU 인디고, NPU 민트
-// (민트 100·700 단계는 Tailwind 테마에 없어 CSS 변수를 직접 참조)
-function accKindClass(kind?: string) {
-  return kind === "GPU" ? "bg-brand-indigo-100 text-brand-indigo-700"
-    : kind === "NPU" ? "bg-[var(--brand-mint-100)] text-[var(--brand-mint-700)]"
-    : kind === "PIM" ? "bg-amber-100 text-amber-800"
-    : "bg-slate-100 text-slate-700";
 }
 
 // 사용자 희망 망 배지
@@ -967,12 +958,8 @@ function AdminView() {
                     <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                       {actionable ? (
                         <div className="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 gap-1 border-brand-mint-300 text-brand-mint-700 hover:bg-brand-mint-50"
-                            onClick={() => openDetail(r)}
-                          >
+                          {/* 신청 상세의 승인 버튼과 같은 기본(채움) 버튼 */}
+                          <Button size="sm" className="h-7 gap-1" onClick={() => openDetail(r)}>
                             <CheckCircle2 className="size-3.5" /> 승인
                           </Button>
                           <Button

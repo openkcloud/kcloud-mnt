@@ -26,11 +26,12 @@ def _neutron_req(method: str, path: str, *, params: dict | None = None, json: di
         r = conn.session.request(
             path, method, params=params, json=json,
             endpoint_filter={"service_type": "network", "interface": settings.os_interface},
-            timeout=15,
+            timeout=15, connect_retries=1 if method == "GET" else 0,  # 조회만 재시도(간헐 연결 끊김 대비)
         )
     else:  # override
         base = settings.os_endpoint_template.format(service="neutron") + "/v2.0"
-        r = conn.session.request(f"{base}{path}", method, params=params, json=json, timeout=15)
+        r = conn.session.request(f"{base}{path}", method, params=params, json=json, timeout=15,
+                                 connect_retries=1 if method == "GET" else 0)
     r.raise_for_status()
     return r
 
