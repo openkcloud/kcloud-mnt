@@ -4,7 +4,7 @@
  * 사용자 스코프(owner=포털 username). 개인키는 서버로 보내지 않는다(공개키만 저장).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CORE_BASE } from "@/lib/menu-api";
+import { coreFetch } from "@/lib/menu-api";
 
 export interface SshKey {
   id: string;
@@ -13,20 +13,6 @@ export interface SshKey {
   fingerprint: string;
   createdAt: string;
   vmCount: number;
-}
-
-async function coreFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${CORE_BASE}/api/core${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try { const j = await res.json(); if (j.detail) msg = j.detail; } catch {}
-    throw new Error(msg);
-  }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
 }
 
 /** 내(owner) SSH 공개키 목록. */

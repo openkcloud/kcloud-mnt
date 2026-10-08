@@ -52,7 +52,8 @@ _TICKET_NAME_TAKEN = "같은 이름으로 신청된 티켓이 있습니다."
 
 def _server_name_taken(project_id: str, name: str) -> bool:
     """같은 프로젝트의 기존 VM(Nova)과 이름이 겹치는지. hostname 은 대소문자 구분이 없으므로 소문자로 비교."""
-    return name in {n.lower() for n in _iaas(_project_path(project_id) + "/server-names")["names"]}
+    names = _iaas(_project_path(project_id) + f"/server-names?name={quote(name, safe='')}")["names"]  # Nova 이름 필터
+    return name in {n.lower() for n in names}
 
 
 def _ticket_name_taken(db: Session, project_id: str, name: str) -> bool:
@@ -221,12 +222,15 @@ def create_ticket(body: CreateTicketBody, db: Session = Depends(get_db)):
     if not image:
         raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 템플릿(이미지)입니다")
 
+    # 부팅 디스크는 항상 Cinder 부팅 볼륨 — 크기 = 플레이버 디스크(0이면 입력값), 이미지 최소 크기(가상 크기·min_disk) 이상
     volume_gb = None
+    low = max(1, image.get("minVolumeGb", image["minDisk"]))  # MNT-IAAS 가 아직 minVolumeGb 를 안 주는 배포 순서여도 동작
     if flavor["diskGb"] == 0:
-        low = max(1, image["minDisk"])
         if body.volumeGb is None or not low <= body.volumeGb <= _MAX_VOLUME_GB:
             raise HTTPException(400, f"부팅 볼륨 크기는 {low} ~ {_MAX_VOLUME_GB} GB 여야 합니다")
         volume_gb = body.volumeGb
+    elif flavor["diskGb"] < low:
+        raise HTTPException(400, f"선택한 스펙의 디스크({flavor['diskGb']} GB)가 템플릿에 필요한 최소 크기({low} GB)보다 작습니다")
 
     if body.keypairId is not None and not image["cloudInit"]:
         raise HTTPException(400, "cloud-init 이 없는 템플릿에는 키페어를 지정할 수 없습니다")

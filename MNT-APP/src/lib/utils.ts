@@ -58,3 +58,11 @@ export function relativeTime(date: Date | string | number) {
     unit,
   );
 }
+
+// 가속기 종류 배지 색 — 플랫폼 공통(대시보드·토폴로지·서버 상세): GPU 인디고, NPU 민트
+export function accKindClass(kind?: string) {
+  return kind === "GPU" ? "bg-brand-indigo-100 text-brand-indigo-700"
+    : kind === "NPU" ? "bg-brand-mint-100 text-brand-mint-700"
+    : kind === "PIM" ? "bg-amber-100 text-amber-800"
+    : "bg-slate-100 text-slate-700";
+}

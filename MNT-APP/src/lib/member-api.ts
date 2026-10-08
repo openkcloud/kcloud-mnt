@@ -1,22 +1,11 @@
 "use client";
 /** 프로젝트 멤버 관리 — MNT-CORE 연동(포털 DB). OpenStack 멤버와 별개. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CORE_BASE } from "@/lib/menu-api";
+import { coreFetch } from "@/lib/menu-api";
 
 export interface PortalUser { id: string; username: string; name: string; org: string; status: string }
 export interface ProjectMember {
   userId: string; username: string; name: string; org: string; email: string | null; role: string; createdAt: string;
-}
-
-async function coreFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${CORE_BASE}/api/core${path}`, { headers: { "Content-Type": "application/json" }, ...init });
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try { const j = await res.json(); if (j.detail) msg = j.detail; } catch {}
-    throw new Error(msg);
-  }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
 }
 
 /** 포털 사용자 목록 — 멤버 추가 picker용. */

@@ -29,6 +29,8 @@
   --brand-mint-500: #00c896;
   --brand-mint-600: #00a37a;
   --brand-mint-700: #057a5e;
+  --brand-mint-800: #065f46;
+  --brand-mint-900: #064e3b;
 
   /* Semantic */
   --background: #fafafb;
@@ -148,9 +150,15 @@
   --color-brand-indigo-800: var(--brand-indigo-800);
   --color-brand-indigo-900: var(--brand-indigo-900);
   --color-brand-mint-50: var(--brand-mint-50);
+  --color-brand-mint-100: var(--brand-mint-100);
+  --color-brand-mint-200: var(--brand-mint-200);
+  --color-brand-mint-300: var(--brand-mint-300);
   --color-brand-mint-400: var(--brand-mint-400);
   --color-brand-mint-500: var(--brand-mint-500);
   --color-brand-mint-600: var(--brand-mint-600);
+  --color-brand-mint-700: var(--brand-mint-700);
+  --color-brand-mint-800: var(--brand-mint-800);
+  --color-brand-mint-900: var(--brand-mint-900);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

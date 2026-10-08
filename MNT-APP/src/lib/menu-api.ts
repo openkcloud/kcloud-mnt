@@ -43,6 +43,23 @@ import type { NavItem, NavSection } from "@/lib/nav";
 const RAW = process.env.NEXT_PUBLIC_CORE_API;
 export const CORE_BASE = RAW === undefined ? "http://localhost:8000" : RAW;
 
+/** MNT-CORE 호출 공통 — 실패 시 서버 detail(문자열)을 메시지로, 연결 실패는 안내 문구로 던진다. 204 는 undefined. */
+export async function coreFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${CORE_BASE}/api/core${path}`, { headers: { "Content-Type": "application/json" }, ...init });
+  } catch {
+    throw new Error("서버(MNT-CORE)에 연결할 수 없습니다");
+  }
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try { const j = await res.json(); if (typeof j.detail === "string") msg = j.detail; } catch {}
+    throw new Error(msg);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
 // DB(icon 컬럼, lucide 이름 문자열) → 컴포넌트 매핑
 const ICON_MAP: Record<string, LucideIcon> = {
   LayoutDashboard,

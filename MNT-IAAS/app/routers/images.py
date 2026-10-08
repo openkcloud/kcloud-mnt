@@ -3,6 +3,7 @@
 환경독립: override=template.format(service="glance")+"/v2", catalog=service_type="image".
 """
 import json as _json
+import math
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -21,10 +22,12 @@ def _glance_req(method: str, path: str, *, params=None, data=None, headers=None)
         r = conn.session.request(
             path, method, params=params, data=data, headers=headers, raise_exc=False,
             endpoint_filter={"service_type": "image", "interface": settings.os_interface}, timeout=20,
+            connect_retries=1 if method == "GET" else 0,  # 조회만 재시도(간헐 연결 끊김 대비)
         )
     else:  # override
         base = settings.os_endpoint_template.format(service="glance") + "/v2"
-        r = conn.session.request(f"{base}{path}", method, params=params, data=data, headers=headers, raise_exc=False, timeout=20)
+        r = conn.session.request(f"{base}{path}", method, params=params, data=data, headers=headers, raise_exc=False, timeout=20,
+                                 connect_retries=1 if method == "GET" else 0)
     if not r.ok:
         raise RuntimeError((r.text or f"HTTP {r.status_code}")[:300])
     return r
@@ -43,6 +46,11 @@ def _to_image(i: dict) -> dict:
         "status": i.get("status") or "",
         "protected": bool(i.get("protected")),
         "minDisk": i.get("min_disk", 0),
+        # 부팅 볼륨 최소 크기 = max(min_disk, 가상 크기, 파일 크기) 올림 — Cinder 는 둘 다 볼륨 크기와 비교.
+        # 가상 크기가 없는 이미지(location 등록·오래된 업로드 등)는 파일 크기로 대신한다
+        "minVolumeGb": max(i.get("min_disk") or 0,
+                           math.ceil((i.get("virtual_size") or i.get("size") or 0) / _GB),
+                           math.ceil((i.get("size") or 0) / _GB)),
         "minRam": i.get("min_ram", 0),
         "createdAt": i.get("created_at") or "",
     }

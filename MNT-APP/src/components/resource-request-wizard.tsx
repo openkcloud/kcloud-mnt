@@ -31,7 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { cn } from "@/lib/utils";
+import { accKindClass, cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import { useFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
@@ -101,14 +101,6 @@ const USER_NETWORKS = [
 
 // 부팅 볼륨 최대 크기 (GB)
 const MAX_VOLUME_GB = 500;
-
-// 가속기 종류 배지 색 — 플랫폼 공통(대시보드·토폴로지·서버 상세): GPU 인디고, NPU 민트
-// (민트 100·700 단계는 Tailwind 테마에 없어 CSS 변수를 직접 참조)
-function accelKindClass(kind: string) {
-  return kind === "GPU" ? "bg-brand-indigo-100 text-brand-indigo-700"
-    : kind === "NPU" ? "bg-[var(--brand-mint-100)] text-[var(--brand-mint-700)]"
-    : "bg-slate-100 text-slate-700";
-}
 
 // 예) "GPU × 1 + NPU × 1"
 function accelSummary(f: FlavorSummary) {
@@ -234,7 +226,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
   const selectedFlavor = flavors.find((f) => f.name === flavor);
   const selectedImage = images.find((i) => i.id === image);
   const needVolume = !!selectedFlavor && selectedFlavor.diskGb === 0;
-  const minVolume = Math.max(1, selectedImage?.minDisk ?? 1);
+  const minVolume = Math.max(1, selectedImage?.minVolumeGb ?? 1);
 
   // 키페어 — 신청자 본인 키만 (iam_ssh_key.owner = username)
   const { data: myKeypairs = [] } = useSshKeys(user?.username);
@@ -260,13 +252,15 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
   function handleImageSelect(img: ProjectImage) {
     setImage(img.id);
     if (!img.cloudInit) setKeypair(""); // cloud-init 없으면 키페어 주입 불가
-    setVolumeGb(Math.max(1, img.minDisk));
+    setVolumeGb(Math.max(1, img.minVolumeGb));
   }
 
   function handleFlavorSelect(f: FlavorSummary) {
     setFlavor(f.name);
     // 템플릿을 먼저 고른 뒤 디스크 없는 스펙으로 바꾼 경우에도 최소 크기로 맞춘다
-    if (f.diskGb === 0 && selectedImage) setVolumeGb(Math.max(1, selectedImage.minDisk));
+    if (f.diskGb === 0 && selectedImage) setVolumeGb(Math.max(1, selectedImage.minVolumeGb));
+    // 디스크가 고른 템플릿보다 작은 스펙으로 바꾸면 템플릿 선택을 비운다(부팅 볼륨 = 플레이버 디스크)
+    if (f.diskGb > 0 && selectedImage && f.diskGb < selectedImage.minVolumeGb) setImage("");
   }
 
   const volumeValid = !needVolume || (volumeGb >= minVolume && volumeGb <= MAX_VOLUME_GB);
@@ -498,13 +492,13 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
                   <div className="flex items-center gap-2">
                     <span className="font-mono font-semibold">{f.name}</span>
                     {(f.accelerators ?? []).map((a) => (
-                      <Badge key={a.kind} variant="ghost" className={cn("h-5 gap-1 px-1.5 font-mono text-[10px]", accelKindClass(a.kind))}>
+                      <Badge key={a.kind} variant="ghost" className={cn("h-5 gap-1 px-1.5 font-mono text-[10px]", accKindClass(a.kind))}>
                         <Cpu className="size-3" />{a.kind} × {a.count}
                       </Badge>
                     ))}
                     {/* 종류를 모를 때(Cyborg 조회 실패) — 가속기 없음으로 보이지 않게 */}
                     {f.accelerator && !f.accelerators?.length && (
-                      <Badge variant="ghost" className={cn("h-5 gap-1 px-1.5 font-mono text-[10px]", accelKindClass(""))}><Cpu className="size-3" />가속기</Badge>
+                      <Badge variant="ghost" className={cn("h-5 gap-1 px-1.5 font-mono text-[10px]", accKindClass(""))}><Cpu className="size-3" />가속기</Badge>
                     )}
                   </div>
                   <div className="font-mono text-xs text-muted-foreground tabular-nums">
@@ -529,12 +523,17 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
             <p className="text-xs text-muted-foreground">이 프로젝트에서 사용할 수 있는 템플릿이 없습니다.</p>
           )}
           <div className="grid gap-2 sm:grid-cols-2">
-            {images.map((img) => (
+            {images.map((img) => {
+              // 부팅 볼륨 = 플레이버 디스크 — 디스크가 템플릿 최소 크기보다 작으면 고를 수 없다(디스크 0 스펙은 볼륨 크기를 입력)
+              const tooSmall = !needVolume && !!selectedFlavor && selectedFlavor.diskGb < img.minVolumeGb;
+              return (
               <button
                 key={img.id}
+                disabled={tooSmall}
                 onClick={() => handleImageSelect(img)}
                 className={cn(
                   "flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border p-2.5 text-left transition-colors",
+                  tooSmall && "cursor-not-allowed opacity-50",
                   image === img.id ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
                 )}
               >
@@ -547,12 +546,16 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
                     )}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    {[img.os, `최소 디스크 ${img.minDisk} GB`].filter(Boolean).join(" · ")}
+                    {[img.os, `최소 디스크 ${img.minVolumeGb} GB`].filter(Boolean).join(" · ")}
                   </div>
+                  {tooSmall && (
+                    <div className="text-[11px] text-amber-700">스펙 디스크({selectedFlavor?.diskGb} GB)보다 커서 선택할 수 없습니다</div>
+                  )}
                 </div>
                 {image === img.id && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
               </button>
-            ))}
+              );
+            })}
           </div>
 
           {selectedImage && !selectedImage.cloudInit && (
@@ -737,7 +740,7 @@ function ReviewRow({ label, value, mono, accent }: {
     accent === "green" && "text-green-700 font-medium",
     accent === "purple" && "text-purple-700 font-medium",
     accent === "indigo" && "text-brand-indigo-700 font-medium",
-    accent === "mint" && "text-[var(--brand-mint-700)] font-medium",
+    accent === "mint" && "text-brand-mint-700 font-medium",
     !value && "text-rose-500",
   );
   return (

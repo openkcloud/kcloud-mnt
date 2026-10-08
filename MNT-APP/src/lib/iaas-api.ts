@@ -542,6 +542,7 @@ export function useDeleteSnapshot() {
 export interface ImageSummary {
   id: string; name: string; tenantId: string; os: string; diskFormat: string; containerFormat: string;
   sizeGb: number; visibility: string; status: string; protected: boolean; minDisk: number; minRam: number; createdAt: string;
+  minVolumeGb: number; // 부팅 볼륨 최소 크기 = max(min_disk, 이미지 가상 크기)
 }
 
 export function useImages() {
