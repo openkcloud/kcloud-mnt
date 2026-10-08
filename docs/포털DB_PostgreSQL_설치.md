@@ -159,7 +159,31 @@ env:
 
 ---
 
-## 7. 남은 작업 (체크리스트)
+## 7. Temporal 저장소 (포털 DB 안 스키마 분리)
+
+프로비저닝 워크플로를 관리하는 Temporal 서버(MNT-WORKFLOW)의 저장소를 별도 DB 없이 `openkcloud_portal` 안에 둔다.
+
+| 계정 | 스키마 | 용도 |
+|---|---|---|
+| `temporal` | `temporal` | 실행 기록(워크플로 상태·이력) |
+| `temporal_view` | `temporal_visibility` | 검색·목록(웹 화면의 워크플로 목록 등) |
+
+- 계정마다 `search_path` 를 자기 스키마로 고정 → Temporal 테이블이 포털 테이블(`public`)과 섞이지 않는다.
+- 준비(슈퍼유저 1회): `MNT-WORKFLOW/db/temporal_schema.sql` — 계정·스키마·`btree_gin` 확장. 실행 절차는 `포털_배포_가이드.md` 1장 (9)·(10).
+- 테이블은 mnt-workflow 파드의 initContainer 가 Temporal 도구로 설치·업그레이드한다(멱등). 1.31.3 기준 `temporal` 40개, `temporal_visibility` 3개.
+- 주의
+  - `btree_gin` 은 일반 계정이 만들 수 없어 슈퍼유저가 미리 만든다(없으면 검색 스키마 설치 실패).
+  - 계정 하나·스키마 하나로 합치면 두 저장소의 버전 테이블(`schema_version`)이 겹쳐 검색 테이블이 만들어지지 않는다(검증함). 계정 2개 + 스키마 2개 유지.
+
+확인:
+```sql
+SELECT table_schema, count(*) FROM information_schema.tables
+ WHERE table_schema IN ('temporal', 'temporal_visibility', 'public') GROUP BY 1;
+```
+
+---
+
+## 8. 남은 작업 (체크리스트)
 
 - [ ] HA 전환: `instances: 3` (용량 충분, podAntiAffinity로 워커 분산)
 - [ ] 스토리지 확장 필요 시 50Gi→100Gi (RBD 온라인 확장)
