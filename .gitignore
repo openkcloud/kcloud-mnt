@@ -1,3 +1,6 @@
 __pycache__/
 config.env
 .cmp-secret
+
+# 설치 설정값(비밀번호 포함)은 올리지 않는다
+deploy/offline/values.env

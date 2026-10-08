@@ -61,6 +61,9 @@ LLM_MODEL = _os.environ.get("LLM_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
 # GPU Pod에 지정할 RuntimeClass (k3s+nvidia-container-runtime 환경 필수).
 # NVIDIA GPU Operator를 쓰는 클러스터에서는 빈 값으로 두면 된다.
 GPU_RUNTIME_CLASS = _os.environ.get("GPU_RUNTIME_CLASS", "nvidia")
+# 가속기의 쿠버네티스 자원 이름. NVIDIA GPU는 nvidia.com/gpu, NPU는 장비 드라이버가
+# 등록하는 이름(예: rebellions.ai/ATOM)으로 바꾼다. 쿼터 키는 requests.<이 값>이 된다.
+ACCEL_RESOURCE = _os.environ.get("ACCEL_RESOURCE", "nvidia.com/gpu")
 BENCH_IMAGE_ENV = _os.environ.get(
     "BENCH_IMAGE", "kubeflownotebookswg/jupyter-pytorch-cuda-full:v1.9.2")
 
@@ -69,7 +72,12 @@ def _pin_selector() -> dict:
     """DEV_PIN_NODE 설정 시에만 nodeSelector 반환 (정상 클러스터에선 빈 dict)."""
     return ({"kubernetes.io/hostname": DEV_PIN_NODE} if DEV_PIN_NODE else {})
 
-config.load_kube_config()
+# 클러스터 안(Pod)에서 돌면 ServiceAccount 토큰으로, 밖(개발 PC)이면 kubeconfig로 접속
+IN_CLUSTER = bool(_os.environ.get("KUBERNETES_SERVICE_HOST"))
+if IN_CLUSTER:
+    config.load_incluster_config()
+else:
+    config.load_kube_config()
 crd = client.CustomObjectsApi()
 core = client.CoreV1Api()
 
@@ -151,16 +159,28 @@ import json as _json_auth
 import os
 import time as _time_auth
 
-_SECRET_FILE = os.path.expanduser("~/.cmp-secret")
-if os.path.exists(_SECRET_FILE):
+# 세션 서명 키 — 운영(컨테이너)에서는 CMP_SESSION_SECRET(Secret)로 주입해
+# 백엔드를 여러 대 띄우거나 재시작해도 로그인이 유지되게 한다
+_SECRET_FILE = os.environ.get("CMP_SECRET_FILE", os.path.expanduser("~/.cmp-secret"))
+if os.environ.get("CMP_SESSION_SECRET"):
+    _SECRET = os.environ["CMP_SESSION_SECRET"].encode()
+elif os.path.exists(_SECRET_FILE):
     _SECRET = open(_SECRET_FILE, "rb").read()
 else:
     _SECRET = os.urandom(32)
     with open(_SECRET_FILE, "wb") as f:
         f.write(_SECRET)
 
-# 포털 mock 계정과 동일 (src/lib/auth.ts MOCK_USERS)
+# 계정 — CMP_USERS="아이디:비밀번호:역할,…" 로 바꿀 수 있다(운영은 Secret으로 주입).
+# 미설정 시 포털 mock 계정과 동일 (src/lib/auth.ts MOCK_USERS). IAM 연동 전까지의 임시 방식
 _USERS = {"admin": ("Okc!2026#admin", "admin"), "user": ("Okc!2026#user", "user")}
+if os.environ.get("CMP_USERS"):
+    _USERS = {}
+    for _item in os.environ["CMP_USERS"].split(","):
+        # 비밀번호에 ':'가 들어가도 되도록 아이디는 맨 앞, 역할은 맨 뒤에서 자른다
+        _u, _rest = _item.strip().split(":", 1)
+        _p, _r = _rest.rsplit(":", 1)
+        _USERS[_u.lower()] = (_p, _r)
 SESSION_COOKIE = "okc_session"
 SESSION_TTL = 8 * 3600
 
@@ -285,7 +305,7 @@ def _friendly_reason(pod) -> str:
                  reverse=True)
         for e in evs[:5]:
             msg = e.message or ""
-            if "Insufficient nvidia.com/gpu" in msg:
+            if f"Insufficient {ACCEL_RESOURCE}" in msg:
                 return "GPU 부족 — 모든 GPU가 사용 중입니다. 다른 노트북을 정지해 자리를 만들거나 GPU 없이 생성하세요"
             if "Insufficient cpu" in msg or "Insufficient memory" in msg:
                 return "CPU/메모리 부족 — 요청 자원을 줄이거나 다른 워크로드를 정리하세요"
@@ -488,8 +508,8 @@ def _base_url(request: Optional[Request]) -> str:
     (localhost로 들어오면 localhost, LAN IP로 들어오면 그 IP — WSL 환경에서
      호스트 자신은 자기 LAN IP로 WSL 서비스에 도달하지 못하므로 필수)"""
     if request is not None:
-        host = (request.headers.get("x-forwarded-host")
-                or request.headers.get("host") or "")
+        fwd_host = request.headers.get("x-forwarded-host")
+        host = fwd_host or request.headers.get("host") or ""
         if host:
             hostname = host.split(":")[0]
             # 외부 터널(단일 입구, https) 경유면 포트를 붙이지 않는다 —
@@ -498,8 +518,13 @@ def _base_url(request: Optional[Request]) -> str:
                      or request.url.scheme)
             if proto == "https" or hostname.endswith(".trycloudflare.com"):
                 return f"https://{hostname}"
-            port = PUBLIC_BASE_URL.rsplit(":", 1)[-1]
-            return f"{proto}://{hostname}:{port}"
+            # 인그레스·리버스 프록시 경유(클러스터 배포) — 브라우저가 연 주소 그대로
+            if fwd_host:
+                return f"{proto}://{fwd_host}"
+            # 개발 환경 — 포털이 백엔드 포트로 직접 부른다
+            from urllib.parse import urlparse as _urlparse
+            port = _urlparse(PUBLIC_BASE_URL).port
+            return f"{proto}://{hostname}:{port}" if port else f"{proto}://{hostname}"
     return PUBLIC_BASE_URL
 
 
@@ -609,7 +634,7 @@ def _quota_pair(hard: dict, used: dict, keys: list[str]) -> dict:
 
 
 ACCEL_QUOTA_KEYS = [
-    "requests.nvidia.com/gpu", "nvidia.com/gpu",
+    f"requests.{ACCEL_RESOURCE}", ACCEL_RESOURCE,
     "requests.rebellions.ai/atom", "requests.samsung.com/pim",
 ]
 
@@ -751,7 +776,7 @@ class CreateProfile(BaseModel):
     ownerEmail: str
     cpu: int = 8
     memoryGi: int = 16
-    acceleratorKey: str = "nvidia.com/gpu"
+    acceleratorKey: str = ACCEL_RESOURCE
     acceleratorCount: int = 0
     storageGi: int = 50
 
@@ -799,7 +824,7 @@ class UpdateProfile(BaseModel):
     ownerEmail: Optional[str] = None
     cpu: Optional[int] = None
     memoryGi: Optional[int] = None
-    acceleratorKey: str = "nvidia.com/gpu"
+    acceleratorKey: str = ACCEL_RESOURCE
     acceleratorCount: Optional[int] = None
     storageGi: Optional[int] = None
 
@@ -856,6 +881,249 @@ def delete_profile(name: str):
             raise HTTPException(404, f"profile {name} not found")
         raise
     return {"status": "Deleting"}
+
+
+# ══════════════════════════════════════════════════════════════════
+# 워크스페이스 신청·승인 (CR-AID-12 — 승인 시 자동 생성, 임시 창구)
+#   일반 사용자가 신청 → 관리자가 승인하면 워크스페이스(Profile)를 만들고
+#   신청자를 그 프로젝트 소속으로 올린다.
+#   포털(대전팀)의 자원 요청 관리가 실제로 구현되면 승인은 그쪽으로 옮기고,
+#   그쪽 승인 처리에서 create_profile만 호출하면 된다.
+#   저장: ConfigMap(STATE_NAMESPACE/STATE_CONFIGMAP) — 백엔드 재시작·재배포에도 유지
+# ══════════════════════════════════════════════════════════════════
+import re as _re_ws
+import secrets as _secrets_ws
+
+STATE_NAMESPACE = _os.environ.get("STATE_NAMESPACE", "kubeflow")
+STATE_CONFIGMAP = _os.environ.get("STATE_CONFIGMAP", "okc-ai-workspace-requests")
+_ws_lock = threading.Lock()
+_WS_NAME = _re_ws.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+
+
+def _ws_state_load() -> tuple[dict, Optional[str]]:
+    try:
+        cm = core.read_namespaced_config_map(STATE_CONFIGMAP, STATE_NAMESPACE)
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            return {"requests": [], "members": {}}, None
+        raise
+    data = cm.data or {}
+    return ({"requests": json.loads(data.get("requests") or "[]"),
+             "members": json.loads(data.get("members") or "{}")},
+            cm.metadata.resource_version)
+
+
+def _ws_state_save(st: dict, rv: Optional[str]) -> None:
+    body = {
+        "apiVersion": "v1", "kind": "ConfigMap",
+        "metadata": {"name": STATE_CONFIGMAP, "namespace": STATE_NAMESPACE,
+                     "labels": {"app.kubernetes.io/part-of": "okc-ai"}},
+        "data": {"requests": json.dumps(st["requests"], ensure_ascii=False),
+                 "members": json.dumps(st["members"], ensure_ascii=False)},
+    }
+    if rv is None:
+        core.create_namespaced_config_map(STATE_NAMESPACE, body)
+    else:
+        body["metadata"]["resourceVersion"] = rv   # 동시에 고친 사람이 있으면 409로 막힌다
+        core.replace_namespaced_config_map(STATE_CONFIGMAP, STATE_NAMESPACE, body)
+
+
+def _ws_members(username: str) -> list[str]:
+    """승인으로 소속된 프로젝트 목록 (읽기 실패 시 빈 목록)."""
+    try:
+        st, _ = _ws_state_load()
+        return st["members"].get(username, [])
+    except Exception:
+        return []
+
+
+def _session_user(request: Request) -> dict:
+    p = _verify_token(request.cookies.get(SESSION_COOKIE))
+    if not p:
+        raise HTTPException(401, "로그인이 필요합니다")
+    return {"username": p["sub"], "role": p["role"]}
+
+
+def _require_admin(request: Request) -> dict:
+    u = _session_user(request)
+    if u["role"] != "admin":
+        raise HTTPException(403, "관리자만 할 수 있습니다")
+    return u
+
+
+def _profile_exists(name: str) -> bool:
+    try:
+        crd.get_cluster_custom_object(GROUP, VERSION, P_PLURAL, name)
+        return True
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            try:   # Profile은 없어도 같은 이름의 네임스페이스가 있으면 만들 수 없다
+                core.read_namespace(name)
+                return True
+            except client.exceptions.ApiException:
+                return False
+        raise
+
+
+class WorkspaceRequestBody(BaseModel):
+    name: str
+    purpose: str = ""
+    ownerEmail: Optional[str] = None
+    cpu: int = 4
+    memoryGi: int = 16
+    acceleratorCount: int = 0
+    storageGi: int = 50
+
+
+class WorkspaceApproveBody(BaseModel):
+    """승인하면서 한도를 조정할 수 있다 (비우면 신청 값 그대로)."""
+    cpu: Optional[int] = None
+    memoryGi: Optional[int] = None
+    acceleratorCount: Optional[int] = None
+    storageGi: Optional[int] = None
+    note: str = ""
+
+
+class WorkspaceRejectBody(BaseModel):
+    reason: str = ""
+
+
+def _ws_update(fn):
+    """ConfigMap을 읽고 fn(state)로 고쳐 저장한다. 다른 저장과 겹치면 한 번 다시 시도."""
+    with _ws_lock:
+        for attempt in range(2):
+            st, rv = _ws_state_load()
+            result = fn(st)
+            try:
+                _ws_state_save(st, rv)
+                return result
+            except client.exceptions.ApiException as e:
+                if e.status == 409 and attempt == 0:
+                    continue
+                raise
+
+
+def _ws_find(st: dict, rid: str) -> dict:
+    for r in st["requests"]:
+        if r["id"] == rid:
+            return r
+    raise HTTPException(404, "신청을 찾을 수 없습니다")
+
+
+@app.post("/api/v1/workspace-requests", status_code=201)
+def create_workspace_request(body: WorkspaceRequestBody, request: Request):
+    """워크스페이스(=프로젝트) 신청. 로그인한 사용자가 신청자가 된다."""
+    u = _session_user(request)
+    name = body.name.strip().lower()
+    if not _WS_NAME.match(name):
+        raise HTTPException(400, "이름은 영문 소문자·숫자·하이픈(-)만, 63자 이내로 적어 주세요")
+    for k, v in (("vCPU", body.cpu), ("메모리", body.memoryGi), ("저장공간", body.storageGi)):
+        if v <= 0:
+            raise HTTPException(400, f"{k}는 1 이상이어야 합니다")
+    if body.acceleratorCount < 0:
+        raise HTTPException(400, "가속기는 0 이상이어야 합니다")
+    if _profile_exists(name):
+        raise HTTPException(409, f"'{name}' 이름의 워크스페이스가 이미 있습니다")
+
+    def add(st):
+        if any(r["name"] == name and r["status"] == "pending" for r in st["requests"]):
+            raise HTTPException(409, f"'{name}' 이름으로 이미 대기 중인 신청이 있습니다")
+        req = {
+            "id": f"wr-{datetime.now().strftime('%y%m%d%H%M%S')}-{_secrets_ws.token_hex(2)}",
+            "name": name,
+            "purpose": body.purpose.strip()[:300],
+            "requester": u["username"],
+            "ownerEmail": (body.ownerEmail or f"{u['username']}@openkcloud.local").strip(),
+            "resources": {"cpu": body.cpu, "memoryGi": body.memoryGi,
+                          "acceleratorCount": body.acceleratorCount,
+                          "storageGi": body.storageGi},
+            "status": "pending",
+            "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "decidedAt": None, "decidedBy": None, "reason": "",
+        }
+        st["requests"].append(req)
+        return req
+    return _ws_update(add)
+
+
+@app.get("/api/v1/workspace-requests")
+def list_workspace_requests(request: Request):
+    """관리자는 전체, 일반 사용자는 자기 신청만 (최근 것부터)."""
+    u = _session_user(request)
+    st, _ = _ws_state_load()
+    items = st["requests"] if u["role"] == "admin" else [
+        r for r in st["requests"] if r["requester"] == u["username"]]
+    items = sorted(items, key=lambda r: r["createdAt"], reverse=True)
+    return {"items": items,
+            "pending": sum(1 for r in items if r["status"] == "pending")}
+
+
+@app.post("/api/v1/workspace-requests/{rid}/approve")
+def approve_workspace_request(rid: str, body: WorkspaceApproveBody, request: Request):
+    """승인 = 워크스페이스(Profile) 생성 + 신청자를 그 프로젝트 소속으로 등록."""
+    admin = _require_admin(request)
+    st, _ = _ws_state_load()
+    req = _ws_find(st, rid)
+    if req["status"] != "pending":
+        raise HTTPException(409, "이미 처리된 신청입니다")
+    res = dict(req["resources"])
+    for k in ("cpu", "memoryGi", "acceleratorCount", "storageGi"):
+        v = getattr(body, k)
+        if v is not None:
+            res[k] = v
+    try:
+        create_profile(CreateProfile(
+            name=req["name"], ownerEmail=req["ownerEmail"], cpu=res["cpu"],
+            memoryGi=res["memoryGi"], acceleratorCount=res["acceleratorCount"],
+            storageGi=res["storageGi"]))
+    except client.exceptions.ApiException as e:
+        if e.status == 409:
+            raise HTTPException(409, f"'{req['name']}' 워크스페이스가 이미 있습니다")
+        raise HTTPException(502, f"워크스페이스 생성 실패: {e.reason}")
+
+    def done(st):
+        r = _ws_find(st, rid)
+        r.update(status="approved", resources=res, reason=body.note.strip()[:300],
+                 decidedBy=admin["username"],
+                 decidedAt=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        mem = st["members"].setdefault(r["requester"], [])
+        if r["name"] not in mem:
+            mem.append(r["name"])
+        return r
+    return _ws_update(done)
+
+
+@app.post("/api/v1/workspace-requests/{rid}/reject")
+def reject_workspace_request(rid: str, body: WorkspaceRejectBody, request: Request):
+    admin = _require_admin(request)
+
+    def rej(st):
+        r = _ws_find(st, rid)
+        if r["status"] != "pending":
+            raise HTTPException(409, "이미 처리된 신청입니다")
+        r.update(status="rejected", reason=body.reason.strip()[:300],
+                 decidedBy=admin["username"],
+                 decidedAt=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        return r
+    return _ws_update(rej)
+
+
+@app.delete("/api/v1/workspace-requests/{rid}")
+def cancel_workspace_request(rid: str, request: Request):
+    """신청자가 대기 중인 자기 신청을 취소한다 (기록은 '취소됨'으로 남김)."""
+    u = _session_user(request)
+
+    def cancel(st):
+        r = _ws_find(st, rid)
+        if r["requester"] != u["username"] and u["role"] != "admin":
+            raise HTTPException(403, "본인 신청만 취소할 수 있습니다")
+        if r["status"] != "pending":
+            raise HTTPException(409, "이미 처리된 신청입니다")
+        r.update(status="cancelled",
+                 decidedAt=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                 decidedBy=u["username"])
+        return r
+    return _ws_update(cancel)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1369,7 +1637,7 @@ def _to_experiment(e: dict) -> dict:
         "maxTrials": spec.get("maxTrialCount", 0),
         "parallelTrials": spec.get("parallelTrialCount", 0),
         # 실제 학습을 하는 실험인지 (계산식으로 점수만 내는 검증용과 구분)
-        "realTraining": "nvidia.com/gpu" in json.dumps(
+        "realTraining": ACCEL_RESOURCE in json.dumps(
             spec.get("trialTemplate", {}).get("trialSpec", {})),
         "trials": st.get("trials", 0),
         "trialsSucceeded": st.get("trialsSucceeded", 0),
@@ -1456,10 +1724,10 @@ def _trial_spec(body: "CreateExperiment", real: bool, cm_name: str) -> dict:
             "resources": {
                 "requests": {"cpu": "2", "memory": "6Gi"},
                 "limits": {"cpu": "4", "memory": "10Gi",
-                           "nvidia.com/gpu": "1"},
+                           ACCEL_RESOURCE: "1"},
             },
         }
-        container["resources"]["requests"]["nvidia.com/gpu"] = "1"
+        container["resources"]["requests"][ACCEL_RESOURCE] = "1"
         pod = {
             # 학습 데이터를 MinIO에서 받아야 하므로 클러스터 내부 통신이 되는
             # 노드에 고정한다. (로컬 WSL은 노드 간 DNS·서비스 통신이 막혀 있어
@@ -1606,7 +1874,7 @@ def _to_isvc(s: dict) -> dict:
         # 자원 변경 화면을 채우기 위한 현재 값
         "cpu": str(limits.get("cpu", "")),
         "memoryGi": int(str(limits.get("memory", "0Gi")).replace("Gi", "") or 0),
-        "gpu": int(limits.get("nvidia.com/gpu", 0) or 0),
+        "gpu": int(limits.get(ACCEL_RESOURCE, 0) or 0),
         "modelName": (model.get("modelFormat") or {}).get("name", "custom"),
         "modelVersion": (model.get("storageUri") or "").split("/")[-1] or "v1",
         "ownerId": "u-000",
@@ -1761,6 +2029,41 @@ MODEL_STORE_BUCKET = _os.environ.get("MODEL_STORE_BUCKET", "models")
 MODEL_STORE_KEY = _os.environ.get("MODEL_STORE_KEY", "minio")
 MODEL_STORE_SECRET = _os.environ.get("MODEL_STORE_SECRET", "minio123")
 MODEL_STORE_SA = _os.environ.get("MODEL_STORE_SA", "kserve-minio-sa")
+MODEL_STORE_CRED_SECRET = "minio-s3-creds"
+
+
+def _ensure_model_store_sa(ns: str):
+    """s3:// 모델을 읽을 ServiceAccount와 자격증명 Secret을 네임스페이스에 만든다.
+
+    예전에는 몇몇 네임스페이스에만 손으로 만들어 두어서, 새 워크스페이스에서
+    저장소 모델을 배포하면 storage-initializer가 권한 없이 실패했다.
+    이미 있으면 그대로 둔다(멱등).
+    """
+    try:
+        core.read_namespaced_secret(MODEL_STORE_CRED_SECRET, ns)
+    except client.exceptions.ApiException as e:
+        if e.status != 404:
+            raise
+        core.create_namespaced_secret(ns, client.V1Secret(
+            metadata=client.V1ObjectMeta(
+                name=MODEL_STORE_CRED_SECRET,
+                annotations={
+                    "serving.kserve.io/s3-endpoint": MODEL_STORE_ENDPOINT,
+                    "serving.kserve.io/s3-usehttps": "0",
+                    "serving.kserve.io/s3-region": "us-east-1",
+                    "serving.kserve.io/s3-useanoncredential": "false",
+                }),
+            string_data={"AWS_ACCESS_KEY_ID": MODEL_STORE_KEY,
+                         "AWS_SECRET_ACCESS_KEY": MODEL_STORE_SECRET},
+            type="Opaque"))
+    try:
+        core.read_namespaced_service_account(MODEL_STORE_SA, ns)
+    except client.exceptions.ApiException as e:
+        if e.status != 404:
+            raise
+        core.create_namespaced_service_account(ns, client.V1ServiceAccount(
+            metadata=client.V1ObjectMeta(name=MODEL_STORE_SA),
+            secrets=[client.V1ObjectReference(name=MODEL_STORE_CRED_SECRET)]))
 
 _minio_forward: Optional[subprocess.Popen] = None
 MINIO_LOCAL_PORT = 19000
@@ -1771,6 +2074,9 @@ def _minio_client():
     global _minio_forward
     import time as _t
     from minio import Minio
+    if IN_CLUSTER:
+        return Minio(MODEL_STORE_ENDPOINT, access_key=MODEL_STORE_KEY,
+                     secret_key=MODEL_STORE_SECRET, secure=False)
     if not _port_open(MINIO_LOCAL_PORT):
         if _minio_forward:
             _minio_forward.terminate()
@@ -1928,8 +2234,8 @@ def create_serving(body: CreateServing):
     requests: dict = {"cpu": "100m", "memory": "256Mi"}
     if body.gpu > 0:
         # GPU는 쪼갤 수 없어 requests와 limits가 같아야 한다
-        limits["nvidia.com/gpu"] = str(body.gpu)
-        requests["nvidia.com/gpu"] = str(body.gpu)
+        limits[ACCEL_RESOURCE] = str(body.gpu)
+        requests[ACCEL_RESOURCE] = str(body.gpu)
 
     model: dict = {
         "modelFormat": {"name": body.modelFormat},
@@ -1960,6 +2266,8 @@ def create_serving(body: CreateServing):
         if not body.storageUri:
             raise HTTPException(400, "배포할 모델을 선택하세요")
         model["storageUri"] = body.storageUri
+        if body.storageUri.startswith("s3://"):
+            _ensure_model_store_sa(body.namespace)
 
     predictor: dict = {
         **({"nodeSelector": _pin_selector()} if DEV_PIN_NODE else {}),
@@ -2019,8 +2327,8 @@ def _strip_deploy_gpu(ns: str, deploy_name: str) -> None:
         c = d.spec.template.spec.containers[0]
         changed = False
         for bucket in (c.resources.limits, c.resources.requests):
-            if bucket and "nvidia.com/gpu" in bucket:
-                bucket.pop("nvidia.com/gpu")
+            if bucket and ACCEL_RESOURCE in bucket:
+                bucket.pop(ACCEL_RESOURCE)
                 changed = True
         if d.spec.template.spec.runtime_class_name:
             d.spec.template.spec.runtime_class_name = None
@@ -2070,20 +2378,23 @@ def update_serving(name: str, body: UpdateServing):
         limits["memory"] = f"{body.memoryGi}Gi"
     if body.storageUri:
         predictor["model"]["storageUri"] = body.storageUri
+        if body.storageUri.startswith("s3://"):
+            _ensure_model_store_sa(ns)
+            predictor["serviceAccountName"] = MODEL_STORE_SA
     if body.modelFormat:
         predictor["model"]["modelFormat"] = {"name": body.modelFormat}
     if body.gpu is not None:
         if body.gpu > 0:
-            limits["nvidia.com/gpu"] = str(body.gpu)
-            requests["nvidia.com/gpu"] = str(body.gpu)
+            limits[ACCEL_RESOURCE] = str(body.gpu)
+            requests[ACCEL_RESOURCE] = str(body.gpu)
             if GPU_RUNTIME_CLASS:
                 predictor["runtimeClassName"] = GPU_RUNTIME_CLASS
             predictor.pop("nodeSelector", None)
         else:
             # 병합 패치에서는 키를 빼는 것만으로 지워지지 않는다.
             # 서버에서 삭제되게 하려면 null을 명시해야 한다.
-            limits["nvidia.com/gpu"] = None
-            requests["nvidia.com/gpu"] = None
+            limits[ACCEL_RESOURCE] = None
+            requests[ACCEL_RESOURCE] = None
             predictor["runtimeClassName"] = None
             if DEV_PIN_NODE:
                 predictor["nodeSelector"] = _pin_selector()
@@ -2105,7 +2416,7 @@ def update_serving(name: str, body: UpdateServing):
         _strip_deploy_gpu(ns, f"{name}-predictor")
     return {"name": name, "status": "Updating",
             "cpu": limits.get("cpu"), "memory": limits.get("memory"),
-            "gpu": int(limits.get("nvidia.com/gpu") or 0)}
+            "gpu": int(limits.get(ACCEL_RESOURCE) or 0)}
 
 
 @app.delete("/api/v1/serving/{name}")
@@ -2237,7 +2548,7 @@ async def serving_metrics():
         p95 = _hist_quantile(buckets, 0.95) if buckets else None
 
         res = model.get("resources") or {}
-        gpu = int((res.get("limits") or {}).get("nvidia.com/gpu", 0) or 0)
+        gpu = int((res.get("limits") or {}).get(ACCEL_RESOURCE, 0) or 0)
         items.append({
             "name": name,
             "namespace": ns,
@@ -2598,7 +2909,7 @@ def delete_snapshot(name: str, snap_id: str):
 class ResizeBody(BaseModel):
     cpu: str
     memoryGi: int
-    acceleratorKind: Optional[str] = "nvidia.com/gpu"
+    acceleratorKind: Optional[str] = ACCEL_RESOURCE
     acceleratorCount: int = 0
 
 
@@ -3293,8 +3604,47 @@ def _label_op(name: str) -> tuple[str, str]:
     return name, "기타 연산"
 
 
-_profile_state: dict = {"running": False, "at": None, "result": None,
-                        "error": None}
+# 프로파일링 상태 — 서비스(LLM)별로 마지막 결과를 따로 보관한다
+_profile_states: dict[str, dict] = {}
+_profile_lock = threading.Lock()   # 프로파일러는 한 번에 하나만 (추론 부담 제한)
+# 1분 주기 샘플링 (CR-AID-06) — 성능 분석 화면을 누군가 보고 있을 때만 돈다
+PROFILE_SAMPLE_SEC = int(_os.environ.get("PROFILE_SAMPLE_SEC", "60"))
+PROFILE_AUTO = _os.environ.get("PROFILE_AUTO", "1") != "0"
+_profile_watch: dict[str, float] = {}   # 서비스 → 화면이 마지막으로 조회한 시각
+_PROFILE_WATCH_TTL = 90                 # 이 시간 동안 조회가 없으면 자동 샘플링 중지
+
+
+def _pstate(service: Optional[str]) -> dict:
+    return _profile_states.setdefault(service or "", {
+        "running": False, "at": None, "result": None, "error": None, "mode": None})
+
+
+def _profile_sampler():
+    """화면이 열려 있는 서비스만 PROFILE_SAMPLE_SEC마다 추론 1회를 짧게 추적한다."""
+    while True:
+        time.sleep(5)
+        if not PROFILE_AUTO:
+            continue
+        now = time.time()
+        for svc, seen in list(_profile_watch.items()):
+            if now - seen > _PROFILE_WATCH_TTL:
+                _profile_watch.pop(svc, None)
+                continue
+            st = _pstate(svc)
+            last = st.get("_ts") or 0
+            if st["running"] or now - last < PROFILE_SAMPLE_SEC:
+                continue
+            try:
+                llm_profile_run(samples=1, max_tokens=32, service=svc or None,
+                                mode="auto")
+            except Exception:
+                pass   # 실패 사유는 상태의 error에 남는다. 다음 주기에 다시 시도
+
+
+@app.on_event("startup")
+def _start_profile_sampler():
+    threading.Thread(target=_profile_sampler, daemon=True,
+                     name="profile-sampler").start()
 
 
 def _vllm_pod(service: Optional[str] = None) -> tuple[str, str]:
@@ -3461,13 +3811,18 @@ def llm_insights(service: Optional[str] = None):
 
 
 @app.get("/api/v1/metrics/llm/profile")
-def llm_profile_state():
-    """마지막 프로파일링 결과 (없으면 비어 있음)."""
+def llm_profile_state(service: Optional[str] = None):
+    """마지막 프로파일링 결과. 조회하는 동안(화면이 열려 있는 동안) 1분 주기 샘플링이 돈다."""
+    _profile_watch[service or ""] = time.time()
+    st = _pstate(service)
     return {
-        "running": _profile_state["running"],
-        "at": _profile_state["at"],
-        "error": _profile_state["error"],
-        "result": _profile_state["result"],
+        "running": st["running"],
+        "at": st["at"],
+        "error": st["error"],
+        "result": st["result"],
+        "mode": st["mode"],
+        "auto": PROFILE_AUTO,
+        "intervalSec": PROFILE_SAMPLE_SEC,
         "kernelLevel": False,
         "kernelNote": ("이 개발 장비는 WSL2 환경이라 NVIDIA CUPTI가 초기화되지 않아 "
                        "GPU 커널 단위 시간은 수집되지 않습니다. "
@@ -3477,11 +3832,13 @@ def llm_profile_state():
 
 @app.post("/api/v1/metrics/llm/profile")
 def llm_profile_run(samples: int = 3, max_tokens: int = 48,
-                    service: Optional[str] = None):
-    """추론을 실제로 실행하면서 연산별 소요시간을 측정한다 (약 30~60초)."""
-    if _profile_state["running"]:
+                    service: Optional[str] = None, mode: str = "manual"):
+    """추론을 실제로 실행하면서 연산별 소요시간을 측정한다.
+    수동(버튼) 3회는 약 30~60초, 자동 샘플링(1회)은 그보다 짧다."""
+    st = _pstate(service)
+    if not _profile_lock.acquire(blocking=False):
         raise HTTPException(409, "이미 프로파일링이 진행 중입니다")
-    _profile_state.update(running=True, error=None)
+    st.update(running=True, error=None)
     try:
         port = _llm_endpoint(service)
         base = f"http://127.0.0.1:{port}"
@@ -3546,17 +3903,19 @@ def llm_profile_run(samples: int = 3, max_tokens: int = 48,
                 "ops": e["ops"][:4],
             } for e in rows],
         }
-        _profile_state.update(
-            result=result, at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        st.update(result=result, mode=mode,
+                  at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         return result
     except HTTPException as e:
-        _profile_state["error"] = e.detail
+        st["error"] = e.detail
         raise
     except Exception as e:
-        _profile_state["error"] = str(e)
+        st["error"] = str(e)
         raise HTTPException(503, f"프로파일링 실패: {e}")
     finally:
-        _profile_state["running"] = False
+        st["_ts"] = time.time()   # 성공·실패 모두 다음 자동 샘플링 기준 시각
+        st["running"] = False
+        _profile_lock.release()
 
 
 class LlmChat(BaseModel):
@@ -3681,7 +4040,7 @@ def gpu_availability():
     per_node: dict[str, dict] = {}
     total = 0
     for n in core.list_node().items:
-        alloc = (n.status.allocatable or {}).get("nvidia.com/gpu")
+        alloc = (n.status.allocatable or {}).get(ACCEL_RESOURCE)
         cnt = int(alloc) if alloc else 0
         total += cnt
         if cnt:
@@ -3692,8 +4051,8 @@ def gpu_availability():
     for p in core.list_pod_for_all_namespaces(
             field_selector="status.phase=Running").items:
         for c in p.spec.containers:
-            lim = ((c.resources.limits or {}).get("nvidia.com/gpu")
-                   or (c.resources.requests or {}).get("nvidia.com/gpu"))
+            lim = ((c.resources.limits or {}).get(ACCEL_RESOURCE)
+                   or (c.resources.requests or {}).get(ACCEL_RESOURCE))
             if lim:
                 n = int(lim)
                 used += n
@@ -4024,14 +4383,17 @@ async def notebook_ws_proxy(ns: str, name: str, path: str, websocket: WebSocket)
 
 # ── Auth endpoints ─────────────────────────────────────────────────
 @app.post("/api/v1/auth/login")
-def auth_login(body: LoginBody):
+def auth_login(body: LoginBody, request: Request):
     entry = _USERS.get(body.username.lower())
     if not entry or entry[0] != body.password:
         raise HTTPException(401, "아이디 또는 비밀번호가 올바르지 않습니다")
     token = _issue_token(body.username.lower(), entry[1])
     try:
+        ip = (request.headers.get("cf-connecting-ip")
+              or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+              or (request.client.host if request.client else "-"))
         with open(_ACCESS_LOG, "a") as f:
-            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  LOGIN"
+            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  {ip}  LOGIN"
                     f"  user={body.username.lower()}\n")
     except Exception:
         pass
@@ -4053,7 +4415,9 @@ def auth_me(request: Request):
     payload = _verify_token(request.cookies.get(SESSION_COOKIE))
     if not payload:
         raise HTTPException(401, "unauthenticated")
-    return {"username": payload["sub"], "role": payload["role"]}
+    # projects: 워크스페이스 신청이 승인되어 소속된 프로젝트 (포털이 기본 소속에 더해 쓴다)
+    return {"username": payload["sub"], "role": payload["role"],
+            "projects": _ws_members(payload["sub"])}
 
 
 @app.get("/healthz")

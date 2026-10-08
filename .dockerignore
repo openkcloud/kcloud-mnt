@@ -1,0 +1,7 @@
+docs/
+pipelines/
+deploy/
+__pycache__/
+config.env
+*.log
+.git/

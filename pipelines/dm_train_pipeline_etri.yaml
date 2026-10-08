@@ -1,0 +1,711 @@
+# PIPELINE DEFINITION
+# Name: dm-code-train
+# Description: DM코드 판독 성공/실패 분류 모델 실제 학습 (준비→학습→평가)
+# Inputs:
+#    batch: int [Default: 64.0]
+#    cmp_api: str [Default: 'http://okc-ai-backend.okc-ai.svc:8000']
+#    dataset_uri: str [Default: 's3://datasets/dm-code/dm_dataset.tgz']
+#    epochs: int [Default: 5.0]
+#    img_size: int [Default: 128.0]
+#    lr: float [Default: 0.0003]
+#    model_prefix: str [Default: 'dm-code/latest']
+#    seed: int [Default: 42.0]
+#    serve_gpu: int [Default: 0.0]
+#    serve_prefix: str [Default: 'dm-code/serve']
+#    service_name: str [Default: 'dm-code-classifier']
+#    val_ratio: float [Default: 0.2]
+# Outputs:
+#    evaluate-metrics: system.Metrics
+components:
+  comp-deploy:
+    executorLabel: exec-deploy
+    inputDefinitions:
+      parameters:
+        cmp_api:
+          parameterType: STRING
+        gpu:
+          parameterType: NUMBER_INTEGER
+        serve_uri:
+          parameterType: STRING
+        service_name:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-evaluate:
+    executorLabel: exec-evaluate
+    inputDefinitions:
+      artifacts:
+        manifest:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        batch:
+          parameterType: NUMBER_INTEGER
+        dataset_uri:
+          parameterType: STRING
+        img_size:
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-package:
+    executorLabel: exec-package
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        img_size:
+          parameterType: NUMBER_INTEGER
+        model_name:
+          parameterType: STRING
+        serve_prefix:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-prep:
+    executorLabel: exec-prep
+    inputDefinitions:
+      parameters:
+        dataset_uri:
+          parameterType: STRING
+        seed:
+          parameterType: NUMBER_INTEGER
+        val_ratio:
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      artifacts:
+        manifest:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-train:
+    executorLabel: exec-train
+    inputDefinitions:
+      artifacts:
+        manifest:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        batch:
+          parameterType: NUMBER_INTEGER
+        dataset_uri:
+          parameterType: STRING
+        epochs:
+          parameterType: NUMBER_INTEGER
+        img_size:
+          parameterType: NUMBER_INTEGER
+        lr:
+          parameterType: NUMBER_DOUBLE
+        model_prefix:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: NUMBER_DOUBLE
+deploymentSpec:
+  executors:
+    exec-deploy:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - deploy
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.7.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'httpx' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef deploy(serve_uri: str, service_name: str, cmp_api: str,\n   \
+          \        gpu: int) -> str:\n    \"\"\"\uD3EC\uC7A5\uB41C \uBAA8\uB378\uC744\
+          \ \uC11C\uBE44\uC2A4\uC5D0 \uBC18\uC601\uD55C\uB2E4 (\uC5C6\uC73C\uBA74\
+          \ \uC0C8\uB85C \uBC30\uD3EC, \uC788\uC73C\uBA74 \uAD50\uCCB4).\"\"\"\n \
+          \   import httpx\n\n    existing = httpx.get(f\"{cmp_api}/api/v1/serving\"\
+          , timeout=30).json()\n    names = [s[\"name\"] for s in existing.get(\"\
+          items\", [])]\n\n    if service_name in names:\n        r = httpx.patch(f\"\
+          {cmp_api}/api/v1/serving/{service_name}\", timeout=60,\n               \
+          \         json={\"storageUri\": serve_uri, \"modelFormat\": \"pytorch\"\
+          ,\n                              \"gpu\": gpu})\n        action = \"\uAD50\
+          \uCCB4\"\n    else:\n        r = httpx.post(f\"{cmp_api}/api/v1/serving\"\
+          , timeout=60,\n                       json={\"name\": service_name, \"namespace\"\
+          : \"ai-dev-team\",\n                             \"modelFormat\": \"pytorch\"\
+          , \"storageUri\": serve_uri,\n                             \"cpu\": \"2\"\
+          , \"memoryGi\": 4, \"gpu\": gpu})\n        action = \"\uC2E0\uADDC \uBC30\
+          \uD3EC\"\n    r.raise_for_status()\n\n    msg = (f\"\uC11C\uBE44\uC2A4 '{service_name}'\
+          \ {action} \uC644\uB8CC \u2014 {serve_uri}\\n\"\n           f\"\uD638\uCD9C\
+          \ \uC8FC\uC18C: {cmp_api}/api/v1/serving/{service_name}/predict\\n\"\n \
+          \          f\"\uC900\uBE44\uAE4C\uC9C0 1~2\uBD84 \uAC78\uB9BD\uB2C8\uB2E4\
+          \ (\uADF8\uB3D9\uC548 \uAE30\uC874 \uC11C\uBC84\uAC00 \uACC4\uC18D \uC751\
+          \uB2F5)\")\n    print(msg)\n    return msg\n\n"
+        env:
+        - name: S3_ENDPOINT
+          value: minio-service.kubeflow:9000
+        - name: S3_KEY
+          value: minio
+        - name: S3_SECRET
+          value: minio123
+        image: kubeflownotebookswg/jupyter-pytorch-cuda-full:v1.9.2
+    exec-evaluate:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.7.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'minio' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate(dataset_uri: str, manifest: dsl.Input[dsl.Dataset],\n\
+          \             model: dsl.Input[dsl.Model], img_size: int, batch: int,\n\
+          \             metrics: dsl.Output[dsl.Metrics]) -> str:\n    \"\"\"\uAC80\
+          \uC99D\uC14B \uD63C\uB3D9\uD589\uB82C \u2014 \uD604\uC7A5\uC5D0\uC11C \uC911\
+          \uC694\uD55C '\uBD88\uB7C9 \uAC80\uCD9C\uB960'\uAE4C\uC9C0 \uACC4\uC0B0\
+          .\"\"\"\n    import json, os, tarfile\n    import torch, torch.nn as nn\n\
+          \    from torch.utils.data import Dataset, DataLoader\n    from torchvision\
+          \ import transforms\n    from torchvision.models import resnet18\n    from\
+          \ PIL import Image\n    from minio import Minio\n\n    bucket, key = dataset_uri.replace(\"\
+          s3://\", \"\").split(\"/\", 1)\n    cli = Minio(os.environ[\"S3_ENDPOINT\"\
+          ], access_key=os.environ[\"S3_KEY\"],\n                secret_key=os.environ[\"\
+          S3_SECRET\"], secure=False)\n    cli.fget_object(bucket, key, \"/tmp/ds.tgz\"\
+          )\n    with tarfile.open(\"/tmp/ds.tgz\") as t:\n        t.extractall(\"\
+          /tmp/data\")\n    rows = json.load(open(manifest.path))[\"val\"]\n\n   \
+          \ device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\"\
+          )\n    tf = transforms.Compose([\n        transforms.Resize((img_size, img_size)),\
+          \ transforms.ToTensor(),\n        transforms.Normalize([0.485, 0.456, 0.406],\
+          \ [0.229, 0.224, 0.225]),\n    ])\n\n    class DM(Dataset):\n        def\
+          \ __len__(self):\n            return len(rows)\n\n        def __getitem__(self,\
+          \ i):\n            rel, y = rows[i]\n            return tf(Image.open(f\"\
+          /tmp/data/{rel}\").convert(\"RGB\")), y\n\n    net = resnet18()\n    net.fc\
+          \ = nn.Linear(net.fc.in_features, 2)\n    net.load_state_dict(torch.load(model.path,\
+          \ map_location=device))\n    net = net.to(device).eval()\n\n    cm = [[0,\
+          \ 0], [0, 0]]\n    with torch.no_grad():\n        for x, y in DataLoader(DM(),\
+          \ batch_size=batch, num_workers=2):\n            p = net(x.to(device)).argmax(1).cpu()\n\
+          \            for t, pr in zip(y.tolist(), p.tolist()):\n               \
+          \ cm[t][pr] += 1\n\n    total = sum(map(sum, cm))\n    acc = (cm[0][0] +\
+          \ cm[1][1]) / total * 100\n    recall_ng = cm[1][1] / max(sum(cm[1]), 1)\
+          \ * 100\n    precision_ng = cm[1][1] / max(cm[0][1] + cm[1][1], 1) * 100\n\
+          \n    metrics.log_metric(\"\uC815\uD655\uB3C4(%)\", round(acc, 2))\n   \
+          \ metrics.log_metric(\"\uBD88\uB7C9 \uAC80\uCD9C\uB960(%)\", round(recall_ng,\
+          \ 2))\n    metrics.log_metric(\"\uBD88\uB7C9 \uD310\uC815 \uC815\uBC00\uB3C4\
+          (%)\", round(precision_ng, 2))\n    metrics.log_metric(\"\uAC80\uC99D \uC774\
+          \uBBF8\uC9C0 \uC218\", total)\n\n    print(\"            \uC608\uCE21:\uC131\
+          \uACF5   \uC608\uCE21:\uC2E4\uD328\")\n    print(f\"\uC2E4\uC81C \uC131\uACF5\
+          (OK)   {cm[0][0]:6d} {cm[0][1]:9d}\")\n    print(f\"\uC2E4\uC81C \uC2E4\uD328\
+          (FAIL) {cm[1][0]:6d} {cm[1][1]:9d}\")\n    msg = (f\"\uC815\uD655\uB3C4\
+          \ {acc:.2f}% \xB7 \uBD88\uB7C9 \uAC80\uCD9C\uB960 {recall_ng:.2f}% \"\n\
+          \           f\"(\uAC80\uC99D {total:,}\uC7A5)\")\n    print(\"\\n\" + msg)\n\
+          \    return msg\n\n"
+        env:
+        - name: S3_ENDPOINT
+          value: minio-service.kubeflow:9000
+        - name: S3_KEY
+          value: minio
+        - name: S3_SECRET
+          value: minio123
+        image: kubeflownotebookswg/jupyter-pytorch-cuda-full:v1.9.2
+    exec-package:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - package
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.7.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'minio' 'torch-model-archiver'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef package(model: dsl.Input[dsl.Model], serve_prefix: str,\n   \
+          \         img_size: int, model_name: str) -> str:\n    \"\"\"\uD559\uC2B5\
+          \uB41C \uAC00\uC911\uCE58\uB97C \uC11C\uBE59\uC774 \uBC14\uB85C \uC77D\uC744\
+          \ \uC218 \uC788\uB294 \uD615\uD0DC\uB85C \uD3EC\uC7A5\uD55C\uB2E4.\n\n \
+          \   KServe\uC758 PyTorch \uC11C\uBC84(TorchServe)\uB294 .mar \uD328\uD0A4\
+          \uC9C0\uB97C \uC694\uAD6C\uD558\uBBC0\uB85C\n    \uD559\uC2B5 \uC0B0\uCD9C\
+          \uBB3C(state_dict)\uC744 TorchScript\uB85C \uBCC0\uD658\uD574 \uBB36\uB294\
+          \uB2E4.\n    \"\"\"\n    import json, os, subprocess\n    import torch,\
+          \ torch.nn as nn\n    from torchvision.models import resnet18\n    from\
+          \ minio import Minio\n\n    net = resnet18()\n    net.fc = nn.Linear(net.fc.in_features,\
+          \ 2)\n    net.load_state_dict(torch.load(model.path, map_location=\"cpu\"\
+          ))\n    net.eval()\n    # \uBAA8\uB378 \uC815\uC758 \uC5C6\uC774\uB3C4 \uBD88\
+          \uB7EC\uC62C \uC218 \uC788\uAC8C TorchScript\uB85C \uACE0\uC815\n    traced\
+          \ = torch.jit.trace(net, torch.randn(1, 3, img_size, img_size))\n    traced.save(\"\
+          /tmp/model.pt\")\n\n    handler = r'''\nimport io, base64, torch\nfrom PIL\
+          \ import Image\nfrom torchvision import transforms\nfrom ts.torch_handler.base_handler\
+          \ import BaseHandler\n\n\nclass DMHandler(BaseHandler):\n    \"\"\"DataMatrix\
+          \ \uD310\uB3C5 \uAC00\uB2A5\uC131 \uBD84\uB958 (KServe v1 \uD504\uB85C\uD1A0\
+          \uCF5C)\"\"\"\n\n    def initialize(self, ctx):\n        super().initialize(ctx)\n\
+          \        self.tf = transforms.Compose([\n            transforms.Resize((IMG,\
+          \ IMG)),\n            transforms.ToTensor(),\n            transforms.Normalize([0.485,\
+          \ 0.456, 0.406], [0.229, 0.224, 0.225]),\n        ])\n        self.classes\
+          \ = [\"OK\", \"FAIL\"]\n\n    def _to_bytes(self, row):\n        if isinstance(row,\
+          \ dict):\n            for k in (\"image_b64\", \"data\", \"body\", \"b64\"\
+          ):\n                v = row.get(k)\n                if v is None:\n    \
+          \                continue\n                if isinstance(v, (bytes, bytearray)):\n\
+          \                    return bytes(v)\n                if isinstance(v, str):\n\
+          \                    return base64.b64decode(v)\n                if isinstance(v,\
+          \ dict):\n                    return self._to_bytes(v)\n        if isinstance(row,\
+          \ str):\n            return base64.b64decode(row)\n        if isinstance(row,\
+          \ (bytes, bytearray)):\n            return bytes(row)\n        raise ValueError(\"\
+          \uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC785\uB825 \uD615\uC2DD\")\n\n \
+          \   def preprocess(self, data):\n        imgs = []\n        for row in data:\n\
+          \            img = Image.open(io.BytesIO(self._to_bytes(row))).convert(\"\
+          RGB\")\n            imgs.append(self.tf(img))\n        return torch.stack(imgs).to(self.device)\n\
+          \n    def inference(self, x, *args, **kwargs):\n        with torch.no_grad():\n\
+          \            return torch.softmax(self.model(x), 1)\n\n    def postprocess(self,\
+          \ out):\n        res = []\n        for p in out:\n            i = int(p.argmax())\n\
+          \            res.append({\"prediction\": self.classes[i],\n            \
+          \            \"confidence\": round(float(p[i]) * 100, 1),\n            \
+          \            \"probabilities\": {\"OK\": round(float(p[0]) * 100, 1),\n\
+          \                                          \"FAIL\": round(float(p[1]) *\
+          \ 100, 1)}})\n        return res\n'''.replace(\"IMG\", str(img_size))\n\
+          \    with open(\"/tmp/dm_handler.py\", \"w\") as f:\n        f.write(handler)\n\
+          \n    os.makedirs(\"/tmp/pkg/model-store\", exist_ok=True)\n    subprocess.run([\n\
+          \        \"torch-model-archiver\", \"--model-name\", model_name,\n     \
+          \   \"--version\", \"1.0\", \"--serialized-file\", \"/tmp/model.pt\",\n\
+          \        \"--handler\", \"/tmp/dm_handler.py\",\n        \"--export-path\"\
+          , \"/tmp/pkg/model-store\", \"--force\",\n    ], check=True)\n\n    # KServe\
+          \ \uB798\uD37C\uB294 model_snapshot\uACFC service_envelope\uC744 \uC694\uAD6C\
+          \uD55C\uB2E4.\n    # \uC774\uAC8C \uC5C6\uC73C\uBA74 TorchServe\uB294 \uB728\
+          \uC9C0\uB9CC \uB798\uD37C\uAC00 KeyError\uB85C \uC8FD\uB294\uB2E4.\n   \
+          \ snapshot = json.dumps({\n        \"name\": \"startup.cfg\", \"modelCount\"\
+          : 1,\n        \"models\": {model_name: {\"1.0\": {\n            \"defaultVersion\"\
+          : True, \"marName\": f\"{model_name}.mar\",\n            \"minWorkers\"\
+          : 1, \"maxWorkers\": 1, \"batchSize\": 1,\n            \"maxBatchDelay\"\
+          : 100, \"responseTimeout\": 120}}},\n    }, separators=(\",\", \":\"))\n\
+          \    cfg = (\"inference_address=http://0.0.0.0:8085\\n\"\n           \"\
+          management_address=http://0.0.0.0:8085\\n\"\n           \"metrics_address=http://0.0.0.0:8082\\\
+          n\"\n           \"grpc_inference_port=7070\\n\"\n           \"grpc_management_port=7071\\\
+          n\"\n           \"enable_envvars_config=true\\n\"\n           \"install_py_dep_per_model=true\\\
+          n\"\n           \"enable_metrics_api=true\\n\"\n           \"metrics_mode=logical\\\
+          n\"\n           \"NUM_WORKERS=1\\n\"\n           \"number_of_netty_threads=4\\\
+          n\"\n           \"job_queue_size=10\\n\"\n           \"service_envelope=kserve\\\
+          n\"\n           \"model_store=/mnt/models/model-store\\n\"\n           f\"\
+          model_snapshot={snapshot}\\n\")\n\n    cli = Minio(os.environ[\"S3_ENDPOINT\"\
+          ], access_key=os.environ[\"S3_KEY\"],\n                secret_key=os.environ[\"\
+          S3_SECRET\"], secure=False)\n    if not cli.bucket_exists(\"models\"):\n\
+          \        cli.make_bucket(\"models\")\n    cli.fput_object(\"models\", f\"\
+          {serve_prefix}/model-store/{model_name}.mar\",\n                    f\"\
+          /tmp/pkg/model-store/{model_name}.mar\")\n    import io as _io\n    data\
+          \ = cfg.encode()\n    cli.put_object(\"models\", f\"{serve_prefix}/config/config.properties\"\
+          ,\n                   _io.BytesIO(data), len(data))\n\n    mb = os.path.getsize(f\"\
+          /tmp/pkg/model-store/{model_name}.mar\") / 1024 / 1024\n    uri = f\"s3://models/{serve_prefix}\"\
+          \n    print(f\"\uD328\uD0A4\uC9C0 \uC0DD\uC131 \uC644\uB8CC ({mb:.1f}MB)\
+          \ \u2192 {uri}\")\n    return uri\n\n"
+        env:
+        - name: S3_ENDPOINT
+          value: minio-service.kubeflow:9000
+        - name: S3_KEY
+          value: minio
+        - name: S3_SECRET
+          value: minio123
+        image: kubeflownotebookswg/jupyter-pytorch-cuda-full:v1.9.2
+    exec-prep:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - prep
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.7.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'minio' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef prep(dataset_uri: str, val_ratio: float, seed: int,\n       \
+          \  manifest: dsl.Output[dsl.Dataset]) -> str:\n    \"\"\"\uC6D0\uBCF8 \uC774\
+          \uBBF8\uC9C0\uB97C \uB0B4\uB824\uBC1B\uC544 \uD559\uC2B5/\uAC80\uC99D\uC73C\
+          \uB85C \uB098\uB208 \uBAA9\uB85D\uC744 \uB9CC\uB4E0\uB2E4.\"\"\"\n    import\
+          \ json, tarfile, os\n    from minio import Minio\n\n    bucket, key = dataset_uri.replace(\"\
+          s3://\", \"\").split(\"/\", 1)\n    cli = Minio(os.environ[\"S3_ENDPOINT\"\
+          ], access_key=os.environ[\"S3_KEY\"],\n                secret_key=os.environ[\"\
+          S3_SECRET\"], secure=False)\n    cli.fget_object(bucket, key, \"/tmp/ds.tgz\"\
+          )\n    with tarfile.open(\"/tmp/ds.tgz\") as t:\n        t.extractall(\"\
+          /tmp/data\")\n\n    ok = sorted(f\"qr_crops/{f}\" for f in os.listdir(\"\
+          /tmp/data/qr_crops\")\n                if f.endswith(\".jpg\"))\n    ng\
+          \ = sorted(f\"qr_crops_failed/{f}\"\n                for f in os.listdir(\"\
+          /tmp/data/qr_crops_failed\")\n                if f.endswith(\".jpg\"))\n\
+          \n    # \uB178\uD2B8\uBD81\uACFC \uB3D9\uC77C\uD558\uAC8C seed \uACE0\uC815\
+          \ \u2014 \uB9E4 \uC2E4\uD589 \uAC19\uC740 \uBD84\uD560\uC774 \uB098\uC628\
+          \uB2E4\n    import random\n    files = [(p, 0) for p in ok] + [(p, 1) for\
+          \ p in ng]\n    random.Random(seed).shuffle(files)\n    n_val = int(len(files)\
+          \ * val_ratio)\n    split = {\"val\": files[:n_val], \"train\": files[n_val:]}\n\
+          \n    with open(manifest.path, \"w\") as f:\n        json.dump(split, f)\n\
+          \    msg = (f\"\uD310\uB3C5 \uC131\uACF5 {len(ok):,}\uC7A5 \xB7 \uC2E4\uD328\
+          \ {len(ng):,}\uC7A5 \u2192 \"\n           f\"\uD559\uC2B5 {len(split['train']):,}\uC7A5\
+          \ / \uAC80\uC99D {len(split['val']):,}\uC7A5\")\n    print(msg)\n    return\
+          \ msg\n\n"
+        env:
+        - name: S3_ENDPOINT
+          value: minio-service.kubeflow:9000
+        - name: S3_KEY
+          value: minio
+        - name: S3_SECRET
+          value: minio123
+        image: kubeflownotebookswg/jupyter-pytorch-cuda-full:v1.9.2
+    exec-train:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.7.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'minio' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train(dataset_uri: str, manifest: dsl.Input[dsl.Dataset],\n \
+          \         epochs: int, batch: int, img_size: int, lr: float,\n         \
+          \ model_prefix: str,\n          model: dsl.Output[dsl.Model]) -> float:\n\
+          \    \"\"\"ResNet18 \uC804\uC774\uD559\uC2B5 \u2014 \uB178\uD2B8\uBD81\uC5D0\
+          \uC11C 94.96%\uB97C \uB0B8 \uADF8 \uB808\uC2DC\uD53C \uADF8\uB300\uB85C\
+          .\"\"\"\n    import json, os, tarfile, time\n    import torch, torch.nn\
+          \ as nn\n    from torch.utils.data import Dataset, DataLoader\n    from\
+          \ torchvision import transforms\n    from torchvision.models import resnet18,\
+          \ ResNet18_Weights\n    from PIL import Image\n    from minio import Minio\n\
+          \n    bucket, key = dataset_uri.replace(\"s3://\", \"\").split(\"/\", 1)\n\
+          \    cli = Minio(os.environ[\"S3_ENDPOINT\"], access_key=os.environ[\"S3_KEY\"\
+          ],\n                secret_key=os.environ[\"S3_SECRET\"], secure=False)\n\
+          \    cli.fget_object(bucket, key, \"/tmp/ds.tgz\")\n    with tarfile.open(\"\
+          /tmp/ds.tgz\") as t:\n        t.extractall(\"/tmp/data\")\n    split = json.load(open(manifest.path))\n\
+          \n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"\
+          cpu\")\n    print(f\"\uD559\uC2B5 \uC7A5\uBE44: {device}\"\n          +\
+          \ (f\" ({torch.cuda.get_device_name(0)})\"\n             if device.type\
+          \ == \"cuda\" else \" \u2014 GPU\uB97C \uBABB \uC7A1\uC544 CPU\uB85C \uC9C4\
+          \uD589\"))\n\n    norm = transforms.Normalize([0.485, 0.456, 0.406], [0.229,\
+          \ 0.224, 0.225])\n    train_tf = transforms.Compose([\n        transforms.Resize((img_size,\
+          \ img_size)),\n        transforms.RandomHorizontalFlip(),\n        transforms.RandomRotation(10),\n\
+          \        transforms.ColorJitter(brightness=0.2, contrast=0.2),\n       \
+          \ transforms.ToTensor(), norm,\n    ])\n    eval_tf = transforms.Compose([\n\
+          \        transforms.Resize((img_size, img_size)), transforms.ToTensor(),\
+          \ norm,\n    ])\n\n    class DM(Dataset):\n        def __init__(self, rows,\
+          \ tf):\n            self.rows, self.tf = rows, tf\n\n        def __len__(self):\n\
+          \            return len(self.rows)\n\n        def __getitem__(self, i):\n\
+          \            rel, y = self.rows[i]\n            img = Image.open(f\"/tmp/data/{rel}\"\
+          ).convert(\"RGB\")\n            return self.tf(img), y\n\n    tr = DataLoader(DM(split[\"\
+          train\"], train_tf), batch_size=batch,\n                    shuffle=True,\
+          \ num_workers=2)\n    va = DataLoader(DM(split[\"val\"], eval_tf), batch_size=batch,\n\
+          \                    num_workers=2)\n\n    net = resnet18(weights=ResNet18_Weights.DEFAULT)\n\
+          \    net.fc = nn.Linear(net.fc.in_features, 2)   # 0=\uC131\uACF5, 1=\uC2E4\
+          \uD328\n    net = net.to(device)\n    crit = nn.CrossEntropyLoss()\n   \
+          \ opt = torch.optim.AdamW(net.parameters(), lr=lr)\n\n    best = 0.0\n \
+          \   for ep in range(1, epochs + 1):\n        t0 = time.time()\n        net.train()\n\
+          \        loss_sum = 0.0\n        for x, y in tr:\n            x, y = x.to(device),\
+          \ y.to(device)\n            opt.zero_grad()\n            loss = crit(net(x),\
+          \ y)\n            loss.backward()\n            opt.step()\n            loss_sum\
+          \ += loss.item() * x.size(0)\n\n        net.eval()\n        ok = tot = 0\n\
+          \        with torch.no_grad():\n            for x, y in va:\n          \
+          \      x, y = x.to(device), y.to(device)\n                ok += (net(x).argmax(1)\
+          \ == y).sum().item()\n                tot += y.size(0)\n        acc = ok\
+          \ / tot\n        print(f\"[{ep}/{epochs}] \uD559\uC2B5\uC190\uC2E4 {loss_sum/len(split['train']):.4f}\
+          \ | \"\n              f\"\uAC80\uC99D \uC815\uD655\uB3C4 {acc*100:.2f}%\
+          \ | {time.time()-t0:.0f}\uCD08\")\n        if acc > best:\n            best\
+          \ = acc\n            torch.save(net.state_dict(), model.path)\n\n    # \uBC30\
+          \uD3EC\xB7\uC7AC\uC0AC\uC6A9\uC744 \uC704\uD574 MinIO\uC5D0\uB3C4 \uB0A8\
+          \uAE34\uB2E4\n    if not cli.bucket_exists(\"models\"):\n        cli.make_bucket(\"\
+          models\")\n    cli.fput_object(\"models\", f\"{model_prefix}/dm_model_best.pt\"\
+          , model.path)\n    print(f\"\\n\uCD5C\uACE0 \uAC80\uC99D \uC815\uD655\uB3C4\
+          \ {best*100:.2f}% \u2014 \"\n          f\"s3://models/{model_prefix}/dm_model_best.pt\
+          \ \uC800\uC7A5 \uC644\uB8CC\")\n    return round(best * 100, 2)\n\n"
+        env:
+        - name: S3_ENDPOINT
+          value: minio-service.kubeflow:9000
+        - name: S3_KEY
+          value: minio
+        - name: S3_SECRET
+          value: minio123
+        image: kubeflownotebookswg/jupyter-pytorch-cuda-full:v1.9.2
+        resources:
+          accelerator:
+            count: '1'
+            type: nvidia.com/gpu
+pipelineInfo:
+  description: "DM\uCF54\uB4DC \uD310\uB3C5 \uC131\uACF5/\uC2E4\uD328 \uBD84\uB958\
+    \ \uBAA8\uB378 \uC2E4\uC81C \uD559\uC2B5 (\uC900\uBE44\u2192\uD559\uC2B5\u2192\
+    \uD3C9\uAC00)"
+  name: dm-code-train
+root:
+  dag:
+    outputs:
+      artifacts:
+        evaluate-metrics:
+          artifactSelectors:
+          - outputArtifactKey: metrics
+            producerSubtask: evaluate
+    tasks:
+      deploy:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-deploy
+        dependentTasks:
+        - package
+        inputs:
+          parameters:
+            cmp_api:
+              componentInputParameter: cmp_api
+            gpu:
+              componentInputParameter: serve_gpu
+            serve_uri:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: package
+            service_name:
+              componentInputParameter: service_name
+        taskInfo:
+          name: deploy
+      evaluate:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-evaluate
+        dependentTasks:
+        - prep
+        - train
+        inputs:
+          artifacts:
+            manifest:
+              taskOutputArtifact:
+                outputArtifactKey: manifest
+                producerTask: prep
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train
+          parameters:
+            batch:
+              componentInputParameter: batch
+            dataset_uri:
+              componentInputParameter: dataset_uri
+            img_size:
+              componentInputParameter: img_size
+        taskInfo:
+          name: evaluate
+      package:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-package
+        dependentTasks:
+        - evaluate
+        - train
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train
+          parameters:
+            img_size:
+              componentInputParameter: img_size
+            model_name:
+              componentInputParameter: service_name
+            serve_prefix:
+              componentInputParameter: serve_prefix
+        taskInfo:
+          name: package
+      prep:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-prep
+        inputs:
+          parameters:
+            dataset_uri:
+              componentInputParameter: dataset_uri
+            seed:
+              componentInputParameter: seed
+            val_ratio:
+              componentInputParameter: val_ratio
+        taskInfo:
+          name: prep
+      train:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train
+        dependentTasks:
+        - prep
+        inputs:
+          artifacts:
+            manifest:
+              taskOutputArtifact:
+                outputArtifactKey: manifest
+                producerTask: prep
+          parameters:
+            batch:
+              componentInputParameter: batch
+            dataset_uri:
+              componentInputParameter: dataset_uri
+            epochs:
+              componentInputParameter: epochs
+            img_size:
+              componentInputParameter: img_size
+            lr:
+              componentInputParameter: lr
+            model_prefix:
+              componentInputParameter: model_prefix
+        taskInfo:
+          name: train
+  inputDefinitions:
+    parameters:
+      batch:
+        defaultValue: 64.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      cmp_api:
+        defaultValue: http://okc-ai-backend.okc-ai.svc:8000
+        isOptional: true
+        parameterType: STRING
+      dataset_uri:
+        defaultValue: s3://datasets/dm-code/dm_dataset.tgz
+        isOptional: true
+        parameterType: STRING
+      epochs:
+        defaultValue: 5.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      img_size:
+        defaultValue: 128.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      lr:
+        defaultValue: 0.0003
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      model_prefix:
+        defaultValue: dm-code/latest
+        isOptional: true
+        parameterType: STRING
+      seed:
+        defaultValue: 42.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      serve_gpu:
+        defaultValue: 0.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      serve_prefix:
+        defaultValue: dm-code/serve
+        isOptional: true
+        parameterType: STRING
+      service_name:
+        defaultValue: dm-code-classifier
+        isOptional: true
+        parameterType: STRING
+      val_ratio:
+        defaultValue: 0.2
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+  outputDefinitions:
+    artifacts:
+      evaluate-metrics:
+        artifactType:
+          schemaTitle: system.Metrics
+          schemaVersion: 0.0.1
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.7.0

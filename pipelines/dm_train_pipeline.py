@@ -9,18 +9,33 @@ sleep으로 시간만 끄는 데모가 아니라 실제로 ResNet18을 학습시
   입력  s3://datasets/dm-code/dm_dataset.tgz
   출력  s3://models/dm-code/<run>/dm_model_best.pt
 
-컴파일:
-  python dm_train_pipeline.py      # → dm_train_pipeline.yaml
+컴파일 (환경마다 값이 달라 환경변수로 넘긴다):
+  # 개발 PC (파드가 사외망에 직접 못 나가 호스트 프록시 경유, 백엔드는 클러스터 밖)
+  TRAIN_PROXY=http://192.168.0.41:3128 CMP_API=http://192.168.0.41:8000     python dm_train_pipeline.py                      # → dm_train_pipeline.yaml
+  # ETRI (프록시 없음, 백엔드는 클러스터 안 okc-ai 네임스페이스, GPU 없으면 TRAIN_ACCEL= 로 CPU 학습)
+  PIPELINE_OUT=dm_train_pipeline_etri.yaml python dm_train_pipeline.py
+
+주의: 각 단계가 실행 중에 pip로 minio 등을 받고, 학습은 사전학습 가중치를 내려받는다.
+인터넷이 없는 환경이면 TRAIN_IMAGE에 패키지·가중치를 미리 넣은 이미지를 지정해야 한다.
 """
+import os
+
 from kfp import dsl, compiler
 
 # 노트북과 동일한 이미지 — torch·torchvision·kfp가 이미 들어 있어
 # 파드에서 따로 받을 필요가 없다 (노드에 캐시되어 있어 기동도 빠름).
-IMAGE = "kubeflownotebookswg/jupyter-pytorch-cuda-full:v1.9.2"
+IMAGE = os.environ.get("TRAIN_IMAGE",
+                       "kubeflownotebookswg/jupyter-pytorch-cuda-full:v1.9.2")
 
-# 파드는 사내망 밖으로 직접 못 나가므로 호스트 프록시를 경유한다
-# (사전학습 가중치 다운로드용). 운영 전환 시 값만 바꾸면 된다.
-PROXY = "http://192.168.0.41:3128"
+# 사외 통신 프록시 (사전학습 가중치·pip 패키지 다운로드용). 비우면 쓰지 않는다.
+# 개발 PC는 파드가 사내망 밖으로 직접 못 나가 호스트 프록시(http://192.168.0.41:3128)를 쓴다.
+PROXY = os.environ.get("TRAIN_PROXY", "")
+
+# 배포 단계가 부르는 AI 노트북 백엔드 주소 (기본은 클러스터 안 설치 기준)
+CMP_API = os.environ.get("CMP_API", "http://okc-ai-backend.okc-ai.svc:8000")
+
+# 학습 단계 가속기 자원 이름. 비우면 CPU로 학습한다
+ACCEL = os.environ.get("TRAIN_ACCEL", "nvidia.com/gpu")
 
 S3_ENDPOINT = "minio-service.kubeflow:9000"
 S3_KEY, S3_SECRET = "minio", "minio123"
@@ -403,25 +418,26 @@ def dm_code_train(
     serve_prefix: str = "dm-code/serve",
     service_name: str = "dm-code-classifier",
     serve_gpu: int = 0,
-    cmp_api: str = "http://192.168.0.41:8000",
+    cmp_api: str = CMP_API,
 ):
     def wire(task, gpu: bool = False):
         task.set_env_variable("S3_ENDPOINT", S3_ENDPOINT)
         task.set_env_variable("S3_KEY", S3_KEY)
         task.set_env_variable("S3_SECRET", S3_SECRET)
-        # 사전학습 가중치·pip 패키지 다운로드용
-        task.set_env_variable("HTTP_PROXY", PROXY)
-        task.set_env_variable("HTTPS_PROXY", PROXY)
-        # 주의: 이 프록시 설정은 KFP launcher(Go)에도 그대로 적용된다.
-        # 클러스터 내부 주소를 NO_PROXY에서 빠뜨리면 launcher가 메타데이터
-        # 서비스를 사외 프록시로 찾아가다 죽는다.
-        task.set_env_variable(
-            "NO_PROXY",
-            "localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,"
-            ".svc,.cluster.local,.kubeflow,.kserve,metadata-grpc-service,"
-            "ml-pipeline,minio-service,cache-server,mysql")
-        if gpu:
-            task.set_accelerator_type("nvidia.com/gpu")
+        if PROXY:
+            # 사전학습 가중치·pip 패키지 다운로드용
+            task.set_env_variable("HTTP_PROXY", PROXY)
+            task.set_env_variable("HTTPS_PROXY", PROXY)
+            # 주의: 이 프록시 설정은 KFP launcher(Go)에도 그대로 적용된다.
+            # 클러스터 내부 주소를 NO_PROXY에서 빠뜨리면 launcher가 메타데이터
+            # 서비스를 사외 프록시로 찾아가다 죽는다.
+            task.set_env_variable(
+                "NO_PROXY",
+                "localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,"
+                ".svc,.cluster.local,.kubeflow,.kserve,metadata-grpc-service,"
+                "ml-pipeline,minio-service,cache-server,mysql")
+        if gpu and ACCEL:
+            task.set_accelerator_type(ACCEL)
             task.set_accelerator_limit(1)
         return task
 
@@ -446,5 +462,6 @@ def dm_code_train(
 
 
 if __name__ == "__main__":
-    compiler.Compiler().compile(dm_code_train, "dm_train_pipeline.yaml")
-    print("컴파일 완료 → dm_train_pipeline.yaml")
+    out = os.environ.get("PIPELINE_OUT", "dm_train_pipeline.yaml")
+    compiler.Compiler().compile(dm_code_train, out)
+    print(f"컴파일 완료 → {out} (proxy={PROXY or '없음'}, cmp_api={CMP_API}, accel={ACCEL or 'CPU'})")
