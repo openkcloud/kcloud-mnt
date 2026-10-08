@@ -2,15 +2,31 @@
 
 IaaS 관련 OpenStack 호출은 전부 이 모듈에서. 프론트는 MNT-IAAS만 호출한다.
 실행(로컬): uvicorn app.main:app --reload --port 8001
+  (TEMPORAL_API_BASE 가 있으면 Temporal 워커(VM 프로비저닝의 OpenStack 작업)도 함께 시작)
 """
+import asyncio
+from contextlib import asynccontextmanager, suppress
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .openstack_client import get_conn
 from .routers import flavors, images, networks, projects, servers, volumes
+from .workflows.runtime import run_worker
 
-app = FastAPI(title="MNT-IAAS", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    worker = asyncio.create_task(run_worker()) if settings.temporal_api_base else None
+    yield
+    if worker:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+
+
+app = FastAPI(title="MNT-IAAS", version="0.1.0", lifespan=lifespan)
 
 if settings.cors_origins:
     app.add_middleware(

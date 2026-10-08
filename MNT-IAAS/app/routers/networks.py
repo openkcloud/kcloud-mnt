@@ -14,25 +14,29 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import settings
-from ..openstack_client import get_conn
+from ..openstack_client import get_conn, os_request
+from .volumes import _cinder_err
 
 router = APIRouter(tags=["networks"])
 
 
+class NeutronError(RuntimeError):
+    """Neutron 이 거절한 요청 — 오류 본문의 원래 메시지를 담는다
+    (keystoneauth 는 Neutron 오류 형식을 읽지 못해 'Unrecognized schema in response body' 로 가린다)."""
+
+
 def _neutron_req(method: str, path: str, *, params: dict | None = None, json: dict | None = None):
-    """Neutron 요청 — override/catalog 분기. path 는 '/networks' 처럼 /v2.0 이후 경로."""
+    """Neutron 요청 — override/catalog 분기. path 는 '/networks' 처럼 /v2.0 이후 경로.
+    조회는 연결 끊김 시 1회 재시도, 생성·변경은 재시도 없이 새 연결로 보낸다(os_request)."""
     conn = get_conn()
     if settings.os_endpoint_mode == "catalog":
-        r = conn.session.request(
-            path, method, params=params, json=json,
-            endpoint_filter={"service_type": "network", "interface": settings.os_interface},
-            timeout=15, connect_retries=1 if method == "GET" else 0,  # 조회만 재시도(간헐 연결 끊김 대비)
-        )
+        r = os_request(conn, path, method, params=params, json=json, raise_exc=False,
+                       endpoint_filter={"service_type": "network", "interface": settings.os_interface}, timeout=15)
     else:  # override
         base = settings.os_endpoint_template.format(service="neutron") + "/v2.0"
-        r = conn.session.request(f"{base}{path}", method, params=params, json=json, timeout=15,
-                                 connect_retries=1 if method == "GET" else 0)
-    r.raise_for_status()
+        r = os_request(conn, f"{base}{path}", method, params=params, json=json, timeout=15, raise_exc=False)
+    if not r.ok:
+        raise NeutronError(f"{_cinder_err(r)} (HTTP {r.status_code})")  # 오류 본문 메시지 추출은 Cinder 와 같은 형식
     return r
 
 
@@ -680,3 +684,31 @@ def ip_check(network_id: str, ip: str):
     if ports:
         return {"available": False, "reason": "이미 사용 중인 IP입니다."}
     return {"available": True, "reason": None}
+
+
+# 라우터 인터페이스 포트 종류 — 일반·분산(DVR)·HA 라우터
+_ROUTER_IFACE_OWNERS = ("network:router_interface", "network:router_interface_distributed",
+                        "network:ha_router_replicated_interface")
+
+
+@router.get("/networks/{network_id}/fip-reachable")
+def fip_reachable(network_id: str, floatingNetworkId: str):
+    """이 네트워크의 VM 에 floatingNetworkId 풀의 Floating IP 를 붙일 수 있는지.
+    Neutron 은 VM 포트 IP 의 서브넷이 'FIP 풀에 게이트웨이를 둔 라우터'에 연결돼 있어야 연결을 허용한다.
+    VM 이 어느 서브넷에서 IP 를 받을지 미리 알 수 없으므로 IPv4 서브넷 전부가 연결돼 있어야 가능으로 본다."""
+    try:
+        subnets = [sn for sn in _neutron_get("/subnets", {"network_id": network_id})["subnets"] if sn.get("ip_version") == 4]
+        ports = [pt for pt in _neutron_get("/ports", {"network_id": network_id})["ports"]
+                 if pt.get("device_owner") in _ROUTER_IFACE_OWNERS]
+        gw_routers = {r["id"] for r in _neutron_get("/routers")["routers"]
+                      if (r.get("external_gateway_info") or {}).get("network_id") == floatingNetworkId}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Floating IP 연결 가능 여부 조회 실패: {type(e).__name__}: {e}")
+    if not subnets:
+        return {"reachable": False, "reason": "네트워크에 IPv4 서브넷이 없습니다."}
+    reached = {ip["subnet_id"] for pt in ports if pt.get("device_id") in gw_routers for ip in pt.get("fixed_ips") or []}
+    missing = [f"{sn.get('name') or sn['id'][:8]}({sn['cidr']})" for sn in subnets if sn["id"] not in reached]
+    if missing:
+        return {"reachable": False,
+                "reason": f"서브넷 {', '.join(missing)} 이(가) Floating IP 풀에 게이트웨이를 둔 라우터와 연결돼 있지 않습니다."}
+    return {"reachable": True, "reason": None}

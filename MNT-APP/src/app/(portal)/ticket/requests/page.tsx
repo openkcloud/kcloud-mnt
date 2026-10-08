@@ -27,12 +27,12 @@ import {
   CircleMinus,
   CircleX,
   Check,
+  Circle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
-import { api } from "@/lib/api";
-import { useOrgs, useReviewTicket, useTickets } from "@/lib/ticket-api";
+import { useOrgs, useProvisionTicket, useReviewTicket, useTickets, useTicketSteps } from "@/lib/ticket-api";
 import { useIpCheck, useProjectNetworks, useProjectSecurityGroups } from "@/lib/iaas-api";
 import { PageHeader } from "@/components/page-header";
 import { Card } from "@/components/ui/card";
@@ -52,6 +52,7 @@ import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ResourceRequestWizard } from "@/components/resource-request-wizard";
 import { accKindClass, cn } from "@/lib/utils";
 import { nodes, vms, accelerators } from "@/mocks/fixtures";
@@ -113,6 +114,28 @@ function StatusHelpHead() {
         </TooltipContent>
       </Tooltip>
     </span>
+  );
+}
+
+// 승인 설정 → 프로비저닝 API 요청 형식(네트워크 이름·종류 등은 서버가 라이브 조회로 다시 채운다)
+function toProvisionBody(spec: ProvisionSpec) {
+  return { networkId: spec.networkId, floatingNetworkId: spec.floatingNetworkId, fixedIp: spec.fixedIp, securityGroups: spec.securityGroups };
+}
+
+// 신청 ID — 누르면 복사(행 클릭의 상세 열기 대신)
+function RequestIdCell({ id }: { id: string }) {
+  return (
+    <TableCell
+      title="클릭해서 신청 ID 복사"
+      className="cursor-copy whitespace-nowrap font-mono text-xs font-semibold hover:text-primary"
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(id);
+        toast.success("신청 ID 복사됨", { description: id });
+      }}
+    >
+      {id}
+    </TableCell>
   );
 }
 
@@ -198,17 +221,29 @@ function ipModeLabel(p: ProvisionSpec) {
 }
 
 function RequestDetailBody({ r }: { r: ResourceRequest }) {
+  const router = useRouter();
   const isVm = r.type === "vm";
   const p = r.provisionSpec;
+  // 생성 완료된 VM — 누르면 IaaS > 가상서버 상세로(가상서버 상세의 네트워크·볼륨 행과 같은 방식)
+  const serverId = isVm && r.status === "completed" ? r.result?.serverId : undefined;
   return (
     <div className="space-y-3">
       {/* Hero */}
-      <div className="flex items-center gap-3 rounded-xl border border-border bg-gradient-to-br from-brand-indigo-50/70 to-transparent p-3.5">
+      <div
+        onClick={serverId ? () => router.push(`/iaas/instances/detail/?id=${serverId}`) : undefined}
+        title={serverId ? "가상서버 상세 열기" : undefined}
+        className={cn(
+          "flex items-center gap-3 rounded-xl border border-border bg-gradient-to-br from-brand-indigo-50/70 to-transparent p-3.5",
+          serverId && "group cursor-pointer transition-colors hover:bg-secondary/60",
+        )}
+      >
         <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand-indigo-100 text-brand-indigo-700">
           {isVm ? <Server className="size-5" /> : <Boxes className="size-5" />}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-base font-semibold">{isVm ? (r.vmName || "가상머신") : "K8s 클러스터"}</div>
+          <div className={cn("truncate text-base font-semibold", serverId && "underline-offset-2 group-hover:underline")}>
+            {isVm ? (r.vmName || "가상머신") : "K8s 클러스터"}
+          </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
             {r.orgName && <><Building2 className="size-3" /><span>{r.orgName}</span><span className="text-muted-foreground/40">·</span></>}
             <FolderKanban className="size-3" />
@@ -299,20 +334,24 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
         </div>
       )}
 
-      {/* 처리 결과 */}
-      {(r.approvedByName || r.provisioningByName || r.approvedRejectByName || r.provisioningRejectByName || r.errorMessage) && (
-        <div className="space-y-2.5 rounded-xl border border-border bg-secondary/30 p-3.5">
-          <div className="flex items-center gap-1.5 text-xs font-semibold">
-            <Clock className="size-3.5 text-muted-foreground" /> 처리 결과
-          </div>
-          {r.approvedByName && <Field label="승인">{r.approvedByName} · <span className="font-mono">{fmtDt(r.approvedAt ?? "")}</span></Field>}
-          {r.provisioningByName && <Field label="프로비저닝 시작">{r.provisioningByName} · <span className="font-mono">{fmtDt(r.provisioningAt ?? "")}</span></Field>}
-          {r.approvedRejectByName && <Field label="반려 (승인 단계)">{r.approvedRejectByName} · <span className="font-mono">{fmtDt(r.approvedRejectAt ?? "")}</span></Field>}
-          {r.provisioningRejectByName && <Field label="반려 (프로비저닝 단계)">{r.provisioningRejectByName} · <span className="font-mono">{fmtDt(r.provisioningRejectAt ?? "")}</span></Field>}
-          {rejectReasonOf(r) && <Field label="반려 사유"><span className="text-rose-600">{rejectReasonOf(r)}</span></Field>}
-          {r.errorMessage && <Field label="실패 사유"><span className="text-rose-600">{r.errorMessage}</span></Field>}
-        </div>
-      )}
+    </div>
+  );
+}
+
+// 처리 결과 — 승인·프로비저닝·반려 기록과 실패 사유. 신청 상세의 맨 아래(버튼 바로 위)에 표시
+function ProcessResult({ r }: { r: ResourceRequest }) {
+  if (!(r.approvedByName || r.provisioningByName || r.approvedRejectByName || r.provisioningRejectByName || r.errorMessage)) return null;
+  return (
+    <div className="space-y-2.5 rounded-xl border border-border bg-secondary/30 p-3.5">
+      <div className="flex items-center gap-1.5 text-xs font-semibold">
+        <Clock className="size-3.5 text-muted-foreground" /> 처리 결과
+      </div>
+      {r.approvedByName && <Field label="승인">{r.approvedByName} · <span className="font-mono">{fmtDt(r.approvedAt ?? "")}</span></Field>}
+      {r.provisioningByName && <Field label="프로비저닝">{r.provisioningByName} · <span className="font-mono">{fmtDt(r.provisioningAt ?? "")}</span></Field>}
+      {r.approvedRejectByName && <Field label="반려 (승인 단계)">{r.approvedRejectByName} · <span className="font-mono">{fmtDt(r.approvedRejectAt ?? "")}</span></Field>}
+      {r.provisioningRejectByName && <Field label="반려 (프로비저닝 단계)">{r.provisioningRejectByName} · <span className="font-mono">{fmtDt(r.provisioningRejectAt ?? "")}</span></Field>}
+      {rejectReasonOf(r) && <Field label="반려 사유"><span className="text-rose-600">{rejectReasonOf(r)}</span></Field>}
+      {r.errorMessage && <Field label="실패 사유"><span className="text-rose-600">{r.errorMessage}</span></Field>}
     </div>
   );
 }
@@ -340,12 +379,14 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
   const { data: sgs = [], error: sgError } = useProjectSecurityGroups(r.projectId);
   const externals = networks.filter((n) => n.kind === "external");
 
-  const [networkId, setNetworkId] = React.useState("");
-  const [fipOn, setFipOn] = React.useState(!!r.floatingIp);
-  const [fipNetId, setFipNetId] = React.useState("");
-  const [ipManual, setIpManual] = React.useState(false);
-  const [fixedIp, setFixedIp] = React.useState("");
-  const [sgNames, setSgNames] = React.useState<string[]>(["default"]);
+  // 재시도(실패한 신청)면 이전 회차의 승인 설정으로 채워 두고 고칠 수 있게 한다
+  const prev = r.provisionSpec;
+  const [networkId, setNetworkId] = React.useState(prev?.networkId ?? "");
+  const [fipOn, setFipOn] = React.useState(prev ? !!prev.floatingNetworkId : !!r.floatingIp);
+  const [fipNetId, setFipNetId] = React.useState(prev?.floatingNetworkId ?? "");
+  const [ipManual, setIpManual] = React.useState(!!prev?.fixedIp);
+  const [fixedIp, setFixedIp] = React.useState(prev?.fixedIp ?? "");
+  const [sgNames, setSgNames] = React.useState<string[]>(prev?.securityGroups ?? ["default"]);
 
   const net = networks.find((n) => n.id === networkId);
   const isExternal = net?.kind === "external";
@@ -361,7 +402,8 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
   const ipValid = !ipManual || (ipCheckReady && !ipChecking && ipCheck?.available === true);
 
   React.useEffect(() => {
-    if (!net || !ipValid || (!isExternal && fipOn && !fipNet)) return onChange(null); // FIP 를 켰는데 풀이 없으면 승인 불가
+    // 네트워크·보안그룹(1개 이상) 필수, FIP 를 켰는데 풀이 없으면 진행 불가
+    if (!net || !ipValid || (!isExternal && fipOn && !fipNet) || sgNames.length === 0) return onChange(null);
     onChange({
       networkId: net.id,
       networkName: net.name,
@@ -396,14 +438,18 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
               <button
                 key={n.id}
                 type="button"
-                onClick={() => { setNetworkId(n.id); setIpManual(false); setFixedIp(""); }}
+                onClick={() => { setNetworkId(networkId === n.id ? "" : n.id); setIpManual(false); setFixedIp(""); }} // 다시 누르면 해제
+                // 선택 표시는 ring·배경·체크로 — 테두리색 클래스는 전역 border-color 규칙에 덮인다
                 className={cn(
-                  "flex items-center gap-2.5 rounded-lg border bg-background px-3 py-2 text-left transition-colors",
-                  networkId === n.id ? "border-primary bg-brand-indigo-50/40" : "border-border hover:bg-secondary/40",
+                  "flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
+                  networkId === n.id ? "bg-brand-indigo-50 ring-2 ring-primary" : "bg-background hover:bg-secondary/40",
                 )}
               >
+                {networkId === n.id
+                  ? <CircleCheck className="size-4 shrink-0 text-primary" />
+                  : <Circle className="size-4 shrink-0 text-muted-foreground/40" />}
                 {n.kind === "external" ? <Globe className="size-4 shrink-0 text-amber-600" /> : <Wifi className="size-4 shrink-0 text-sky-600" />}
-                <span className="flex-1 font-mono text-sm">{n.name}</span>
+                <span className={cn("flex-1 font-mono text-sm", networkId === n.id && "font-semibold text-brand-indigo-900")}>{n.name}</span>
                 <span className="font-mono text-[11px] text-muted-foreground">{n.cidr}</span>
                 {/* 색상은 '사용자 희망' 배지와 동일 — 인터넷망 amber, 내부망 sky */}
                 <Badge variant="ghost" className={cn("text-[10px]", n.kind === "external" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
@@ -413,6 +459,7 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
             ))}
           </div>
         )}
+        {!netLoading && !netError && networks.length > 0 && !net && <p className="text-xs text-rose-500">네트워크를 선택하세요.</p>}
       </div>
 
       {/* IP 방식 */}
@@ -474,7 +521,7 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
 
       {/* 보안그룹 */}
       <div className="space-y-1.5">
-        <div className="text-xs font-medium">보안그룹</div>
+        <div className="text-xs font-medium">보안그룹 <span className="text-rose-500">*</span></div>
         {sgError && <p className="text-xs text-rose-500">보안그룹을 불러오지 못했습니다 ({sgError.message}).</p>}
         <div className="flex flex-wrap gap-1.5">
           {sgs.map((g) => {
@@ -487,10 +534,10 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
                     onClick={() => setSgNames((cur) => (on ? cur.filter((x) => x !== g.name) : [...cur, g.name]))}
                     className={cn(
                       "inline-flex items-center gap-1 rounded-md border px-2 py-1 font-mono text-xs transition-colors",
-                      on ? "border-primary bg-brand-indigo-50 text-brand-indigo-800" : "border-border bg-background hover:bg-secondary/40",
+                      on ? "bg-primary font-semibold text-primary-foreground hover:bg-primary/90" : "bg-background hover:bg-secondary/40",
                     )}
                   >
-                    <ShieldCheck className="size-3" /> {g.name}
+                    {on ? <Check className="size-3" /> : <ShieldCheck className="size-3 text-muted-foreground" />} {g.name}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent>{g.description}</TooltipContent>
@@ -498,6 +545,7 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
             );
           })}
         </div>
+        {!sgError && sgs.length > 0 && sgNames.length === 0 && <p className="text-xs text-rose-500">보안그룹을 하나 이상 선택하세요.</p>}
       </div>
     </div>
   );
@@ -608,7 +656,7 @@ function PlacementCapacity({ r }: { r: ResourceRequest }) {
   );
 }
 
-// 프로비저닝 진행 사이드 시트 — 큰 단계 5개 + 세부 단계, 서버(tkt_provision_step) 폴링
+// 프로비저닝 진행 사이드 시트 — 큰 단계 5개 + 세부 단계, MNT-CORE(tkt_provision_step) 폴링
 function fmtSec(ms: number) {
   return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
 }
@@ -638,10 +686,13 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
   req: ResourceRequest | null; open: boolean; onClose: () => void; canRetry?: boolean;
 }) {
   const qc = useQueryClient();
-  const { data } = api.ticket.steps(open ? req?.id : undefined);
-  const retry = api.ticket.retry();
+  const user = useAuth((s) => s.user);
+  const { data } = useTicketSteps(open ? req?.id : undefined);
+  const retry = useProvisionTicket();
   const steps = data?.items ?? [];
-  const status = data?.status ?? req?.status;
+  // 재시도 직후 새 기록을 받기 전에는 '생성 중'으로 본다(진행 기록을 비웠으므로 이전 실패 화면을 보여 주지 않는다)
+  const status = data?.status ?? (retry.isSuccess ? "provisioning" : req?.status);
+  const attempt = data?.attempt ?? 1;
   const done = status === "completed";
   const failed = status === "failed";
 
@@ -662,20 +713,26 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
 
   // 상태가 바뀌면 목록도 갱신
   React.useEffect(() => {
-    if (status) qc.invalidateQueries({ queryKey: ["ticket", "requests"] });
+    if (status) qc.invalidateQueries({ queryKey: ["tickets", "list"] });
   }, [status, qc]);
 
+  // 재시도 — 이전 승인 설정 그대로 새 회차로 처음부터(실패한 회차의 자원은 이미 정리됨)
   function handleRetry() {
-    if (!req) return;
-    retry.mutate(req.id, {
-      onSuccess: () => toast.success("재시도 — 실패한 단계부터 다시 진행합니다"),
-      onError: () => toast.error("재시도 실패"),
-    });
+    if (!req?.provisionSpec) return;
+    retry.mutate(
+      { id: req.id, processedBy: user?.username ?? "", expectedStatus: "failed", provisionSpec: toProvisionBody(req.provisionSpec) },
+      {
+        onSuccess: () => toast.success("재시도를 시작했습니다", { description: "새 회차로 처음부터 진행합니다" }),
+        onError: (e) => toast.error("재시도하지 못했습니다", {
+          description: e instanceof Error ? <span className="whitespace-pre-line">{e.message}</span> : undefined,
+        }),
+      },
+    );
   }
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:max-w-md">
+      <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:max-w-[640px]">
         <SheetHeader className="border-b border-border p-5">
           <SheetTitle className="flex items-center gap-2 pr-6 text-base">
             <Server className="size-4 text-brand-indigo-600" /> 프로비저닝 진행
@@ -689,8 +746,8 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
             <SheetDescription className="font-mono">
               {req && <>{req.vmName ?? req.id} · {req.projectName}</>}
             </SheetDescription>
-            {(data?.attempt ?? 1) > 1 && (
-              <Badge variant="secondary" className="text-[10px]">{data?.attempt}차 시도</Badge>
+            {attempt > 1 && (
+              <Badge variant="secondary" className="text-[10px]">{attempt}차 시도{status === "provisioning" ? " 중" : ""}</Badge>
             )}
           </div>
           {/* 진행률 바 */}
@@ -710,6 +767,13 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
           {status === "approved" && (
             <div className="mx-2 mb-2 flex items-center gap-2 rounded-lg bg-secondary/50 px-3 py-2 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" /> 승인됨 — 프로비저닝 워크플로 시작 대기 중
+            </div>
+          )}
+          {/* 시작(재시도) 직후 — 이번 회차 단계가 등록되기 전 */}
+          {status === "provisioning" && steps.length === 0 && (
+            <div className="mx-2 mb-2 flex items-center gap-2 rounded-lg bg-secondary/50 px-3 py-2 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              {!data ? "시작하는 중…" : attempt > 1 ? `${attempt}차 시도를 시작하는 중…` : "프로비저닝을 시작하는 중…"}
             </div>
           )}
           {steps.map((s) => {
@@ -766,7 +830,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
               <p className="mt-1 text-xs text-muted-foreground">{data?.errorMessage ?? "실패한 단계를 확인하세요."}</p>
               {canRetry && (
                 <Button size="sm" className="mt-3 h-7 gap-1.5" onClick={handleRetry} disabled={retry.isPending}>
-                  <RotateCcw className="size-3.5" /> {retry.isPending ? "요청 중…" : "실패 단계부터 재시도"}
+                  <RotateCcw className="size-3.5" /> {retry.isPending ? "요청 중…" : "재시도"}
                 </Button>
               )}
             </div>
@@ -811,6 +875,7 @@ function AdminView() {
   const { data, isLoading, error } = useTickets(filters);
   const { data: orgs = [] } = useOrgs();
   const reviewMutation = useReviewTicket();
+  const provisionMutation = useProvisionTicket();
 
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
@@ -864,10 +929,33 @@ function AdminView() {
     }
   }
 
+  // 승인(VM) → 생성 중: 승인 설정으로 Temporal 워크플로 시작 후 진행 시트를 연다
+  async function provision() {
+    if (!detail || !spec) return;
+    const r = detail;
+    try {
+      const started = await provisionMutation.mutateAsync({
+        id: r.id,
+        processedBy: reviewer?.username ?? "",
+        expectedStatus: r.status,
+        provisionSpec: toProvisionBody(spec),
+      });
+      setDetailOpen(false);
+      toast.success(r.status === "failed" ? "재시도를 시작했습니다" : "프로비저닝을 시작했습니다", { description: `신청 ID: ${r.id}` });
+      openSheet(started);
+    } catch (e) {
+      toast.error(r.status === "failed" ? "재시도하지 못했습니다" : "프로비저닝을 시작하지 못했습니다", {
+        description: e instanceof Error ? <span className="whitespace-pre-line">{e.message}</span> : undefined, // 서버 사유의 줄바꿈 유지
+      });
+    }
+  }
+
   // 대기 → 승인·반려, 승인(VM) → 프로비저닝·반려. 승인 설정은 프로비저닝 단계에서 입력
   const isPending = detail?.status === "pending";
   const isApprovedVm = detail?.status === "approved" && detail.type === "vm";
-  const canProcess = isPending || isApprovedVm;
+  const isFailedVm = detail?.status === "failed" && detail.type === "vm";  // 실패 → 승인 설정 확인 후 재시도·반려
+  const canProvision = isApprovedVm || isFailedVm;
+  const canProcess = isPending || canProvision;
 
   return (
     <div className="space-y-4">
@@ -948,7 +1036,7 @@ function AdminView() {
                 const inProvision = r.type === "vm" && IN_PROVISION.includes(r.status);
                 return (
                   <TableRow key={r.id} className="cursor-pointer" onClick={() => openDetail(r)}>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{r.id}</TableCell>
+                    <RequestIdCell id={r.id} />
                     <TableCell><TypeBadge type={r.type} /></TableCell>
                     <TableCell><ProjectRequesterCell r={r} /></TableCell>
                     <TableCell className="font-mono text-xs">{(r.type === "vm" ? r.vmName : r.clusterName) || "—"}</TableCell>
@@ -1019,7 +1107,7 @@ function AdminView() {
       {/* 프로비저닝 진행 사이드 시트 */}
       <ProvisioningSheet key={sheetReq?.id} req={sheetReq} open={sheetOpen} onClose={() => setSheetOpen(false)} canRetry />
 
-      {/* 신청 상세 — 대기: 승인·반려 / 승인(VM): 승인 설정 후 프로비저닝·반려 */}
+      {/* 신청 상세 — 대기: 승인·반려 / 승인(VM): 승인 설정 후 프로비저닝·반려 / 실패(VM): 승인 설정 후 재시도·반려 */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
@@ -1029,12 +1117,13 @@ function AdminView() {
             <DialogDescription>
               {isPending ? "신청 내용을 확인하고 승인하거나 반려하세요."
                 : isApprovedVm ? "승인 설정(네트워크·보안그룹)을 지정해 프로비저닝하거나 반려하세요."
+                : isFailedVm ? "승인 설정을 확인·수정해 재시도하거나 반려하세요. 실패한 회차가 만든 자원은 정리되었습니다."
                 : "신청 내용입니다."}
             </DialogDescription>
           </DialogHeader>
           {detail && <RequestDetailBody r={detail} />}
-          {isApprovedVm && <PlacementCapacity r={detail} />}
-          {isApprovedVm && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
+          {canProvision && <PlacementCapacity r={detail} />}
+          {canProvision && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
           {canProcess && rejecting && (
             <div className="space-y-2">
               <label className="text-sm font-medium">반려 사유 <span className="text-rose-500">(필수)</span></label>
@@ -1048,6 +1137,7 @@ function AdminView() {
               />
             </div>
           )}
+          {detail && <ProcessResult r={detail} />}
           {canProcess && (
             <DialogFooter>
               {rejecting ? (
@@ -1071,16 +1161,16 @@ function AdminView() {
                       <CheckCircle2 className="size-3.5" /> 승인
                     </Button>
                   ) : (
-                    // 프로비저닝 API(Temporal 연결)는 개발 중
-                    <Button onClick={() => alert("개발 중")} disabled={!spec}>
-                      <Server className="size-3.5" /> 프로비저닝
+                    <Button onClick={provision} disabled={!spec || provisionMutation.isPending}>
+                      {isFailedVm ? <RotateCcw className="size-3.5" /> : <Server className="size-3.5" />}
+                      {provisionMutation.isPending ? "시작 중…" : isFailedVm ? "재시도" : "프로비저닝"}
                     </Button>
                   )}
                 </>
               )}
             </DialogFooter>
           )}
-          {detail?.type === "vm" && IN_PROVISION.includes(detail.status) && (
+          {detail?.type === "vm" && IN_PROVISION.includes(detail.status) && !isFailedVm && (
             <DialogFooter>
               <Button variant="outline" onClick={() => { setDetailOpen(false); openSheet(detail); }}>
                 <Server className="size-3.5" /> 진행 상황 보기
@@ -1169,7 +1259,7 @@ function UserView({ username }: { username: string }) {
             <TableBody>
               {items.map((r) => (
                 <TableRow key={r.id} className="cursor-pointer" onClick={() => { setDetail(r); setDetailOpen(true); }}>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{r.id}</TableCell>
+                  <RequestIdCell id={r.id} />
                   <TableCell><TypeBadge type={r.type} /></TableCell>
                   <TableCell><ProjectRequesterCell r={r} /></TableCell>
                   <TableCell className="font-mono text-xs">{(r.type === "vm" ? r.vmName : r.clusterName) || "—"}</TableCell>
@@ -1202,6 +1292,7 @@ function UserView({ username }: { username: string }) {
             <DialogDescription>내가 신청한 내용입니다.</DialogDescription>
           </DialogHeader>
           {detail && <RequestDetailBody r={detail} />}
+          {detail && <ProcessResult r={detail} />}
         </DialogContent>
       </Dialog>
 

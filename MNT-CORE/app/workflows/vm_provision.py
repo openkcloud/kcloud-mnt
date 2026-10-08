@@ -1,0 +1,256 @@
+"""VM 프로비저닝 워크플로 — CORE 워커가 실행한다. OpenStack 작업은 IAAS 큐, DB 기록은 CORE 큐의 작업으로 부른다.
+
+진행 표시: 시작할 때 등록한 상세 단계 순서(plan)를 앞에서부터 '진행 중 → 완료'로 기록한다.
+실패하면 이번 회차가 만든 자원(VM·부팅 볼륨·FIP)을 정리한 뒤 티켓을 '실패'로 마감한다 — 재시도는 새 회차로 처음부터.
+네트워크·스토리지·가속기·기동은 VM 생성 요청 한 번 안에서 Nova 가 처리하므로, 서버 상태(task_state)를 보고
+그 지점까지의 상세 단계를 완료로 표시한다(짧게 지나간 상태는 한꺼번에 완료로 보일 수 있다).
+이 파일은 Temporal 샌드박스에서 실행되므로 DB·HTTP 등 외부 모듈을 가져오지 않는다.
+"""
+import asyncio
+from datetime import timedelta
+
+from temporalio import workflow
+from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError, ApplicationError, TimeoutError as ActivityTimeout, TimeoutType
+
+CORE_QUEUE = "okc-core"   # CORE 워커: 이 워크플로 + DB 기록 작업
+IAAS_QUEUE = "okc-iaas"   # IAAS 워커: OpenStack 작업
+
+# ── 시간·재시도 기준(임시값 — 논의 후 조정) ───────────────────────────
+POLL_SECONDS = 3                          # 상태 확인 간격
+WATCH_MAX = timedelta(seconds=60)         # 상태 확인 작업 1회 최대 점유시간(상태가 바뀌면 바로 돌아옴)
+VOLUME_READY_MAX = timedelta(minutes=5)   # 부팅 볼륨 준비 최대
+BUILD_MAX = timedelta(minutes=5)          # 스케줄링 ~ ACTIVE 최대
+WORKFLOW_MAX = timedelta(minutes=30)      # 워크플로 전체 최대(넘으면 실패로 기록)
+QUEUE_WAIT_MAX = timedelta(minutes=2)     # IAAS 작업이 큐에서 기다리는 최대 — 넘으면 IAAS 워커가 없는 것으로 보고 실패
+CLEANUP_MAX = timedelta(minutes=3)        # 실패 후 자원 정리(VM·볼륨 삭제 완료까지) 최대
+HEARTBEAT = timedelta(seconds=30)         # 이 시간 동안 신호가 없으면 워커가 죽은 것으로 보고 다른 워커가 이어받음
+QUERY_RETRY = RetryPolicy(initial_interval=timedelta(seconds=1), backoff_coefficient=2,
+                          maximum_interval=timedelta(seconds=30), maximum_attempts=5)  # 조회: 간격을 늘려 가며 최대 5회
+NO_RETRY = RetryPolicy(maximum_attempts=1)  # 만드는 요청(볼륨·VM·FIP) — 다시 보내면 중복 생성 위험
+DB_RETRY = RetryPolicy(initial_interval=timedelta(seconds=1), backoff_coefficient=2,
+                       maximum_attempts=4)  # CORE DB 기록: 최대 3회 재시도
+
+END = "__end__"  # 모든 상세 단계 완료
+_NETWORK_SUBS = ("check_network", "create_port", "assign_ip", "apply_secgroup")
+_STORAGE_SUBS = ("attach_boot_volume", "check_mount")
+
+
+def _reason(e: BaseException) -> str:
+    """작업 실패에서 사람이 읽을 사유만 꺼낸다."""
+    c = e.cause if isinstance(e, ActivityError) and e.cause else e
+    if isinstance(c, ActivityTimeout) and c.type == TimeoutType.SCHEDULE_TO_START:
+        return "IAAS 워커가 작업을 가져가지 않습니다 (MNT-IAAS 워커 실행·Temporal 연결 확인)"
+    return getattr(c, "message", None) or str(c)
+
+
+@workflow.defn(name="VmProvision")
+class VmProvision:
+    @workflow.run
+    async def run(self, inp: dict) -> dict:
+        self.inp = inp
+        self.cur = -1  # 진행 중인 상세 단계 위치(plan 인덱스)
+        self.plan: list[dict] = []
+        self.res: dict = {}  # 이번 회차가 만든 자원(볼륨·서버·FIP) — 실패하면 정리하고, 정리 못 한 것만 티켓 result 에 남긴다
+        try:
+            self.plan = await self._core("core.init_steps", inp["ticketId"], inp["attempt"], inp["hasAccelerator"],
+                                         bool(inp.get("floatingNetworkId")))
+            result = await self._within(WORKFLOW_MAX, self._provision())
+        except Exception as e:  # noqa: BLE001 — 어떤 실패든 진행 기록·티켓에 남긴다
+            msg = _reason(e)
+            try:
+                await self._fail_current(msg)
+            except Exception:  # noqa: BLE001 — 단계 기록이 실패해도 정리·티켓 마감은 한다
+                pass
+            msg += await self._cleanup()
+            await self._core("core.finish", inp["ticketId"], "failed", self.res or None, msg)
+            raise ApplicationError(msg, non_retryable=True) from e
+        await self._core("core.finish", inp["ticketId"], "completed", result, None)
+        return result
+
+    async def _provision(self) -> dict:
+        inp = self.inp
+        await self._go("check_flavor")
+        flavor_name = await self._iaas("iaas.check_flavor", inp["flavorId"])
+        await self._go("check_image", {"check_flavor": flavor_name})
+        image_name = await self._iaas("iaas.check_image", inp["imageId"])
+        await self._go("set_keypair", {"check_image": image_name})
+        await self._go("create_boot_volume", {"set_keypair": inp["keypairLabel"]})
+
+        # 부팅 볼륨 — 이름 {VM이름}-boot-vol, 준비(available)까지 대기. 실패하면 IAAS 작업이 볼륨을 지운다
+        self.volume_name = f"{inp['vmName']}-boot-vol"
+        volume_id = await self._iaas("iaas.create_boot_volume", inp["projectId"], self.volume_name, inp["volumeGb"],
+                                     inp["imageId"], retry=NO_RETRY)
+        self.res["volumeId"] = volume_id
+        deadline = (workflow.now() + VOLUME_READY_MAX).timestamp()  # 조회 오류로 재시도돼도 처음 기준을 지킨다
+        await self._iaas("iaas.wait_volume", inp["projectId"], volume_id, deadline,
+                         timeout=VOLUME_READY_MAX + timedelta(seconds=30), heartbeat=HEARTBEAT)
+        await self._go("send_request", {"create_boot_volume": f"{self.volume_name} · {inp['volumeGb']}GB"})
+
+        # VM 생성 요청(1회) — 실패하면 IAAS 작업이 부팅 볼륨을 지운다.
+        # 응답이 끊겨도 Nova 가 만들었을 수 있으니 이름을 남겨 둔다(정리 때 이름으로 찾아 삭제)
+        self.res["serverName"] = inp["vmName"]
+        spec = {k: inp[k] for k in ("flavorId", "imageId", "volumeGb", "networkId", "fixedIp", "securityGroups",
+                                    "publicKey")}
+        server_id = await self._iaas("iaas.create_server", inp["projectId"], {"name": inp["vmName"], **spec}, volume_id,
+                                     retry=NO_RETRY, timeout=timedelta(seconds=90))
+        self.res["serverId"] = server_id
+        del self.res["serverName"]
+        await self._go("schedule_host", {"send_request": "202 Accepted"})
+
+        # 상태 확인 — 바뀔 때마다 그 지점까지 진행 기록. ERROR 면 실패, 제한 시간 안에 ACTIVE 가 안 되면 실패
+        until = workflow.now() + BUILD_MAX
+        last = ""
+        while True:
+            left = until - workflow.now()
+            if left <= timedelta(0):
+                raise ApplicationError(f"{int(BUILD_MAX.total_seconds() // 60)}분 안에 ACTIVE 가 되지 않았습니다 (마지막 상태 {last})")
+            s = await self._iaas("iaas.watch_server", server_id, last, min(WATCH_MAX, left).total_seconds(),
+                                 POLL_SECONDS, timeout=WATCH_MAX + timedelta(seconds=30), heartbeat=HEARTBEAT)
+            last = s["key"]
+            if s["status"] == "ERROR":
+                raise ApplicationError(s.get("fault") or "Nova 빌드 실패(ERROR)")
+            if s["status"] == "ACTIVE":
+                break
+            ts = s.get("taskState")
+            target = ("spawn_instance" if ts == "spawning" else "attach_boot_volume" if ts == "block_device_mapping"
+                      else "check_network" if s.get("host") or ts == "networking" else "schedule_host")
+            await self._go(target, await self._values_until(target, server_id, s))
+
+        # ACTIVE — 남은 기동 단계 완료. 네트워크·스토리지 값은 앞에서 비어 있었을 수 있어 최종 상태로 다시 채운다
+        detail = await self._iaas("iaas.server_detail", server_id)
+        iface = self._iface(detail)
+        fip_target = "attach_fip" if inp.get("floatingNetworkId") else END
+        values = await self._values_until(fip_target, server_id, s, detail)
+        values |= {"spawn_instance": "BUILD → ACTIVE", "check_active": "ACTIVE"}
+        await self._go(fip_target, values)
+        await self._set_values(self._server_values(detail))
+
+        result = {**self.res, "portId": iface and iface["portId"], "fixedIp": iface and next(iter(iface["ips"]), None)}  # serverId·volumeId
+        if fip_target == "attach_fip":
+            if not iface:
+                raise ApplicationError("Floating IP 를 연결할 포트를 찾지 못했습니다")
+            fip = await self._iaas("iaas.attach_fip", inp["projectId"], inp["floatingNetworkId"], iface["portId"],
+                                   retry=NO_RETRY)
+            self.res["floatingIpId"] = fip["id"]
+            result |= {"floatingIpId": fip["id"], "floatingIp": fip["ip"]}
+            await self._go(END, {"attach_fip": fip["ip"]})
+        return result
+
+    async def _cleanup(self) -> str:
+        """실패한 회차가 만든 자원 정리 → 실패 사유에 덧붙일 문구. 다 정리하면 남은 자원 기록을 비운다."""
+        if not self.res:
+            return ""
+        deadline = (workflow.now() + CLEANUP_MAX).timestamp()
+        try:
+            done = await self._iaas("iaas.cleanup", self.inp["projectId"], self.res, deadline,
+                                    timeout=CLEANUP_MAX + timedelta(seconds=30), heartbeat=HEARTBEAT)
+        except Exception as e:  # noqa: BLE001 — 정리 실패는 사유에 남기고 자원 식별자를 결과에 보존
+            left = ", ".join(f"{k}={v}" for k, v in self.res.items())
+            return f" — 생성한 자원 정리 실패, 직접 정리 필요({left}): {_reason(e)}"
+        self.res = {}
+        return f" — 생성한 자원({'·'.join(done)})은 정리함" if done else ""
+
+    async def _within(self, limit: timedelta, coro):
+        """limit 안에 끝나지 않으면 진행 중인 작업을 취소하고 실패. (asyncio.wait_for 는 취소된 작업의 오류를
+        그대로 올려 사유가 'Cancelled' 로 남으므로 직접 판정한다)"""
+        task = asyncio.ensure_future(coro)
+        done, _ = await asyncio.wait([task], timeout=limit.total_seconds())
+        if not done:
+            task.cancel()
+            try:
+                await task
+            except BaseException:  # noqa: BLE001 — 취소된 작업의 오류는 버리고 시간 초과로 기록
+                pass
+            raise ApplicationError(f"전체 {int(limit.total_seconds() // 60)}분 안에 끝나지 않았습니다")
+        return task.result()
+
+    # ── 상세 단계 값 ─────────────────────────────────────────────
+    async def _values_until(self, target: str, server_id: str, s: dict, detail: dict | None = None) -> dict:
+        """현재 위치부터 target 직전까지 완료 처리할 상세 단계들의 표시 값."""
+        passing = {p["sub"] for p in self.plan[max(self.cur, 0):self._idx(target)]}
+        values: dict = {"schedule_host": s.get("host") or None}
+        if passing & set(_NETWORK_SUBS + _STORAGE_SUBS):
+            detail = detail or await self._try_iaas("iaas.server_detail", server_id)
+            if detail:
+                values |= self._server_values(detail)
+        if "allocate_accelerator" in passing:
+            values["allocate_accelerator"] = self.inp.get("acceleratorLabel")
+        if "bind_arq" in passing:
+            states = await self._try_iaas("iaas.arq_states", server_id)
+            values["bind_arq"] = ", ".join(dict.fromkeys(states or [])) or None
+        return values
+
+    def _iface(self, detail: dict) -> dict | None:
+        """신청 네트워크에 붙은 인터페이스(없으면 첫 번째)."""
+        ifaces = detail["interfaces"]
+        return next((i for i in ifaces if i["netId"] == self.inp["networkId"]), None) or next(iter(ifaces), None)
+
+    def _server_values(self, detail: dict) -> dict:
+        """네트워크·스토리지 상세 단계 값 — 포트·IP·보안그룹·볼륨·장치(아직 없으면 None)."""
+        iface = self._iface(detail)
+        ip = iface and next(iter(iface["ips"]), None)
+        vol = next(iter(detail["attachedVolumes"]), None)
+        return {
+            "check_network": self.inp["networkLabel"],
+            "create_port": iface and iface["portId"][:13],  # Horizon 과 같은 줄임(ID 앞 13자리, 예: b6b113d5-154c)
+            "assign_ip": ip and (f"{ip} (고정)" if self.inp.get("fixedIp") else ip),
+            "apply_secgroup": ", ".join(detail["securityGroups"]) or None,
+            "attach_boot_volume": vol and self.volume_name,
+            "check_mount": vol and vol["device"],
+        }
+
+    # ── 진행 기록 ────────────────────────────────────────────────
+    def _idx(self, code: str) -> int:
+        if code == END:
+            return len(self.plan)
+        return next((i for i, p in enumerate(self.plan) if p["sub"] == code), self.cur)  # 없는 코드면 그대로
+
+    async def _go(self, code: str, values: dict | None = None):
+        """code 상세 단계까지 진행 — 앞선 상세 단계는 완료(값 기록), code 는 진행 중. 단계(큰 단계)도 함께 갱신."""
+        target, values, changes = self._idx(code), values or {}, []
+        while self.cur < target:
+            if self.cur >= 0:
+                p = self.plan[self.cur]
+                changes.append({"sub": p["sub"], "status": "done", "value": values.get(p["sub"])})
+                if self.cur + 1 == len(self.plan) or self.plan[self.cur + 1]["step"] != p["step"]:
+                    changes.append({"step": p["step"], "status": "done"})
+            self.cur += 1
+            if self.cur < len(self.plan):
+                p = self.plan[self.cur]
+                if self.cur == 0 or self.plan[self.cur - 1]["step"] != p["step"]:
+                    changes.append({"step": p["step"], "status": "running"})
+                changes.append({"sub": p["sub"], "status": "running"})
+        if changes:
+            await self._core("core.update_steps", self.inp["ticketId"], self.inp["attempt"], changes)
+
+    async def _set_values(self, values: dict):
+        changes = [{"sub": k, "value": v} for k, v in values.items() if v]
+        if changes:
+            await self._core("core.update_steps", self.inp["ticketId"], self.inp["attempt"], changes)
+
+    async def _fail_current(self, msg: str):
+        if 0 <= self.cur < len(self.plan):
+            p = self.plan[self.cur]
+            await self._core("core.update_steps", self.inp["ticketId"], self.inp["attempt"], [
+                {"sub": p["sub"], "status": "failed", "error": msg},
+                {"step": p["step"], "status": "failed", "error": msg},
+            ])
+
+    # ── 작업 호출 ────────────────────────────────────────────────
+    async def _iaas(self, name: str, *args, retry: RetryPolicy = QUERY_RETRY, timeout: timedelta = timedelta(seconds=60),
+                    heartbeat: timedelta | None = None):
+        return await workflow.execute_activity(name, args=list(args), task_queue=IAAS_QUEUE, start_to_close_timeout=timeout,
+                                               schedule_to_start_timeout=QUEUE_WAIT_MAX, heartbeat_timeout=heartbeat,
+                                               retry_policy=retry)
+
+    async def _try_iaas(self, name: str, *args):
+        """표시용 조회 — 실패해도 진행을 멈추지 않는다(값은 비워 두고 ACTIVE 때 다시 채움)."""
+        try:
+            return await self._iaas(name, *args)
+        except ActivityError:
+            return None
+
+    async def _core(self, name: str, *args):
+        return await workflow.execute_activity(name, args=list(args), task_queue=CORE_QUEUE,
+                                               start_to_close_timeout=timedelta(seconds=30), retry_policy=DB_RETRY)

@@ -1,4 +1,4 @@
-"""자원신청 티켓(VM) — 신청 · 목록 · VM 이름 중복 확인.
+"""자원신청 티켓(VM) — 신청 · 목록 · VM 이름 중복 확인 · 승인·반려 · 프로비저닝(Temporal 워크플로) · 진행 조회.
 
 티켓 1건 = VM 1대. 사용자는 username 으로 식별(요청별 토큰 검증은 Keycloak 도입 시).
 OpenStack 값(프로젝트·플레이버·이미지·서버 이름)은 MNT-IAAS 라이브 조회로 확인하고,
@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import quote
 
+from anyio import from_thread
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
+from ..workflows import runtime
 
 router = APIRouter(tags=["tkt_request"])
 
@@ -296,26 +298,33 @@ class ReviewBody(BaseModel):
     expectedStatus: str | None = None  # 화면이 보고 있던 상태 — 다르면 다른 관리자가 먼저 처리한 것(409)
 
 
-# 반려 단계별 기록 컬럼 접두어 — 대기 → 반려 = 승인 단계 반려, 승인 → 반려 = 프로비저닝 단계 반려
-_REJECT_STAGE = {"pending": "approved_reject", "approved": "provisioning_reject"}
+def _admin_id(db: Session, username: str, denied: str) -> int:
+    """관리자(admin 역할) 사용자 ID — 아니면 403(denied)."""
+    admin_id = db.execute(
+        text("""SELECT u.id FROM iam_user u
+                  JOIN iam_user_role ur ON ur.user_id = u.id
+                  JOIN iam_role r ON r.id = ur.role_id
+                 WHERE u.username = :u AND u.status = 'active' AND r.code = 'admin'"""),
+        {"u": username},
+    ).scalar()
+    if admin_id is None:
+        raise HTTPException(403, denied)
+    return admin_id
+
+
+# 반려 단계별 기록 컬럼 접두어 — 대기 → 반려 = 승인 단계 반려, 승인·실패 → 반려 = 프로비저닝 단계 반려
+# (실패한 회차가 만든 자원은 워크플로가 실패 때 이미 정리했다)
+_REJECT_STAGE = {"pending": "approved_reject", "approved": "provisioning_reject", "failed": "provisioning_reject"}
 
 
 @router.patch("/tickets/{ticket_id}")
 def review_ticket(ticket_id: str, body: ReviewBody, db: Session = Depends(get_db)):
     """승인·반려(관리자).
     - 승인: 대기(pending) → 승인(approved). 승인 설정(네트워크·보안그룹)은 프로비저닝 단계에서 입력한다.
-    - 반려: 대기 → 반려(approved_reject_*), 승인 → 반려(provisioning_reject_*). 사유 필수."""
+    - 반려: 대기 → 반려(approved_reject_*), 승인·실패 → 반려(provisioning_reject_*). 사유 필수."""
     if body.action not in ("approve", "reject"):
         raise HTTPException(400, "action 은 approve 또는 reject 여야 합니다")
-    admin_id = db.execute(
-        text("""SELECT u.id FROM iam_user u
-                  JOIN iam_user_role ur ON ur.user_id = u.id
-                  JOIN iam_role r ON r.id = ur.role_id
-                 WHERE u.username = :u AND u.status = 'active' AND r.code = 'admin'"""),
-        {"u": body.processedBy},
-    ).scalar()
-    if admin_id is None:
-        raise HTTPException(403, "승인·반려는 관리자만 할 수 있습니다")
+    admin_id = _admin_id(db, body.processedBy, "승인·반려는 관리자만 할 수 있습니다")
     status = db.execute(text("SELECT status FROM tkt_request WHERE id = :id"), {"id": ticket_id}).scalar()
     if status is None:
         raise HTTPException(404, "신청을 찾을 수 없습니다")
@@ -330,7 +339,7 @@ def review_ticket(ticket_id: str, body: ReviewBody, db: Session = Depends(get_db
     else:
         stage = _REJECT_STAGE.get(status)
         if stage is None:
-            raise HTTPException(409, "대기중이거나 승인된 신청만 반려할 수 있습니다")
+            raise HTTPException(409, "대기·승인·실패 상태의 신청만 반려할 수 있습니다")
         params["reason"] = (body.reason or "").strip()
         if not params["reason"]:
             raise HTTPException(400, "반려 사유를 입력하세요")
@@ -345,8 +354,7 @@ def review_ticket(ticket_id: str, body: ReviewBody, db: Session = Depends(get_db
     return _to_item(db.execute(text(_SELECT + " WHERE r.id = :id"), {"id": ticket_id}).mappings().one())
 
 
-# ── 프로비저닝 단계 승인 설정 확인 — 프로비저닝 API(개발 중)에서 사용 ─────────────
-# 2-1 에서 승인 단계에 두었던 검증을 프로비저닝 단계로 옮겨 둔 것. 아직 호출하는 API 는 없다.
+# ── 프로비저닝 — 승인 설정 확인 후 Temporal 워크플로(VmProvision) 시작 ─────────────
 
 class ProvisionSpecBody(BaseModel):
     networkId: str
@@ -377,7 +385,14 @@ def _verified_provision_spec(project_id: str, spec: ProvisionSpecBody) -> dict:
             fip = nets.get(spec.floatingNetworkId)
             if not fip or fip["kind"] != "external":
                 raise HTTPException(400, "Floating IP 풀은 외부(external) 네트워크여야 합니다")
+            # VM 을 만든 뒤 FIP 단계에서야 실패하지 않게 — 네트워크가 FIP 풀로 나가는 라우터와 연결돼 있는지 미리 확인
+            chk = _iaas(f"/networks/{quote(net['id'], safe='')}/fip-reachable?floatingNetworkId={quote(fip['id'], safe='')}")
+            if not chk["reachable"]:
+                raise HTTPException(400, f"{net['name']} 네트워크는 Floating IP({fip['name']})를 연결할 수 없습니다\n"
+                                         "Floating IP 연관 라우터와 연결돼 있지 않습니다.")  # 서브넷별 사유는 IAAS 응답(chk)에
             out |= {"floatingNetworkId": fip["id"], "floatingNetworkName": fip["name"]}
+    if not spec.securityGroups:
+        raise HTTPException(400, "보안그룹을 하나 이상 선택하세요")
     sg_names = [g["name"] for g in _iaas(_project_path(project_id) + "/security-groups")["items"]]
     for name in spec.securityGroups:
         if sg_names.count(name) != 1:
@@ -398,3 +413,135 @@ def _check_fixed_ip_unassigned(db: Session, ticket_id: str, spec: dict) -> None:
     ).scalar()
     if other:
         raise HTTPException(409, f"Static IP {spec['fixedIp']}: 다른 신청({other})에 이미 지정된 IP입니다")
+
+
+class ProvisionBody(BaseModel):
+    processedBy: str                   # 처리자 username (admin 역할)
+    expectedStatus: str | None = None  # 화면이 보고 있던 상태 — 다르면 409
+    provisionSpec: ProvisionSpecBody
+
+
+@router.post("/tickets/{ticket_id}/provision")
+def provision_ticket(ticket_id: str, body: ProvisionBody, db: Session = Depends(get_db)):
+    """프로비저닝 시작(관리자) — 승인(approved)된 VM 신청, 또는 실패(failed)한 신청의 재시도.
+    승인 설정(네트워크·IP·보안그룹)과 VM 이름 중복을 라이브 조회로 다시 확인하고, 생성 중(provisioning)으로 바꾼 뒤
+    Temporal 워크플로를 새 회차로 시작한다(실패한 회차의 자원은 워크플로가 실패 때 정리했으므로 처음부터).
+    워크플로 시작에 실패하면 이전 상태·값으로 되돌린다."""
+    if not settings.temporal_api_base:
+        raise HTTPException(503, "Temporal 주소(TEMPORAL_API_BASE)가 설정되지 않았습니다")
+    admin_id = _admin_id(db, body.processedBy, "프로비저닝은 관리자만 할 수 있습니다")
+    t = db.execute(text("""SELECT status, type, project_id, request_spec, provision_spec, result, error_message,
+                                  provisioning_by, provisioning_at, workflow_id
+                             FROM tkt_request WHERE id = :id"""),
+                   {"id": ticket_id}).mappings().first()
+    if t is None:
+        raise HTTPException(404, "신청을 찾을 수 없습니다")
+    if body.expectedStatus and body.expectedStatus != t["status"]:
+        raise HTTPException(409, "다른 관리자가 먼저 처리했습니다. 목록을 새로 고쳐 확인하세요")
+    if t["type"] != "vm" or t["status"] not in ("approved", "failed"):
+        raise HTTPException(409, "승인되었거나 실패한 VM 신청만 프로비저닝(재시도)할 수 있습니다")
+    rs = t["request_spec"]
+    db.rollback()  # MNT-IAAS 확인 동안 커넥션을 잡지 않게
+
+    spec = _verified_provision_spec(t["project_id"], body.provisionSpec)
+    if _server_name_taken(t["project_id"], rs["vmName"]):  # 신청 뒤에 같은 이름 VM 이 생겼을 수 있다
+        raise HTTPException(409, _SERVER_NAME_TAKEN)
+
+    # 여기부터 저장까지 한 트랜잭션
+    if spec.get("fixedIp"):
+        _check_fixed_ip_unassigned(db, ticket_id, spec)
+    public_key = None
+    if rs.get("keypairId"):
+        public_key = db.execute(text("SELECT public_key FROM iam_ssh_key WHERE id = :id"),
+                                {"id": int(rs["keypairId"])}).scalar()
+        if public_key is None:
+            raise HTTPException(409, f"신청한 키페어({rs.get('keypairName')})가 삭제되어 주입할 수 없습니다")
+    # 회차 — 다시 돌리면(예: 실패 후 승인 상태로 되돌려 재실행) 새 회차로 기록하고, 이전 회차 기록은 이력으로 남긴다
+    attempt = db.execute(text("SELECT coalesce(max(attempt), 0) + 1 FROM tkt_provision_step WHERE request_id = :id"),
+                         {"id": ticket_id}).scalar()
+    workflow_id = f"vm-provision-{ticket_id}-{attempt}"
+    res = db.execute(
+        text("""UPDATE tkt_request
+                   SET status = 'provisioning', provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
+                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL
+                 WHERE id = :id AND status = :cur"""),
+        {"id": ticket_id, "spec": json.dumps(spec, ensure_ascii=False), "by": admin_id, "wf": workflow_id,
+         "cur": t["status"]},
+    )
+    if res.rowcount == 0:
+        db.rollback()
+        raise HTTPException(409, "다른 관리자가 먼저 처리했습니다. 목록을 새로 고쳐 확인하세요")
+    db.commit()
+
+    accel = ", ".join(f"{a['kind']} × {a['count']}" for a in rs.get("accelerators") or [])
+    inp = {
+        "ticketId": ticket_id, "attempt": attempt, "projectId": t["project_id"],
+        "vmName": rs["vmName"], "flavorId": rs["flavorId"], "imageId": rs["imageId"],
+        "volumeGb": rs.get("volumeGb") or rs["diskGb"],  # 부팅 볼륨 = 플레이버 디스크(0이면 신청 입력값)
+        "networkId": spec["networkId"],
+        "networkLabel": spec["networkName"] + (" (external)" if spec["networkKind"] == "external" else ""),
+        "fixedIp": spec.get("fixedIp"), "securityGroups": spec["securityGroups"],
+        "floatingNetworkId": spec.get("floatingNetworkId"),
+        "publicKey": public_key,
+        "keypairLabel": rs.get("keypairName") or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
+        "hasAccelerator": bool(rs.get("deviceProfile")),
+        "acceleratorLabel": accel or rs.get("deviceProfile"),
+    }
+    try:
+        from_thread.run(runtime.start_vm_provision, workflow_id, inp)  # 이벤트 루프의 Temporal 클라이언트로 시작
+    except Exception as e:  # noqa: BLE001 — 시작 실패면 이전 상태(승인·실패)와 값으로 되돌린다
+        db.execute(text("""UPDATE tkt_request
+                              SET status = :st, provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
+                                  provisioning_at = :at, workflow_id = :wf, error_message = :err,
+                                  result = CAST(:res AS jsonb)
+                            WHERE id = :id AND status = 'provisioning'"""),
+                   {"id": ticket_id, "st": t["status"], "by": t["provisioning_by"], "at": t["provisioning_at"],
+                    "wf": t["workflow_id"], "err": t["error_message"],
+                    "spec": json.dumps(t["provision_spec"], ensure_ascii=False) if t["provision_spec"] else None,
+                    "res": json.dumps(t["result"]) if t["result"] else None})
+        db.commit()
+        raise HTTPException(503, f"프로비저닝 워크플로를 시작하지 못했습니다: {e}")
+    return _to_item(db.execute(text(_SELECT + " WHERE r.id = :id"), {"id": ticket_id}).mappings().one())
+
+
+@router.get("/tickets/{ticket_id}/steps")
+def ticket_steps(ticket_id: str, db: Session = Depends(get_db)):
+    """프로비저닝 진행(현재 회차) — 단계 5개와 상세 단계. 이름은 공통코드.
+    현재 회차는 티켓의 workflow_id(vm-provision-{신청ID}-{회차})로 정한다 — 재시도 직후 새 회차 단계가 등록되기 전에는
+    빈 목록을 돌려준다(가장 큰 회차로 고르면 그 사이 이전 회차 기록이 보인다)."""
+    t = db.execute(text("SELECT status, result, error_message, workflow_id FROM tkt_request WHERE id = :id"),
+                   {"id": ticket_id}).mappings().first()
+    if t is None:
+        raise HTTPException(404, "신청을 찾을 수 없습니다")
+    tail = (t["workflow_id"] or "").rsplit("-", 1)[-1]
+    attempt = int(tail) if tail.isdigit() else db.execute(
+        text("SELECT coalesce(max(attempt), 1) FROM tkt_provision_step WHERE request_id = :id"), {"id": ticket_id},
+    ).scalar()
+    steps = db.execute(
+        text("""SELECT s.id, s.seq, s.step_code, c.name, s.status, s.started_at, s.ended_at, s.error_message
+                  FROM tkt_provision_step s
+                  JOIN cmn_code c ON c.group_code = s.step_group_code AND c.code = s.step_code
+                 WHERE s.request_id = :id AND s.attempt = :a
+                 ORDER BY s.seq"""),
+        {"id": ticket_id, "a": attempt},
+    ).mappings().all()
+    subs = db.execute(
+        text("""SELECT ss.step_id, ss.substep_code, c.name, ss.value, ss.status
+                  FROM tkt_provision_substep ss
+                  JOIN cmn_code c ON c.group_code = ss.substep_group_code AND c.code = ss.substep_code
+                 WHERE ss.step_id = ANY(:ids)
+                 ORDER BY ss.seq"""),
+        {"ids": [s["id"] for s in steps]},
+    ).mappings().all()
+    return {
+        "status": t["status"],
+        "attempt": attempt,
+        "errorMessage": t["error_message"],
+        "result": t["result"],
+        "items": [{
+            "seq": s["seq"], "code": s["step_code"], "message": s["name"], "status": s["status"],
+            "startedAt": _iso(s["started_at"]), "endedAt": _iso(s["ended_at"]), "error": s["error_message"],
+            "details": [{"code": d["substep_code"], "label": d["name"], "value": d["value"], "status": d["status"]}
+                        for d in subs if d["step_id"] == s["id"]],
+        } for s in steps],
+    }
