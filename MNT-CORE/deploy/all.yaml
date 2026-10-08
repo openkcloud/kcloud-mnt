@@ -17,6 +17,7 @@ data:
   PAAS_API_BASE: "http://mnt-paas.openkcloud-mnt.svc.cluster.local"
   OBS_API_BASE: "http://mnt-obs.openkcloud-mnt.svc.cluster.local"
   AINB_API_BASE: ""   # MNT-AINB 파드화 전까지 비움
+  TEMPORAL_API_BASE: "mnt-workflow.openkcloud-mnt.svc.cluster.local:7233"   # Temporal 서버(gRPC)
 ---
 # ⚠️ 예시 — 실제 값은 git 에 커밋하지 말 것 (SealedSecrets 전환 예정)
 apiVersion: v1

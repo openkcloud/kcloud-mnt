@@ -50,6 +50,9 @@ __pycache__/
 venv/
 *.egg-info/
 
+# Temporal 로컬 개발 서버 기록(MNT-WORKFLOW/run-local.sh)
+.temporal/
+
 # Office temp / lock files
 ~$*
 
