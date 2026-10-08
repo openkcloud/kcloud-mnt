@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     obs_api_base: str = ""
     ainb_api_base: str = ""
 
+    # ── Temporal 서버 주소(gRPC, ConfigMap) — 프로비저닝 워크플로(MNT-WORKFLOW) ──
+    # 로컬: localhost:7233 (MNT-WORKFLOW/run-local.sh) / 파드: mnt-workflow.<ns>.svc.cluster.local:7233
+    temporal_api_base: str = ""
+
     class Config:
         env_file = "config.env"
         env_file_encoding = "utf-8"

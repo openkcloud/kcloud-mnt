@@ -34,6 +34,7 @@ backends:
       PAAS_API_BASE: http://mnt-paas.openkcloud-mnt.svc.cluster.local
       OBS_API_BASE: http://mnt-obs.openkcloud-mnt.svc.cluster.local
       AINB_API_BASE: ""
+      TEMPORAL_API_BASE: mnt-workflow.openkcloud-mnt.svc.cluster.local:7233   # Temporal 서버(gRPC)
 
   iaas:
     image: mnt-iaas
@@ -45,6 +46,7 @@ backends:
       API_PREFIX: /api/iaas
       CORS_ORIGINS: ""
       CORE_API_BASE: http://mnt-core.openkcloud-mnt.svc.cluster.local
+      TEMPORAL_API_BASE: mnt-workflow.openkcloud-mnt.svc.cluster.local:7233   # Temporal 서버(gRPC)
       # OpenStack: 클러스터 내부는 ingressgateway 443 (25443은 외부 NAT 전용!).
       # CoreDNS가 *-api.openstack.internal → 192.168.90.252(ingressgateway)로 해석.
       OS_AUTH_URL: https://keystone-api.openstack.internal/v3
@@ -79,6 +81,45 @@ backends:
       # 파드에서 닿는 주소 = master3 노드IP:8000. ⚠️ 파드 도달 확인 필요(netcheck);
       # 안 되면 Service/Endpoints(→172.29.236.153:8000) 구성 후 그 DNS 로 교체.
       MONITOR_BASE_URL: http://172.29.236.153:8000/api/v2
+
+# ── Temporal 서버(MNT-WORKFLOW) — 프로비저닝 워크플로의 작업 장부 ─────────
+# 한 파드(replicas 1, Recreate): initContainer schema(스키마 자동 설치·업그레이드) + temporal(:7233) + ui(:8080)
+# + Job(워크플로 네임스페이스 준비) + VirtualService(웹 화면). 공식 이미지(Docker Hub) 사용.
+# 버전: server·adminTools 는 같은 버전으로, 마이너 버전은 한 단계씩 올린다(1.31 → 1.32 → …).
+# 배포 전 1회: MNT-WORKFLOW/db/temporal_schema.sql 적용 + mnt-workflow-secret 생성(secrets.example.yaml).
+workflow:
+  enabled: true
+  images:
+    server: temporalio/server:1.31.3
+    adminTools: temporalio/admin-tools:1.31.3
+    ui: temporalio/ui:2.55.0
+  secretName: mnt-workflow-secret      # POSTGRES_PWD / VISIBILITY_POSTGRES_PWD 제공
+  uiHost: temporal.kcloud.etri         # 웹 화면 호스트(portal-gateway 와일드카드 TLS) — 로그인 없음, 사내망 전용
+  temporalNamespace: default           # 워크플로 네임스페이스(Job 이 없을 때만 생성)
+  retention: 720h                      # 끝난 워크플로 기록 보관 기간(30일)
+  env:
+    DB: postgres12
+    POSTGRES_SEEDS: openkcloud-db-rw.openkcloud-mnt
+    DB_PORT: "5432"
+    DBNAME: openkcloud_portal           # 포털 DB — 스키마는 계정 search_path 로 고정(temporal / temporal_visibility)
+    VISIBILITY_DBNAME: openkcloud_portal
+    POSTGRES_USER: temporal
+    VISIBILITY_POSTGRES_USER: temporal_view
+    NUM_HISTORY_SHARDS: "4"            # ⚠️ 처음 만든 뒤에는 바꿀 수 없음
+    BIND_ON_IP: 0.0.0.0                # 같은 파드의 ui 가 127.0.0.1:7233 으로 연결
+    DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/dynamicconfig/dynamicconfig.yaml
+  # Temporal 동적 설정(키: 값 목록) — 비우면 기본값
+  dynamicConfig: {}
+  resources:
+    server:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+    ui:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 200m, memory: 256Mi }
+    adminTools:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 500m, memory: 256Mi }
 
 # ── 프론트(Next 정적 + nginx) ───────────────────────────────────────
 frontend:

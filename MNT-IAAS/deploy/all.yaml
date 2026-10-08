@@ -11,6 +11,7 @@ data:
   API_PREFIX: "/api/iaas"
   CORS_ORIGINS: ""
   CORE_API_BASE: "http://mnt-core.openkcloud-mnt.svc.cluster.local"
+  TEMPORAL_API_BASE: "mnt-workflow.openkcloud-mnt.svc.cluster.local:7233"   # Temporal 서버(gRPC)
   OS_AUTH_URL: "https://keystone-api.kcloud.cluster.local/v3"
   OS_PROJECT_NAME: "admin"
   OS_USER_DOMAIN_NAME: "Default"
