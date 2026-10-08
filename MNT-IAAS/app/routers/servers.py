@@ -1,12 +1,13 @@
 """IaaS 가상서버 — OpenStack Nova 중개(운영: 조회·전원·삭제·볼륨 연결/분리).
 
-생성(POST servers)은 자원요청→승인 흐름에서만 다룬다(여기 없음).
+생성(POST projects/{id}/servers)은 자원요청→승인 흐름에서만 호출한다.
 환경독립: override=template.format(service="nova")+"/v2.1", catalog=service_type="compute".
 가속기는 flavor extra_spec(accel:device_profile)에서 도출.
 """
 import base64
 import json as _json
 import re
+import time
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 from ..config import settings
 from ..openstack_client import get_conn, get_conn_for_project
 from .flavors import _cyborg
+from .volumes import CreateVolumeBody, _cinder_req, create_volume, delete_volume
 
 router = APIRouter(tags=["servers"])
 
@@ -133,19 +135,50 @@ def _cloud_init_user_data(public_key: str) -> str:
     return base64.b64encode(cfg.encode()).decode()
 
 
+def _wait_volume_available(project_id: str, volume_id: str, *, timeout: int = 600, interval: int = 3):
+    """볼륨이 사용 가능(available)해질 때까지 대기 — 이미지 내려받기·변환(creating·downloading) 포함."""
+    deadline = time.monotonic() + timeout
+    while True:
+        status = _cinder_req("GET", f"/volumes/{volume_id}", project_id=project_id).json()["volume"]["status"]
+        if status == "available":
+            return
+        if status == "error":
+            raise RuntimeError("Cinder 볼륨 생성 오류(status=error)")
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"{timeout}초 안에 준비되지 않음(status={status})")
+        time.sleep(interval)
+
+
+def _discard_volume(volume_id: str) -> str:
+    """생성 실패 시 부팅 볼륨 삭제 — 결과를 오류 메시지에 덧붙일 문구로 돌려준다.
+    Nova 가 이미 볼륨을 잡았거나(reserved·in-use) 아직 만드는 중이면 Cinder 가 삭제를 거부한다(남은 볼륨은 직접 정리)."""
+    try:
+        delete_volume(volume_id)
+        return f" — 부팅 볼륨({volume_id})은 삭제함"
+    except HTTPException as e:
+        return f" — 부팅 볼륨({volume_id})이 남아 있음({e.detail})"
+
+
 @router.post("/projects/{project_id}/servers", status_code=202)
 def create_server(project_id: str, body: CreateServerBody):
-    """VM 생성 요청(Nova 1회) — 부팅 볼륨(이미지→Cinder 볼륨, 인스턴스 삭제 시 볼륨 삭제)·네트워크(+고정 IP)·
-    보안그룹·hostname·SSH 공개키(cloud-init)를 한 번에 넣는다. 진행 상태는 GET /servers/{id} 의 taskState 로 확인.
+    """VM 생성 — ① 부팅 볼륨(이미지→Cinder 볼륨, 이름 `{이름}-boot-vol`)을 만들어 사용 가능해질 때까지 기다린 뒤
+    ② Nova 1회 요청으로 그 볼륨(인스턴스 삭제 시 볼륨 삭제)·네트워크(+고정 IP)·보안그룹·hostname·SSH 공개키(cloud-init)를
+    넣어 생성한다. ①·②가 실패하면 ①의 볼륨을 지운다. 진행 상태는 GET /servers/{id} 의 taskState 로 확인.
     hostname 지정은 마이크로버전 2.90 이상."""
+    vol = create_volume(CreateVolumeBody(name=f"{body.name}-boot-vol", size=body.volumeGb, projectId=project_id,
+                                         imageRef=body.imageId))
+    try:
+        _wait_volume_available(project_id, vol["id"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"부팅 볼륨 준비 실패: {e}" + _discard_volume(vol["id"]))
     network = {"uuid": body.networkId, **({"fixed_ip": body.fixedIp} if body.fixedIp else {})}
     server = {
         "name": body.name,
         "hostname": body.name,
         "flavorRef": body.flavorId,
         "block_device_mapping_v2": [{
-            "boot_index": 0, "uuid": body.imageId, "source_type": "image", "destination_type": "volume",
-            "volume_size": body.volumeGb, "delete_on_termination": True,
+            "boot_index": 0, "uuid": vol["id"], "source_type": "volume", "destination_type": "volume",
+            "delete_on_termination": True,
         }],
         "networks": [network],
         **({"security_groups": [{"name": n} for n in body.securityGroups]} if body.securityGroups else {}),
@@ -156,7 +189,7 @@ def create_server(project_id: str, body: CreateServerBody):
         s = _nova_req("POST", "/servers", json={"server": server}, project_id=project_id, microversion="2.90",
                       timeout=60).json()["server"]
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"가상서버 생성 요청 실패: {e}")
+        raise HTTPException(502, f"가상서버 생성 요청 실패: {e}" + _discard_volume(vol["id"]))
     return {"id": s["id"]}
 
 
