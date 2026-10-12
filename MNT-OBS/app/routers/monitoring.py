@@ -69,12 +69,12 @@ def accelerator_summary(cluster: str = Query("mgmt")):
             "memory_used_bytes": _avg([x.get("memory_used_bytes") for x in items]),
             "memory_total_bytes": items[0].get("memory_total_bytes"),
             "healthy_count": sum(1 for x in items if x.get("healthy")),
-            # 파생 2종
-            "tdp_ratio_pct": _avg([x.get("power_limit_percent") for x in items]),
-            "efficiency_pct_per_watt": _avg([
-                (x.get("utilization_percent") or 0) / x["power_watts"]
-                for x in items if x.get("power_watts")
-            ]),
+            # 파생 교체(2026-10): 전력모드/캡상태 · Throttling
+            "power_state": next((x.get("power_state") for x in items if x.get("power_state")), None),
+            "power_limit_percent": _avg([x.get("power_limit_percent") for x in items]),
+            "capped_count": sum(1 for x in items if x.get("power_capped")),
+            "throttled_count": sum(1 for x in items if x.get("throttled")),
+            "throttle_reasons": sorted({r for x in items for r in (x.get("throttle_reasons") or [])}),
         }
 
     return {
@@ -89,28 +89,57 @@ def accelerator_summary(cluster: str = Query("mgmt")):
 
 @router.get("/monitoring/overview")
 def overview(cluster: str = Query("mgmt")):
-    """상단 KPI — 가이드 매핑대로:
-    전력효율=/monitoring/power/efficiency, 가속기사용률=/clusters/{c}/resource,
-    서버총전력=/monitoring/power/summary, 정상노드=/monitoring/overview.
+    """상단 KPI — 2026-10 이노그리드 업데이트 매핑:
+    전력효율=/monitoring/power/efficiency, 가속기사용률=/monitoring/accelerators/utilization,
+    서버총전력=/monitoring/power/summary, 정상노드=/monitoring/overview,
+    저장소=/storage/ceph/capacity, 쓰로틀=/monitoring/throttling/timeseries(summary).
     """
     try:
-        res = monitor.get(f"/clusters/{cluster}/resource").get("data", {})
         eff = monitor.get("/monitoring/power/efficiency").get("data", {})
         psum = monitor.get("/monitoring/power/summary").get("data", {})
         mov = monitor.get("/monitoring/overview").get("data", {})
+        util = monitor.get("/monitoring/accelerators/utilization").get("data", {})
+        ceph = monitor.get("/storage/ceph/capacity").get("data", {})
+        thr = monitor.get("/monitoring/throttling/timeseries", params={"period": "24h", "step": "1h"}).get("summary", {})
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
 
-    accel = (res.get("resources", {}) or {}).get("accelerators", {}) or {}
     nodes = mov.get("nodes", {}) or {}
     return {
         "cluster": cluster,
         "power_efficiency_pct_per_watt": eff.get("avg_efficiency_pct_per_watt"),
-        "accelerator_utilization_percent": accel.get("avg_utilization_percent"),
-        "total_power_watts": psum.get("server_total_watts"),   # /monitoring/power/summary
-        "nodes_ready": nodes.get("healthy"),                   # /monitoring/overview
+        "accelerator_utilization_percent": util.get("avg_utilization_pct"),
+        "total_power_watts": psum.get("server_total_watts"),
+        "nodes_ready": nodes.get("healthy"),
         "nodes_total": nodes.get("total"),
+        "storage_usage_percent": ceph.get("usage_percent"),
+        "throttle_events": thr.get("throttle_events"),
+        "cards_throttled": thr.get("cards_throttled"),
+        "cards_total": thr.get("cards_total"),
     }
+
+
+@router.get("/monitoring/top-hosts")
+def top_hosts(limit: int = Query(5)):
+    """상위 호스트 — /monitoring/accelerators/utilization?by=node 정렬."""
+    try:
+        d = monitor.get(
+            "/monitoring/accelerators/utilization",
+            params={"by": "node", "limit": limit, "sort_order": "desc"},
+        ).get("data", {})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    return {"hosts": d.get("hosts", [])}
+
+
+@router.get("/monitoring/error-logs")
+def error_logs(limit: int = Query(4)):
+    """최근 오류 로그 — /logs/search level=error 최신순."""
+    try:
+        d = monitor.get("/logs/search", params={"query": '{level="error"}', "limit": limit})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    return {"logs": d.get("data", [])}
 
 
 @router.get("/monitoring/power/breakdown")

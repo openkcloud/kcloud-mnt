@@ -24,8 +24,12 @@ export interface VendorMetrics {
   memory_used_bytes: number;
   memory_total_bytes: number | null;
   healthy_count: number;
-  tdp_ratio_pct: number;
-  efficiency_pct_per_watt: number;
+  // 파생 교체(2026-10): 전력모드/캡 · Throttling
+  power_state: string | null;
+  power_limit_percent: number;
+  capped_count: number;
+  throttled_count: number;
+  throttle_reasons: string[];
 }
 
 export interface AcceleratorSummary {
@@ -77,6 +81,10 @@ export interface MonitoringOverview {
   total_power_watts: number | null;
   nodes_ready: number | null;
   nodes_total: number | null;
+  storage_usage_percent: number | null;
+  throttle_events: number | null;
+  cards_throttled: number | null;
+  cards_total: number | null;
 }
 
 export function useMonitoringOverview(cluster = "mgmt") {
@@ -128,6 +136,37 @@ export function useClusterResources() {
   return useQuery({
     queryKey: ["obs-clusters"],
     queryFn: () => obsFetch<ClusterResources>(`/monitoring/clusters`),
+    refetchInterval: pollMs || false,
+  });
+}
+
+export interface TopHost {
+  host: string;
+  vendor: string;
+  card_count: number;
+  utilization_pct: number;
+}
+export function useTopHosts(limit = 5) {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-top-hosts", limit],
+    queryFn: () => obsFetch<{ hosts: TopHost[] }>(`/monitoring/top-hosts?limit=${limit}`),
+    refetchInterval: pollMs || false,
+  });
+}
+
+export interface ErrorLog {
+  timestamp: string;
+  log_level: string;
+  message: string;
+  labels: Record<string, string>;
+  detected_fields: { xid_code?: string; severity?: string; error_type?: string };
+}
+export function useErrorLogs(limit = 4) {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-error-logs", limit],
+    queryFn: () => obsFetch<{ logs: ErrorLog[] }>(`/monitoring/error-logs?limit=${limit}`),
     refetchInterval: pollMs || false,
   });
 }
