@@ -155,6 +155,25 @@ export function useTopHosts(limit = 5) {
   });
 }
 
+export interface SparkPoint {
+  i: number;
+  v: number;
+}
+export interface KpiTimeseries {
+  power_efficiency: SparkPoint[];
+  storage: SparkPoint[];
+  accel_util: SparkPoint[];
+  server_power: SparkPoint[];
+}
+export function useKpiTimeseries() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-kpi-timeseries"],
+    queryFn: () => obsFetch<KpiTimeseries>(`/monitoring/kpi-timeseries`),
+    refetchInterval: pollMs || false,
+  });
+}
+
 export interface ErrorLog {
   timestamp: string;
   log_level: string;

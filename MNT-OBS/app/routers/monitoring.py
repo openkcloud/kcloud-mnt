@@ -43,6 +43,18 @@ def _avg(xs: list) -> float:
     return round(sum(vals) / len(vals), 2) if vals else 0.0
 
 
+def _series_points(values) -> list[dict]:
+    """[[ts, "val"], ...] → [{i, v}] (스파크라인용, 문자열 수치화)."""
+    out = []
+    for i, p in enumerate(values or []):
+        if isinstance(p, (list, tuple)) and len(p) >= 2:
+            try:
+                out.append({"i": i, "v": round(float(p[1]), 2)})
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
 @router.get("/monitoring/accelerator-summary")
 def accelerator_summary(cluster: str = Query("mgmt")):
     """벤더별 가속기 공통 6종 + 파생 2종 집계."""
@@ -214,3 +226,36 @@ def clusters():
             "status": c.get("status"),
         })
     return {"clusters": rows}
+
+
+@router.get("/monitoring/kpi-timeseries")
+def kpi_timeseries(period: str = Query("24h"), step: str = Query("1h")):
+    """상단 KPI 스파크라인용 시계열 — 전력효율·저장소·가속기사용률·서버전력.
+    (개별 실패는 빈 배열로 → 프론트는 해당 스파크라인 생략)"""
+    def safe(path: str, **params):
+        try:
+            return monitor.get(path, params=params)
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def first_values(resp: dict):
+        s = resp.get("series", [])
+        return s[0].get("values", []) if s else []
+
+    eff = safe("/monitoring/power/efficiency/timeseries", period=period, step=step)
+    sto = safe("/storage/ceph/capacity/timeseries", period=period, step=step)
+    acc = safe("/monitoring/accelerators/utilization/timeseries", period=period, step=step)
+    pwr = safe("/monitoring/power/timeseries", period=period, step=step, aggregation="avg")
+
+    server_vals = []
+    for layer in pwr.get("layers", []):
+        if layer.get("layer") == "server":
+            server_vals = layer.get("values", [])
+            break
+
+    return {
+        "power_efficiency": _series_points(first_values(eff)),
+        "storage": _series_points(first_values(sto)),
+        "accel_util": _series_points(first_values(acc)),
+        "server_power": _series_points(server_vals),
+    }

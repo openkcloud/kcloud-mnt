@@ -33,6 +33,7 @@ import {
   useClusterResources,
   useTopHosts,
   useErrorLogs,
+  useKpiTimeseries,
   type VendorMetrics,
 } from "@/lib/obs-api";
 
@@ -105,14 +106,6 @@ function buildAccelRows(v?: Record<string, VendorMetrics>) {
   }));
 }
 
-// Sparkline series
-function sparkline(seed: number, len = 24, base = 50, amp = 30) {
-  return Array.from({ length: len }, (_, i) => ({
-    i,
-    v: base + Math.sin(i / 3 + seed) * amp + (Math.sin(seed * i) * 5),
-  }));
-}
-
 export default function MonitoringOverviewPage() {
   const { data: accel } = useAcceleratorSummary("mgmt");
   const commonMetrics = buildAccelRows(accel?.vendors);
@@ -122,16 +115,17 @@ export default function MonitoringOverviewPage() {
   const { data: clusters } = useClusterResources();
   const { data: topHosts } = useTopHosts(5);
   const { data: errorLogs } = useErrorLogs(4);
+  const { data: kpiTs } = useKpiTimeseries();
   return (
     <div className="space-y-4">
       {/* KPI band — Datadog "Query Value" widgets */}
       <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <QueryValue label="전력 효율" value={fmtN(ov?.power_efficiency_pct_per_watt, 2)} unit="%/W" delta={0} sparkData={sparkline(1, 24, 42, 6)} color="mint" connected={!!ov} api="/api/v2/monitoring/power/efficiency" />
-        <QueryValue label="저장소 사용률" value={fmtN(ov?.storage_usage_percent, 1)} unit="%" delta={0} sparkData={sparkline(2, 24, 60, 4)} color="indigo" connected={!!ov} api="/api/v2/storage/ceph/capacity (usage_percent)" />
-        <QueryValue label="쓰로틀링 횟수" value={ov?.throttle_events != null ? String(ov.throttle_events) : "—"} unit="회" delta={0} sparkData={sparkline(3, 24, 12, 8)} color="rose" connected={!!ov} api="/api/v2/monitoring/throttling/timeseries (throttle_events)" />
-        <QueryValue label="가속기 사용률" value={fmtN(ov?.accelerator_utilization_percent, 0)} unit="%" delta={0} sparkData={sparkline(4, 24, 65, 15)} color="violet" connected={!!ov} api="/api/v2/monitoring/accelerators/utilization (avg_utilization_pct)" />
-        <QueryValue label="서버 총 전력" value={ov?.total_power_watts != null ? (ov.total_power_watts / 1000).toFixed(2) : "—"} unit="kW" delta={0} sparkData={sparkline(5, 24, 9, 1.2)} color="amber" connected={!!ov} api="/api/v2/monitoring/power/summary (server_total_watts)" />
-        <QueryValue label="정상 노드" value={ov?.nodes_ready != null ? `${ov.nodes_ready} / ${ov.nodes_total}` : "—"} unit="" delta={0} sparkData={sparkline(6, 24, 6, 0)} color="sky" connected={!!ov} api="/api/v2/monitoring/overview (nodes.healthy/total)" />
+        <QueryValue label="전력 효율" value={fmtN(ov?.power_efficiency_pct_per_watt, 2)} unit="%/W" sparkData={kpiTs?.power_efficiency} color="mint" connected={!!ov} api="/api/v2/monitoring/power/efficiency(+/timeseries)" />
+        <QueryValue label="저장소 사용률" value={fmtN(ov?.storage_usage_percent, 1)} unit="%" sparkData={kpiTs?.storage} color="indigo" connected={!!ov} api="/api/v2/storage/ceph/capacity(+/timeseries)" />
+        <QueryValue label="쓰로틀링 횟수" value={ov?.throttle_events != null ? String(ov.throttle_events) : "—"} unit="회" color="rose" connected={!!ov} api="/api/v2/monitoring/throttling/timeseries (throttle_events)" />
+        <QueryValue label="가속기 사용률" value={fmtN(ov?.accelerator_utilization_percent, 0)} unit="%" sparkData={kpiTs?.accel_util} color="violet" connected={!!ov} api="/api/v2/monitoring/accelerators/utilization(+/timeseries)" />
+        <QueryValue label="서버 총 전력" value={ov?.total_power_watts != null ? (ov.total_power_watts / 1000).toFixed(2) : "—"} unit="kW" sparkData={kpiTs?.server_power} color="amber" connected={!!ov} api="/api/v2/monitoring/power/summary(+/timeseries)" />
+        <QueryValue label="정상 노드" value={ov?.nodes_ready != null ? `${ov.nodes_ready} / ${ov.nodes_total}` : "—"} unit="" color="sky" connected={!!ov} api="/api/v2/monitoring/overview (nodes.healthy/total)" />
       </div>
 
       {/* 가속기 3종 공통 지표 — 2차 워크샵 이노그리드 p.22~23 (CR-OBS-04) */}
@@ -489,8 +483,9 @@ function QueryValue({
   label: string;
   value: string;
   unit: string;
-  delta: number;
-  sparkData: { i: number; v: number }[];
+  delta?: number;
+  /** 스파크라인 시계열. 없으면 그래프 자체를 그리지 않음(생략) */
+  sparkData?: { i: number; v: number }[];
   /** 실 API 연동 여부 */
   connected?: boolean;
   /** 데이터 원천 API 경로 */
@@ -505,7 +500,7 @@ function QueryValue({
     amber: "#d97706",
     sky: "#0284c7",
   };
-  const positive = delta > 0;
+  const positive = (delta ?? 0) > 0;
   return (
     <Card className="relative p-3">
       <span className="absolute right-2 top-2">
@@ -516,22 +511,21 @@ function QueryValue({
         <span className="text-2xl font-bold tabular-nums">{value}</span>
         <span className="text-xs text-muted-foreground">{unit}</span>
       </div>
-      <div className="-mx-1 -mb-1 mt-1 h-10">
-        <ChartContainer
-          config={{ v: { label, color: colorMap[color] } }}
-          className="h-full w-full"
-        >
-          <LineChart data={sparkData}>
-            <Line type="monotone" dataKey="v" stroke={colorMap[color]} strokeWidth={1.5} dot={false} />
-          </LineChart>
-        </ChartContainer>
-      </div>
-      {delta !== 0 && (
+      {sparkData && sparkData.length > 1 && (
+        <div className="-mx-1 -mb-1 mt-1 h-10">
+          <ChartContainer config={{ v: { label, color: colorMap[color] } }} className="h-full w-full">
+            <LineChart data={sparkData}>
+              <Line type="monotone" dataKey="v" stroke={colorMap[color]} strokeWidth={1.5} dot={false} />
+            </LineChart>
+          </ChartContainer>
+        </div>
+      )}
+      {delta ? (
         <div className={cn("flex items-center gap-0.5 text-[10px]", positive ? "text-rose-600" : "text-brand-mint-700")}>
           {positive ? <ArrowUpRight className="size-2.5" /> : <ArrowDownRight className="size-2.5" />}
           {Math.abs(delta)}% vs 1h
         </div>
-      )}
+      ) : null}
     </Card>
   );
 }
