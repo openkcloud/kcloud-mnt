@@ -125,13 +125,6 @@ export default function MonitoringOverviewPage() {
   return (
     <div className="space-y-4">
       {/* KPI band — Datadog "Query Value" widgets */}
-      <ChangeMark ids={["CR-OBS-01", "CR-OBS-02", "CR-OBS-03"]}>
-<div className="rounded-md border border-sky-200 bg-sky-50/60 px-3 py-2 text-[11px] text-sky-900">
-        <strong>구성 기준</strong> — 이 화면의 모든 항목은 <strong>모니터링 API v2</strong>가 실제로 주는 응답 필드로만 구성했다. 카드·표마다 조회 경로를 함께 표시한다.
-        서비스 응답 지연(P50/P95/P99)·에러율·추론 RPS는 API에 없어 화면에서 뺐고, 전력 효율 · 저장소 사용률 · 쓰로틀링 횟수로 대신한다.
-        저장소 사용률은 노드 로컬 디스크 기준이며(공유 스토리지 용량 API는 준비 중), 쓰로틀링 횟수는 가속기 부가 메트릭이라 벤더에 따라 값이 없을 수 있다.
-      </div>
-</ChangeMark>
       <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
         <QueryValue label="전력 효율" value={fmtN(ov?.power_efficiency_pct_per_watt, 2)} unit="%/W" delta={0} sparkData={sparkline(1, 24, 42, 6)} color="mint" connected={!!ov} api="/api/v2/monitoring/power/efficiency" />
         <QueryValue label="저장소 사용률" value={fmtN(ov?.storage_usage_percent, 1)} unit="%" delta={0} sparkData={sparkline(2, 24, 60, 4)} color="indigo" connected={!!ov} api="/api/v2/storage/ceph/capacity (usage_percent)" />
