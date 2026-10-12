@@ -34,7 +34,7 @@ export function RefreshControls({ queryKeys }: { queryKeys: QueryKey[] }) {
         </span>
       )}
       <Select value={String(intervalMs)} onValueChange={(v) => setIntervalMs(Number(v))}>
-        <SelectTrigger className="h-8 w-[104px] text-xs" title="자동 새로고침 주기">
+        <SelectTrigger className="h-8 w-[132px] text-xs" title="자동 새로고침 주기">
           <RefreshCw className="size-3.5 text-muted-foreground" />
           <SelectValue />
         </SelectTrigger>
