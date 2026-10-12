@@ -58,6 +58,8 @@ backends:
       OS_ENDPOINT_MODE: override       # ingress 직접(검증된 패턴)
       OS_ENDPOINT_TEMPLATE: "https://{service}-api.openstack.internal"
       OS_INTERFACE: internal
+      # 웹 콘솔(noVNC) 외부 접속용 — Nova 가 포트 없는 내부 URL(443)로 줘서 브라우저용 25443 으로 치환
+      OS_CONSOLE_PUBLIC_BASE: "https://novnc.openstack.internal:25443"
 
   paas:
     image: mnt-paas
