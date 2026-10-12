@@ -31,6 +31,16 @@ const STATUS_VARIANT: Record<string, "success" | "secondary" | "warning" | "outl
 };
 const stVariant = (s: string) => STATUS_VARIANT[s] ?? "warning";
 
+// OpenStack 시각(UTC)을 브라우저 로컬 시간대로 변환해 "YYYY-MM-DD HH:mm" 표기.
+function fmtDateTime(iso?: string | null) {
+  if (!iso) return "—";
+  const s = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`; // tz 표기 없으면 UTC로 간주
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export default function Page() {
   return <React.Suspense fallback={<Skeleton className="h-96" />}><ServerDetailPage /></React.Suspense>;
 }
@@ -164,7 +174,7 @@ function ServerDetailPage() {
             <Field label="프로젝트" value={projName(s.tenantId)} />
             <Field label="이미지" value={imageName} mono />
             <Field label="키페어" value={s.keyName || "—"} mono />
-            <Field label="생성일" value={s.createdAt ? s.createdAt.replace("T", " ").slice(0, 16) : "—"} mono />
+            <Field label="생성일" value={fmtDateTime(s.createdAt)} mono />
             <Field label="보안그룹" value={s.securityGroups.join(", ") || "—"} />
           </div>
           {sshIp && (
