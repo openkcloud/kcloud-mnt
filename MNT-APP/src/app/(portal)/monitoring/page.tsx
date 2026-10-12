@@ -201,7 +201,7 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               호스트 맵
-              <StatusTag api="/api/v2/clusters/{c}/nodes" />
+              <StatusTag api="/api/v2/clusters/{c}/nodes" issue="mgmt 노드 utilization_percent 가 null 이라 사용률 색상 불가(가속기는 서비스클러스터 VM에 존재). power_watts 기준으로 대체 예정." />
             </CardTitle>
             <CardDescription>노드별 가속기 사용률 — 색상 = 부하</CardDescription>
           </CardHeader>
@@ -225,7 +225,7 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               활용률 히트맵 (24h × 호스트)
-              <StatusTag api="/api/v2/monitoring/metrics/timeseries" />
+              <StatusTag api="/api/v2/monitoring/metrics/timeseries?by=hostname" issue="by=hostname 이 호스트별로 분리되지 않음(응답 series 1개·metric 라벨 빈값)이라 호스트×시각 격자 구성 불가. 이노그리드 확인 중." />
             </CardTitle>
             <CardDescription>metric=gpu_utilization · period=24h · step=1h 응답을 호스트×시간으로 편다.</CardDescription>
           </CardHeader>
@@ -435,7 +435,7 @@ function PowerBreakdownCard() {
 }
 
 // 카드 우측 상단 연동 상태 뱃지 (API 경로 표기 대체)
-function StatusTag({ connected, api }: { connected?: boolean; api?: string }) {
+function StatusTag({ connected, api, issue }: { connected?: boolean; api?: string; issue?: string }) {
   const badge = (
     <span
       className={cn(
@@ -451,14 +451,19 @@ function StatusTag({ connected, api }: { connected?: boolean; api?: string }) {
       {connected ? "연동" : "목업"}
     </span>
   );
-  if (!api) return badge;
+  if (!api && !issue) return badge;
   return (
     <Tooltip>
       <TooltipTrigger asChild>{badge}</TooltipTrigger>
       <TooltipContent className="max-w-sm whitespace-pre-line border border-border bg-popover text-[11px] text-popover-foreground shadow-md">
         <span className="font-medium text-muted-foreground">{connected ? "연동됨 · 데이터 원천" : "목업 · 연동 예정"}</span>
-        <br />
-        <span className="font-mono">{api}</span>
+        {api && (<><br /><span className="font-mono">{api}</span></>)}
+        {!connected && issue && (
+          <>
+            <br />
+            <span className="text-amber-600">⚠ 미연동 이슈: {issue}</span>
+          </>
+        )}
       </TooltipContent>
     </Tooltip>
   );
