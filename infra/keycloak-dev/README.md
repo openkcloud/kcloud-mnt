@@ -1,6 +1,6 @@
 # 개발 서버 Keycloak (Mac Mini)
 
-개발 서버(Mac Mini `172.30.1.230`)에 Keycloak 을 컨테이너 1개로 띄웁니다. DB 는 같은 Mac Mini 의 PostgreSQL 입니다.
+개발 서버(Mac Mini `172.30.1.200`)에 Keycloak 을 컨테이너 1개로 띄웁니다. DB 는 같은 Mac Mini 의 PostgreSQL 입니다.
 테스트베드(helm, `openkcloud-mnt` 의 `keycloak-0~2`)와 **같은 이미지(26.7.4)·같은 DB 구조**입니다.
 
 | 항목 | 테스트베드 | 개발 서버 |
@@ -18,7 +18,7 @@
    확인 쿼리는 파일 아래쪽 주석에 있습니다(테스트베드와 같은 결과여야 함).
 2. **이름 등록** — 접속하는 PC(Mac Mini 포함)의 hosts 파일에 한 줄 추가
    ```
-   172.30.1.230 keycloak.dev.okestro
+   172.30.1.200 keycloak.dev.okestro
    ```
    (macOS·Linux `/etc/hosts`, Windows `C:\Windows\System32\drivers\etc\hosts`)
 3. **설정** — `cp .env.example .env` 후 `KC_DB_PASSWORD`(1번 비밀번호)·`KC_ADMIN_PASSWORD` 입력(`.env` 는 git 제외)
