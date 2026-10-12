@@ -287,7 +287,7 @@ def util_timeseries(period: str = Query("24h"), step: str = Query("1h")):
     """벤더별 가속기 사용률 추세 — gpu/furiosa/rebellions_utilization (히트맵 대체).
     metrics/timeseries 가 호스트별로 분리를 안 줘서, 벤더 metric 3종을 타임스탬프로 병합."""
     metrics = {"gpu": "gpu_utilization", "furiosa": "furiosa_utilization", "rebellions": "rebellions_utilization"}
-    merged: dict[str, dict] = {}
+    by_vendor: dict[str, list] = {}
     for key, metric in metrics.items():
         try:
             resp = monitor.get(
@@ -295,15 +295,23 @@ def util_timeseries(period: str = Query("24h"), step: str = Query("1h")):
                 params={"metric": metric, "period": period, "step": step, "by": "hostname"},
             )
         except Exception:  # noqa: BLE001
-            continue
+            resp = {}
         s = resp.get("series", [])
-        values = s[0].get("values", []) if s else []
-        for p in values:
-            if isinstance(p, (list, tuple)) and len(p) >= 2:
-                ts = p[0]
-                row = merged.setdefault(ts, {"t": ts[11:16] if isinstance(ts, str) else ts})
+        by_vendor[key] = s[0].get("values", []) if s else []
+
+    # 3개 metric을 각각 따로 호출하므로 타임스탬프가 어긋남 → 인덱스 기준으로 정렬 병합.
+    n = max((len(v) for v in by_vendor.values()), default=0)
+    rows = []
+    for i in range(n):
+        row: dict = {"t": ""}
+        for key, vals in by_vendor.items():
+            if i < len(vals) and isinstance(vals[i], (list, tuple)) and len(vals[i]) >= 2:
+                ts, val = vals[i][0], vals[i][1]
+                if not row["t"] and isinstance(ts, str):
+                    row["t"] = ts[11:16]
                 try:
-                    row[key] = round(float(p[1]), 1)
+                    row[key] = round(float(val), 1)
                 except (TypeError, ValueError):
                     pass
-    return {"series": [merged[k] for k in sorted(merged.keys())]}
+        rows.append(row)
+    return {"series": rows}
