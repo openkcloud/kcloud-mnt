@@ -1,23 +1,29 @@
 "use client";
 import * as React from "react";
 import { toast } from "sonner";
-import { Clock, RefreshCw } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { Clock } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import { usePollingInterval } from "@/lib/polling";
+import { RefreshControls } from "@/components/iaas/refresh-controls";
 
 const RANGES = ["지난 15분", "지난 1시간", "지난 6시간", "지난 24시간"];
 
+// 이 화면 쿼리들(새로고침·로딩 표시 대상). prefix 매칭이라 뒤 세그먼트는 생략.
+const OBS_KEYS = [
+  ["obs-overview"],
+  ["obs-accel-summary"],
+  ["obs-clusters"],
+  ["obs-top-hosts"],
+  ["obs-error-logs"],
+  ["obs-kpi-timeseries"],
+  ["obs-nodes"],
+  ["obs-util-timeseries"],
+  ["obs-power-breakdown"],
+  ["obs-power-timeseries"],
+];
+
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [range, setRange] = React.useState(1);
-  // 자동 새로고침 = 포털 폴링 주기 스토어(실제 쿼리 refetchInterval 을 구동)
-  const qc = useQueryClient();
-  const intervalMs = usePollingInterval((s) => s.intervalMs);
-  const setIntervalMs = usePollingInterval((s) => s.setIntervalMs);
-  const auto = intervalMs > 0;
-  const autoSecs = auto ? Math.round(intervalMs / 1000) : 30;
   return (
     <div className="space-y-6">
       <PageHeader
@@ -37,22 +43,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             >
               <Clock className="size-3.5" /> {RANGES[range]}
             </Button>
-            <Button
-              variant={auto ? "outline" : "ghost"}
-              size="sm"
-              onClick={() => {
-                if (auto) {
-                  setIntervalMs(0);
-                  toast.success("자동 새로고침 중지");
-                } else {
-                  setIntervalMs(30000);
-                  qc.invalidateQueries({ queryKey: ["obs-accel-summary"] });
-                  toast.success("자동 새로고침 30s 재개");
-                }
-              }}
-            >
-              <RefreshCw className={cn("size-3.5", auto && "text-brand-mint-600")} /> {auto ? `자동 새로고침 ${autoSecs}s` : "자동 새로고침 꺼짐"}
-            </Button>
+            <RefreshControls queryKeys={OBS_KEYS} />
           </>
         }
       />
