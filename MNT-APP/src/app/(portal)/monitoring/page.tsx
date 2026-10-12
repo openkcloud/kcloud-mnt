@@ -31,25 +31,10 @@ import {
   usePowerBreakdown,
   usePowerTimeseries,
   useClusterResources,
+  useTopHosts,
+  useErrorLogs,
   type VendorMetrics,
 } from "@/lib/obs-api";
-
-// Datadog "Top List" style data
-const TOP_HOSTS = [
-  { name: "gpu-node-02.openkcloud", value: 92, unit: "%" },
-  { name: "gpu-node-01.openkcloud", value: 78, unit: "%" },
-  { name: "atom-node-01.openkcloud", value: 64, unit: "%" },
-  { name: "atom-node-02.openkcloud", value: 51, unit: "%" },
-  { name: "npu-node-01.openkcloud", value: 42, unit: "%" },
-  { name: "pim-node-01.openkcloud", value: 18, unit: "%" },
-];
-// 최근 오류 로그 — GET /logs/search?log_level=error
-const RECENT_ERRORS = [
-  { ts: "16:22:41", level: "error", cluster: "mgmt", message: "neutron-server: connection to RabbitMQ timed out (attempt 3/5)", field: "" },
-  { ts: "16:19:08", level: "error", cluster: "l40s", message: "NVRM: Xid (PCI:0000:00:05): 43, pid=12894, Ch 00000018", field: "XID 43" },
-  { ts: "16:14:52", level: "warning", cluster: "furiosa", message: "furiosa-device-plugin: device npu0 temperature 79C approaching limit", field: "" },
-  { ts: "16:08:30", level: "error", cluster: "mgmt", message: "kubelet: Memory cgroup out of memory: Killed process 20481 (python3)", field: "OOM" },
-];
 
 // Heatmap data — 24h × hosts
 const HOST_NAMES = ["gpu-01", "gpu-02", "npu-01", "atom-01", "atom-02", "pim-01"];
@@ -71,8 +56,8 @@ const COMMON_METRICS = [
   { name: "메모리 사용량", unit: "", rngd: "22.6 GB", atom: "7.8 GB", l40s: "28.4 GiB", note: "총량 대비" },
   { name: "메모리 총량", unit: "", rngd: "51.0 GB", atom: "16.9 GB", l40s: "46.1 GiB", note: "장치 탑재 용량" },
   { name: "health", unit: "", rngd: "1 정상", atom: "1 정상", l40s: "1 정상", note: "1 = 정상" },
-  { name: "전력효율(파생)", unit: "%/W", rngd: "0.40", atom: "0.64", l40s: "0.29", note: "사용률 ÷ 전력" },
-  { name: "TDP 대비 전력(파생)", unit: "%", rngd: "65.9", atom: "72.0", l40s: "69.4", note: "TDP 180W · 85W · 350W" },
+  { name: "전력 모드 / 캡", unit: "", rngd: "— · 미캡", atom: "— · 미캡", l40s: "P0 · 미캡", note: "P0~P15 · 캡 상태" },
+  { name: "Throttling", unit: "", rngd: "정상", atom: "정상", l40s: "정상", note: "쓰로틀 장치 · 원인" },
 ];
 
 // MNT-OBS 가속기 공통 지표 응답(벤더별)을 표 8행으로 변환. 데이터 없으면 목업 폴백.
@@ -95,8 +80,8 @@ function buildAccelRows(v?: Record<string, VendorMetrics>) {
     { name: "메모리 사용량", unit: "", note: "총량 대비", get: (m) => fmtGB(m.memory_used_bytes) },
     { name: "메모리 총량", unit: "", note: "장치 탑재 용량", get: (m) => fmtGB(m.memory_total_bytes) },
     { name: "health", unit: "", note: "정상/전체", get: (m) => `${m.healthy_count}/${m.count} 정상` },
-    { name: "전력효율(파생)", unit: "%/W", note: "사용률 ÷ 전력", get: (m) => m.efficiency_pct_per_watt.toFixed(2) },
-    { name: "TDP 대비 전력(파생)", unit: "%", note: "전력 ÷ TDP", get: (m) => m.tdp_ratio_pct.toFixed(1) },
+    { name: "전력 모드 / 캡", unit: "", note: "P0~P15 · 캡 상태", get: (m) => `${m.power_state ?? "—"}${m.capped_count ? ` · 캡 ${m.capped_count}` : " · 미캡"}` },
+    { name: "Throttling", unit: "", note: "쓰로틀 장치 · 원인", get: (m) => (m.throttled_count ? `${m.throttled_count}대${m.throttle_reasons.length ? ` (${m.throttle_reasons.join(",")})` : ""}` : "정상") },
   ];
   return defs.map((d) => ({
     name: d.name,
@@ -123,6 +108,8 @@ export default function MonitoringOverviewPage() {
   const { data: powerTs } = usePowerTimeseries();
   const psLast = powerTs?.series?.[powerTs.series.length - 1];
   const { data: clusters } = useClusterResources();
+  const { data: topHosts } = useTopHosts(5);
+  const { data: errorLogs } = useErrorLogs(4);
   return (
     <div className="space-y-4">
       {/* KPI band — Datadog "Query Value" widgets */}
@@ -135,9 +122,9 @@ export default function MonitoringOverviewPage() {
 </ChangeMark>
       <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
         <QueryValue label="전력 효율" value={fmtN(ov?.power_efficiency_pct_per_watt, 2)} unit="%/W" delta={0} sparkData={sparkline(1, 24, 42, 6)} color="mint" connected={!!ov} api="/api/v2/monitoring/power/efficiency" />
-        <QueryValue label="저장소 사용률" value="62" unit="%" delta={0} sparkData={sparkline(2, 24, 60, 4)} color="indigo" connected={false} api="/api/v2/storage/ceph/capacity  (개발 중)" />
-        <QueryValue label="쓰로틀 장치" value={accel ? String(accel.throttled_count) : "—"} unit={accel ? `/ ${accel.accelerator_count}대` : "대"} delta={0} sparkData={sparkline(3, 24, 12, 8)} color="rose" connected={!!accel} api="/api/v2/clusters/{c}/nodes/{n}/accelerators (throttled)" />
-        <QueryValue label="가속기 사용률" value={fmtN(ov?.accelerator_utilization_percent, 0)} unit="%" delta={0} sparkData={sparkline(4, 24, 65, 15)} color="violet" connected={!!ov} api="/api/v2/clusters/{c}/resource (accelerators.avg_utilization_percent)" />
+        <QueryValue label="저장소 사용률" value={fmtN(ov?.storage_usage_percent, 1)} unit="%" delta={0} sparkData={sparkline(2, 24, 60, 4)} color="indigo" connected={!!ov} api="/api/v2/storage/ceph/capacity (usage_percent)" />
+        <QueryValue label="쓰로틀링 횟수" value={ov?.throttle_events != null ? String(ov.throttle_events) : "—"} unit="회" delta={0} sparkData={sparkline(3, 24, 12, 8)} color="rose" connected={!!ov} api="/api/v2/monitoring/throttling/timeseries (throttle_events)" />
+        <QueryValue label="가속기 사용률" value={fmtN(ov?.accelerator_utilization_percent, 0)} unit="%" delta={0} sparkData={sparkline(4, 24, 65, 15)} color="violet" connected={!!ov} api="/api/v2/monitoring/accelerators/utilization (avg_utilization_pct)" />
         <QueryValue label="서버 총 전력" value={ov?.total_power_watts != null ? (ov.total_power_watts / 1000).toFixed(2) : "—"} unit="kW" delta={0} sparkData={sparkline(5, 24, 9, 1.2)} color="amber" connected={!!ov} api="/api/v2/monitoring/power/summary (server_total_watts)" />
         <QueryValue label="정상 노드" value={ov?.nodes_ready != null ? `${ov.nodes_ready} / ${ov.nodes_total}` : "—"} unit="" delta={0} sparkData={sparkline(6, 24, 6, 0)} color="sky" connected={!!ov} api="/api/v2/monitoring/overview (nodes.healthy/total)" />
       </div>
@@ -234,13 +221,16 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               상위 호스트 — 가속기 사용률
-              <StatusTag api="/api/v2/clusters/{c}/nodes?sort_by=utilization_percent" />
+              <StatusTag connected={!!topHosts} api="/api/v2/monitoring/accelerators/utilization?by=node&sort_order=desc" />
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {TOP_HOSTS.map((h, i) => (
-              <TopRow key={h.name} idx={i + 1} name={h.name} value={h.value} unit={h.unit} max={100} />
+            {(topHosts?.hosts ?? []).map((h, i) => (
+              <TopRow key={h.host} idx={i + 1} name={`${h.host}  ·  ${h.vendor}`} value={h.utilization_pct} unit="%" max={100} />
             ))}
+            {(topHosts?.hosts?.length ?? 0) === 0 && (
+              <div className="py-6 text-center text-xs text-muted-foreground">데이터 없음</div>
+            )}
           </CardContent>
         </Card>
 
@@ -291,25 +281,32 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               최근 오류 로그
-              <StatusTag api="/api/v2/logs/search (level=error)" />
+              <StatusTag connected={!!errorLogs} api="/api/v2/logs/search (level=error)" />
             </CardTitle>
             <CardDescription>log_level=error 최신순. 자동 추출 필드(XID·OOM)는 배지로 표시.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            {RECENT_ERRORS.map((e, i) => (
-              <div key={i} className="flex items-start gap-2.5 rounded-lg border border-border p-2.5">
-                <AlertCircle className={cn("mt-0.5 size-4 shrink-0", e.level === "error" ? "text-rose-600" : "text-amber-600")} />
-                <div className="min-w-0 flex-1 space-y-0.5">
-                  <div className="truncate text-[12px] leading-tight">{e.message}</div>
-                  <div className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
-                    <span>{e.ts}</span>
-                    <span>·</span>
-                    <span>{e.cluster}</span>
-                    {e.field && <Badge variant="warning" className="ml-0.5 px-1 py-0 text-[9px]">{e.field}</Badge>}
+            {(errorLogs?.logs ?? []).map((e, i) => {
+              const badge = e.detected_fields?.xid_code ? `XID ${e.detected_fields.xid_code}` : e.detected_fields?.error_type;
+              return (
+                <div key={i} className="flex items-start gap-2.5 rounded-lg border border-border p-2.5">
+                  <AlertCircle className={cn("mt-0.5 size-4 shrink-0", e.log_level === "error" ? "text-rose-600" : "text-amber-600")} />
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="truncate text-[12px] leading-tight" title={e.message}>{e.message}</div>
+                    <div className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+                      <span>{e.timestamp?.replace("T", " ").slice(0, 19)}</span>
+                      <span>·</span>
+                      <span>{e.labels?.cluster ?? "—"}</span>
+                      {e.labels?.node && <span>· {e.labels.node}</span>}
+                      {badge && <Badge variant="warning" className="ml-0.5 px-1 py-0 text-[9px]">{badge}</Badge>}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
+            {(errorLogs?.logs?.length ?? 0) === 0 && (
+              <div className="py-6 text-center text-xs text-muted-foreground">오류 로그 없음</div>
+            )}
           </CardContent>
         </Card>
       </div>
