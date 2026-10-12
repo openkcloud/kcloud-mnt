@@ -16,6 +16,17 @@ import { usePollingInterval } from "@/lib/polling";
 const RAW = process.env.NEXT_PUBLIC_IAAS_API;
 export const IAAS_BASE = RAW === undefined ? "http://localhost:8001" : RAW;
 
+/** VM 웹 콘솔(noVNC) URL 발급 — 버튼 클릭 시 호출(호출마다 토큰 URL 새로). */
+export async function getServerConsoleUrl(serverId: string): Promise<string> {
+  const res = await fetch(`${IAAS_BASE}/api/iaas/servers/${serverId}/console`, {
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) throw new Error(`콘솔 URL 발급 실패 (${res.status})`);
+  const d = (await res.json()) as { url?: string };
+  if (!d.url) throw new Error("콘솔 URL이 비어있습니다");
+  return d.url;
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);

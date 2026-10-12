@@ -3,7 +3,7 @@ import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Server, Play, Square, RotateCw, Trash2, Loader2, Plus, HardDrive, ArrowLeft,
-  Cpu, MemoryStick, Network as NetIcon, Database, Gauge, SlidersHorizontal,
+  Cpu, MemoryStick, Network as NetIcon, Database, Gauge, SlidersHorizontal, MonitorPlay,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
@@ -22,6 +22,7 @@ import {
   useAttachVolume, useDetachVolume, useAttachInterface, useDetachInterface,
   useResizeServer, useResizeConfirm, useResizeRevert,
   useProjects, useVolumes, useImages, useNetworks, useFlavors,
+  getServerConsoleUrl,
 } from "@/lib/iaas-api";
 
 const SSH_USER = "ubuntu";
@@ -88,6 +89,19 @@ function ServerDetailPage() {
     if (!(await confirm({ title: "가상서버 삭제", destructive: true, confirmLabel: "삭제", description: `${s!.name} 을(를) 삭제(terminate)할까요? 되돌릴 수 없습니다.` }))) return;
     del.mutate(s!.id, { onSuccess: () => { toast.success(`${s!.name} 삭제 요청됨`); router.push("/iaas/instances/"); }, onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }) });
   }
+  async function openConsole() {
+    // 팝업 차단 회피: 클릭 즉시 빈 창을 열고, URL 받으면 그 창에 세팅
+    const w = window.open("", "_blank");
+    try {
+      const url = await getServerConsoleUrl(s!.id);
+      if (w) w.location.href = url;
+      else window.open(url, "_blank");
+      toast.success("웹 콘솔을 엽니다");
+    } catch (e) {
+      w?.close();
+      toast.error("웹 콘솔 실패", { description: String((e as Error).message) });
+    }
+  }
   async function doDetachVol(volumeId: string) {
     if (!(await confirm({ title: "볼륨 분리", destructive: true, confirmLabel: "분리", description: "이 볼륨을 분리할까요?" }))) return;
     detach.mutate({ serverId: s!.id, volumeId }, { onSuccess: () => toast.success("볼륨 분리됨"), onError: (e) => toast.error("분리 실패", { description: String((e as Error).message) }) });
@@ -111,6 +125,7 @@ function ServerDetailPage() {
           <div className="truncate font-mono text-xs text-muted-foreground">{s.id} · 프로젝트 {projName(s.tenantId)}</div>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={openConsole} title="noVNC 웹 콘솔 새 탭으로 열기"><MonitorPlay className="size-3.5" /> 웹 콘솔</Button>
           {isAdmin && <Button variant="outline" size="sm" disabled={busy} onClick={() => setResizeOpen(true)}><SlidersHorizontal className="size-3.5" /> 스펙 변경</Button>}
           {s.status === "SHUTOFF" ? (
             <Button variant="outline" size="sm" disabled={busy} onClick={() => doPower("start")}><Play className="size-3.5" /> 시작</Button>
