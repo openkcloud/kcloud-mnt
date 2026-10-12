@@ -21,12 +21,21 @@
    172.30.1.200 keycloak.dev.okestro
    ```
    (macOS·Linux `/etc/hosts`, Windows `C:\Windows\System32\drivers\etc\hosts`)
-3. **설정** — `cp .env.example .env` 후 `KC_DB_PASSWORD`(1번 비밀번호)·`KC_ADMIN_PASSWORD` 입력(`.env` 는 git 제외)
+3. **설정 파일**
+   ```bash
+   cd infra/keycloak-dev
+   cp .env.example .env
+   vi .env      # 아래 두 줄만 바꿈(KC_HOSTNAME=http://keycloak.dev.okestro:8080 은 그대로)
+   #   KC_DB_PASSWORD='<1번 비밀번호>'
+   #   KC_ADMIN_PASSWORD='<첫 관리자 비밀번호>'
+   ```
+   값은 작은따옴표로 감쌉니다(`!` 같은 특수문자 때문). `.env` 는 git 에 올라가지 않습니다.
 4. **실행**
    ```bash
    docker compose up -d
-   docker compose logs -f     # "Keycloak 26.7.4 ... started" 가 나오면 완료(처음엔 테이블 생성으로 조금 더 걸림)
+   docker compose logs -f       # "Keycloak 26.7.4 on JVM ... started in" 이 나오면 Ctrl+C
    ```
+   처음 실행할 때는 이미지를 받고 테이블 100개를 만드느라 1~2분 걸립니다.
 5. **확인**
    - 관리 화면 `http://keycloak.dev.okestro:8080/admin` 에 `admin` / `KC_ADMIN_PASSWORD` 로 로그인
    - `psql -U okestro -d keycloak -c '\dt keycloak.*'` → 테이블 약 100개

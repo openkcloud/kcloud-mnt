@@ -174,6 +174,7 @@ env:
 - 주의
   - `btree_gin` 은 일반 계정이 만들 수 없어 슈퍼유저가 미리 만든다(없으면 검색 스키마 설치 실패).
   - 계정 하나·스키마 하나로 합치면 두 저장소의 버전 테이블(`schema_version`)이 겹쳐 검색 테이블이 만들어지지 않는다(검증함). 계정 2개 + 스키마 2개 유지.
+  - 반드시 `-d openkcloud_portal` 에 접속해서 실행한다. 계정은 서버 전체 공통이지만 스키마·확장은 접속한 DB 에만 생긴다 — 테스트배드 첫 배포 때 `postgres` DB 에 적용돼 initContainer 가 실패했다(2026-10-12).
 
 확인:
 ```sql
@@ -183,7 +184,32 @@ SELECT table_schema, count(*) FROM information_schema.tables
 
 ---
 
-## 8. 남은 작업 (체크리스트)
+## 8. Keycloak 저장소 (전용 DB)
+
+Keycloak 은 포털 DB 와 섞지 않고 **전용 DB `keycloak`** 안의 **스키마 `keycloak`** 을 쓴다(Keycloak 이 테이블 약 100개를 직접 만들고 버전을 올릴 때 스스로 바꾸므로 분리).
+
+| 항목 | 값 (테스트배드 확인, 2026-10-12) |
+|---|---|
+| 계정 | `keycloak` (특수 권한 없음) |
+| DB | `keycloak` — 소유자 `keycloak`, UTF8, 정렬 `C`, 접속 권한 `{keycloak=CTc/keycloak}`(PUBLIC 제거) |
+| 스키마 | `keycloak` (소유자 `keycloak`) — Keycloak 설정 `KC_DB_SCHEMA=keycloak` |
+| 테이블 | 26.7.4 기준 스키마 `keycloak` 에 100개 (Keycloak 이 처음 기동할 때 생성) |
+| Keycloak 접속 설정 | `KC_DB_URL_HOST=openkcloud-db-rw.openkcloud-mnt.svc.cluster.local`, `KC_DB_URL_DATABASE=keycloak`, `KC_DB_USERNAME=keycloak` |
+
+- 준비 SQL(슈퍼유저, `postgres` DB 에 접속해 1회): `infra/keycloak-dev/keycloak_db.sql` — 계정·DB·스키마. 개발 서버(Mac Mini)도 같은 SQL 로 같은 구조를 만든다.
+  - 개발 서버 PostgreSQL 은 기본 정렬이 `en_US.UTF-8` 이라 SQL 에서 `C` 를 지정한다(`TEMPLATE template0`).
+
+확인(테스트배드·개발 같은 결과여야 함):
+```sql
+SELECT datname, pg_get_userbyid(datdba) AS owner, pg_encoding_to_char(encoding) AS enc, datcollate, datacl
+  FROM pg_database WHERE datname = 'keycloak';                      -- keycloak | keycloak | UTF8 | C | {keycloak=CTc/keycloak}
+-- keycloak DB 에 접속해서
+SELECT count(*) FROM information_schema.tables WHERE table_schema = 'keycloak';   -- 100
+```
+
+---
+
+## 9. 남은 작업 (체크리스트)
 
 - [ ] HA 전환: `instances: 3` (용량 충분, podAntiAffinity로 워커 분산)
 - [ ] 스토리지 확장 필요 시 50Gi→100Gi (RBD 온라인 확장)
