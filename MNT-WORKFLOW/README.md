@@ -73,7 +73,16 @@ VirtualService openkcloud-portal-temporal-ui   https://temporal.kcloud.etri → 
 
 ## 버전 올리기
 
-- `values.yaml` 의 `workflow.images` 에서 `server`·`adminTools` 를 **같은 버전**으로 바꿉니다.
+- 이미지는 공식 이미지를 Harbor(`harbor.io:7443/mnt/mnt-workflow/temporalio/*`)로 옮겨 씁니다. 새 버전도 먼저 옮깁니다.
+  노드가 amd64 이므로 `--platform linux/amd64` 로 받습니다(Mac(arm64)에서 그냥 받으면 arm64 이미지가 올라가 파드가 `exec format error`).
+  ```bash
+  for i in server:1.31.3 admin-tools:1.31.3 ui:2.55.0; do
+    docker pull --platform linux/amd64 temporalio/$i
+    docker tag temporalio/$i harbor.io:7443/mnt/mnt-workflow/temporalio/$i
+    docker push harbor.io:7443/mnt/mnt-workflow/temporalio/$i
+  done
+  ```
+- `values.yaml` 의 `workflow.images` 에서 `server`·`adminTools` 를 **같은 버전**으로 바꿉니다(`deploy/all.yaml` 도 함께).
   파드가 다시 뜰 때 initContainer 가 스키마를 자동으로 업그레이드합니다.
 - 마이너 버전은 **한 단계씩** 올립니다(1.31 → 1.32 → 1.33). 건너뛰면 스키마·데이터 호환이 보장되지 않습니다.
 - 현재: server·admin-tools `1.31.3`, ui `2.55.0`.
@@ -82,9 +91,3 @@ VirtualService openkcloud-portal-temporal-ui   https://temporal.kcloud.etri → 
 
 - `NUM_HISTORY_SHARDS`(4)는 처음 만든 뒤에는 바꿀 수 없습니다. 바꾸려면 Temporal 데이터를 새로 만들어야 합니다.
 - 웹 화면에는 로그인이 없고 워크플로 강제 종료 같은 조작도 가능합니다. 사내망에서만 열리게 하세요(Keycloak 연동 전까지).
-- 노드가 Docker Hub 에서 이미지를 직접 받을 수 없으면 Harbor 로 옮기고 `workflow.images` 주소만 바꿉니다.
-  ```bash
-  for i in server:1.31.3 admin-tools:1.31.3 ui:2.55.0; do
-    docker pull temporalio/$i && docker tag temporalio/$i harbor.io:7443/mnt/temporal-$i && docker push harbor.io:7443/mnt/temporal-$i
-  done
-  ```
