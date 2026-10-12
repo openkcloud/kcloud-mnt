@@ -69,6 +69,8 @@ spec:
         # Istio 사이드카가 주입돼도 initContainer(스키마)의 DB 연결이 막히지 않게
         traffic.sidecar.istio.io/excludeOutboundPorts: "5432"
     spec:
+      imagePullSecrets:
+        - name: harbor-pull   # Harbor pull 자격증명(차트 global.imagePullSecrets 와 같음)
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -79,7 +81,7 @@ spec:
       initContainers:
         # Temporal 스키마 설치·업그레이드(멱등) — 이미 최신이면 바뀌는 것 없음. 이미지 버전을 올리면 자동 업그레이드.
         - name: schema
-          image: temporalio/admin-tools:1.31.3
+          image: harbor.io:7443/mnt/mnt-workflow/temporalio/admin-tools:1.31.3
           command: ["sh", "-c"]
           args:
             - |
@@ -101,7 +103,7 @@ spec:
       containers:
         # Temporal 서버 — frontend·history·matching·worker 를 한 프로세스로 실행
         - name: temporal
-          image: temporalio/server:1.31.3
+          image: harbor.io:7443/mnt/mnt-workflow/temporalio/server:1.31.3
           ports:
             - name: grpc
               containerPort: 7233
@@ -129,7 +131,7 @@ spec:
             limits: { cpu: "1", memory: 1Gi }
         # 웹 화면 — 같은 파드라 127.0.0.1 로 서버에 연결
         - name: ui
-          image: temporalio/ui:2.55.0
+          image: harbor.io:7443/mnt/mnt-workflow/temporalio/ui:2.55.0
           ports:
             - name: http
               containerPort: 8080
@@ -193,6 +195,8 @@ spec:
         sidecar.istio.io/inject: "false"   # 사이드카가 붙으면 Job 이 끝나지 않는다
     spec:
       restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: harbor-pull   # Harbor pull 자격증명(차트 global.imagePullSecrets 와 같음)
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -202,7 +206,7 @@ spec:
                     operator: DoesNotExist
       containers:
         - name: namespace
-          image: temporalio/admin-tools:1.31.3
+          image: harbor.io:7443/mnt/mnt-workflow/temporalio/admin-tools:1.31.3
           env:
             - name: TEMPORAL_ADDRESS
               value: mnt-workflow.openkcloud-mnt.svc.cluster.local:7233
