@@ -34,20 +34,13 @@ import {
   useTopHosts,
   useErrorLogs,
   useKpiTimeseries,
+  useNodes,
+  useUtilTimeseries,
   type VendorMetrics,
+  type NodeRow,
+  type UtilSeriesRow,
 } from "@/lib/obs-api";
 
-// Heatmap data — 24h × hosts
-const HOST_NAMES = ["gpu-01", "gpu-02", "npu-01", "atom-01", "atom-02", "pim-01"];
-const HEATMAP = HOST_NAMES.map((h) =>
-  Array.from({ length: 24 }, (_, i) => ({
-    host: h,
-    hour: i,
-    value: Math.round(
-      30 + Math.sin((i / 24) * Math.PI * 2 + HOST_NAMES.indexOf(h)) * 25 + (i % 4) * 4,
-    ),
-  })),
-);
 
 // 가속기 3종 공통 지표 — 공통 6종 + 파생 2종
 const COMMON_METRICS = [
@@ -116,6 +109,8 @@ export default function MonitoringOverviewPage() {
   const { data: topHosts } = useTopHosts(5);
   const { data: errorLogs } = useErrorLogs(4);
   const { data: kpiTs } = useKpiTimeseries();
+  const { data: nodesData } = useNodes("mgmt");
+  const { data: utilTs } = useUtilTimeseries();
   return (
     <div className="space-y-4">
       {/* KPI band — Datadog "Query Value" widgets */}
@@ -188,21 +183,24 @@ export default function MonitoringOverviewPage() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               호스트 맵
-              <StatusTag api="/api/v2/clusters/{c}/nodes" issue="mgmt 노드 utilization_percent 가 null 이라 사용률 색상 불가(가속기는 서비스클러스터 VM에 존재). power_watts 기준으로 대체 예정." />
+              <span className="flex items-center gap-1.5">
+                <InfoHint text={"원래 설계: 노드별 사용률(utilization_percent) 색상.\n그러나 mgmt 물리노드는 사용률이 null(가속기가 서비스클러스터 VM에 존재)이라, 전력(power_watts) 기준으로 대체함.\n원천: /clusters/{c}/nodes"} />
+                <StatusTag connected={!!nodesData} api="/api/v2/clusters/{c}/nodes (power_watts)" />
+              </span>
             </CardTitle>
-            <CardDescription>노드별 가속기 사용률 — 색상 = 부하</CardDescription>
+            <CardDescription>노드별 전력(power_watts) — 색상 = 전력 상대 부하</CardDescription>
           </CardHeader>
           <CardContent>
-            <HexHostMap />
+            <HostMap nodes={nodesData?.nodes ?? []} />
             <div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground">
               <div className="flex items-center gap-1">
-                <span className="size-2.5 rounded-sm bg-brand-mint-400" /> &lt; 40%
+                <span className="size-2.5 rounded-sm bg-brand-mint-400" /> 전력 낮음
               </div>
               <div className="flex items-center gap-1">
-                <span className="size-2.5 rounded-sm bg-amber-400" /> 40-75%
+                <span className="size-2.5 rounded-sm bg-amber-400" /> 중간
               </div>
               <div className="flex items-center gap-1">
-                <span className="size-2.5 rounded-sm bg-rose-500" /> &gt; 75%
+                <span className="size-2.5 rounded-sm bg-rose-500" /> 높음 (최대 대비)
               </div>
             </div>
           </CardContent>
@@ -211,13 +209,16 @@ export default function MonitoringOverviewPage() {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
-              활용률 히트맵 (24h × 호스트)
-              <StatusTag api="/api/v2/monitoring/metrics/timeseries?by=hostname" issue="by=hostname 이 호스트별로 분리되지 않음(응답 series 1개·metric 라벨 빈값)이라 호스트×시각 격자 구성 불가. 이노그리드 확인 중." />
+              가속기 사용률 추세 (벤더별)
+              <span className="flex items-center gap-1.5">
+                <InfoHint text={"원래 설계: 호스트×시각 히트맵(metrics/timeseries?by=hostname).\n그러나 API가 호스트별로 분리해 주지 않아(series 1개·라벨 빈값), 벤더별(gpu/furiosa/rebellions) 사용률 추세선으로 대체함.\n원천: /monitoring/metrics/timeseries"} />
+                <StatusTag connected={!!utilTs} api="/api/v2/monitoring/metrics/timeseries (gpu/furiosa/rebellions_utilization)" />
+              </span>
             </CardTitle>
-            <CardDescription>metric=gpu_utilization · period=24h · step=1h 응답을 호스트×시간으로 편다.</CardDescription>
+            <CardDescription>gpu·furiosa·rebellions 사용률(%)을 시간축으로. (호스트별 격자는 API 분리 제공 시 전환)</CardDescription>
           </CardHeader>
           <CardContent>
-            <Heatmap />
+            <VendorUtilChart series={utilTs?.series ?? []} />
           </CardContent>
         </Card>
       </div>
@@ -565,29 +566,29 @@ function TopRow({
   );
 }
 
-function HexHostMap() {
-  // Generate a small grid of hosts
-  const hosts = Array.from({ length: 24 }, (_, i) => {
-    const v = Math.round(
-      30 + Math.sin(i / 4) * 30 + (i % 6) * 5 + Math.random() * 8,
-    );
-    return { i, v, label: i < 8 ? `gpu-${(i + 1).toString().padStart(2, "0")}` : i < 16 ? `npu-${(i - 7).toString().padStart(2, "0")}` : `pim-${(i - 15).toString().padStart(2, "0")}` };
-  });
+// 호스트 맵 — 대체 형태(전력 기준). mgmt 노드 util 이 null 이라 power_watts 로 색상.
+function HostMap({ nodes }: { nodes: NodeRow[] }) {
+  if (!nodes.length) {
+    return <div className="py-6 text-center text-xs text-muted-foreground">데이터 없음</div>;
+  }
+  const maxW = Math.max(...nodes.map((n) => n.power_watts ?? 0), 1);
   return (
-    <div className="grid grid-cols-6 gap-1.5">
-      {hosts.map((h) => {
-        const color =
-          h.v > 75 ? "bg-rose-500" : h.v > 40 ? "bg-amber-400" : "bg-brand-mint-400";
+    <div className="grid grid-cols-4 gap-1.5">
+      {nodes.map((n) => {
+        const w = n.power_watts ?? 0;
+        const pct = w / maxW;
+        const color = pct > 0.75 ? "bg-rose-500" : pct > 0.4 ? "bg-amber-400" : "bg-brand-mint-400";
         return (
           <div
-            key={h.i}
+            key={n.nodename}
             className={cn(
-              "group relative flex aspect-square items-center justify-center rounded-md text-[9px] font-mono font-medium text-white transition-transform hover:scale-110",
+              "flex aspect-square flex-col items-center justify-center gap-0.5 rounded-md px-0.5 text-center text-white transition-transform hover:scale-105",
               color,
             )}
-            title={`${h.label}: ${h.v}%`}
+            title={`${n.nodename}: ${Math.round(w)}W${n.up === false ? " (down)" : ""}`}
           >
-            {h.v}
+            <span className="w-full truncate font-mono text-[8px] leading-none">{n.nodename}</span>
+            <span className="text-[11px] font-bold leading-none tabular-nums">{Math.round(w)}W</span>
           </div>
         );
       })}
@@ -595,48 +596,30 @@ function HexHostMap() {
   );
 }
 
-function Heatmap() {
-  const max = 100;
+// 히트맵 대체 형태 — 벤더별 사용률 추세선(by=hostname 미분리라 격자 대신).
+function VendorUtilChart({ series }: { series: UtilSeriesRow[] }) {
+  if (!series.length) {
+    return <div className="py-6 text-center text-xs text-muted-foreground">데이터 없음</div>;
+  }
   return (
-    <div className="space-y-1">
-      <div className="grid grid-cols-[80px_1fr] gap-2">
-        <div />
-        <div className="grid grid-cols-[repeat(24,minmax(0,1fr))] gap-px text-[8px] text-muted-foreground">
-          {Array.from({ length: 24 }).map((_, h) => (
-            <div key={h} className="text-center">
-              {h % 4 === 0 ? `${h}h` : ""}
-            </div>
-          ))}
-        </div>
-      </div>
-      {HEATMAP.map((row) => (
-        <div key={row[0].host} className="grid grid-cols-[80px_1fr] items-center gap-2">
-          <div className="text-right font-mono text-[10px] text-muted-foreground">
-            {row[0].host}
-          </div>
-          <div className="grid grid-cols-[repeat(24,minmax(0,1fr))] gap-px">
-            {row.map((cell) => {
-              const intensity = cell.value / max;
-              return (
-                <div
-                  key={cell.hour}
-                  className="aspect-square rounded-[2px]"
-                  title={`${cell.host} ${cell.hour}h: ${cell.value}%`}
-                  style={{
-                    background:
-                      intensity > 0.75
-                        ? `rgba(225, 29, 72, ${0.4 + intensity * 0.6})`
-                        : intensity > 0.4
-                          ? `rgba(245, 158, 11, ${0.3 + intensity * 0.5})`
-                          : `rgba(0, 200, 150, ${0.2 + intensity * 0.4})`,
-                  }}
-                />
-              );
-            })}
-          </div>
-        </div>
-      ))}
-    </div>
+    <ChartContainer
+      config={{
+        gpu: { label: "L40S(GPU)", color: "var(--brand-indigo-500)" },
+        furiosa: { label: "RNGD(Furiosa)", color: "var(--brand-mint-500)" },
+        rebellions: { label: "ATOM(Rebellions)", color: "#f59e0b" },
+      }}
+      className="h-[220px] w-full"
+    >
+      <LineChart data={series}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="t" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} interval={3} />
+        <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
+        <RTooltip content={<ChartTooltipContent />} />
+        <Line type="monotone" dataKey="gpu" stroke="var(--brand-indigo-500)" strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="furiosa" stroke="var(--brand-mint-500)" strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="rebellions" stroke="#f59e0b" strokeWidth={2} dot={false} />
+      </LineChart>
+    </ChartContainer>
   );
 }
 

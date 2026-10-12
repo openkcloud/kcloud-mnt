@@ -155,6 +155,37 @@ export function useTopHosts(limit = 5) {
   });
 }
 
+export interface NodeRow {
+  nodename: string;
+  role: string | null;
+  up: boolean | null;
+  power_watts: number | null;
+  utilization_percent: number | null;
+}
+export function useNodes(cluster = "mgmt") {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-nodes", cluster],
+    queryFn: () => obsFetch<{ nodes: NodeRow[] }>(`/monitoring/nodes?cluster=${cluster}`),
+    refetchInterval: pollMs || false,
+  });
+}
+
+export interface UtilSeriesRow {
+  t: string;
+  gpu?: number;
+  furiosa?: number;
+  rebellions?: number;
+}
+export function useUtilTimeseries() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-util-timeseries"],
+    queryFn: () => obsFetch<{ series: UtilSeriesRow[] }>(`/monitoring/util-timeseries`),
+    refetchInterval: pollMs || false,
+  });
+}
+
 export interface SparkPoint {
   i: number;
   v: number;
