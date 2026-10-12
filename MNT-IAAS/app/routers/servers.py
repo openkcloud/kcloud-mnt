@@ -342,6 +342,21 @@ def power_action(server_id: str, body: PowerBody):
     return {"ok": True}
 
 
+@router.get("/servers/{server_id}/console")
+def server_console(server_id: str, type: str = "novnc", protocol: str = "vnc"):
+    """웹 콘솔 URL 발급 — Nova remote-consoles(noVNC). 호출마다 토큰 URL 새로 발급."""
+    try:
+        d = _nova_req(
+            "POST",
+            f"/servers/{server_id}/remote-consoles",
+            json={"remote_console": {"protocol": protocol, "type": type}},
+        ).json()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"콘솔 URL 발급 실패: {e}")
+    rc = d.get("remote_console", {})
+    return {"url": rc.get("url"), "type": rc.get("type"), "protocol": rc.get("protocol")}
+
+
 @router.delete("/servers/{server_id}", status_code=204)
 def delete_server(server_id: str):
     try:
