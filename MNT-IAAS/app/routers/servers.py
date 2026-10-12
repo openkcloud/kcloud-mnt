@@ -8,7 +8,7 @@ import base64
 import json as _json
 import re
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -354,7 +354,13 @@ def server_console(server_id: str, type: str = "novnc", protocol: str = "vnc"):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"콘솔 URL 발급 실패: {e}")
     rc = d.get("remote_console", {})
-    return {"url": rc.get("url"), "type": rc.get("type"), "protocol": rc.get("protocol")}
+    url = rc.get("url")
+    # Nova 가 내부주소/포트(443)로 주면 브라우저가 못 여니 외부 접속용 base 로 치환.
+    if url and settings.os_console_public_base:
+        base = urlsplit(settings.os_console_public_base)
+        orig = urlsplit(url)
+        url = urlunsplit((base.scheme or orig.scheme, base.netloc or orig.netloc, orig.path, orig.query, orig.fragment))
+    return {"url": url, "type": rc.get("type"), "protocol": rc.get("protocol")}
 
 
 @router.delete("/servers/{server_id}", status_code=204)

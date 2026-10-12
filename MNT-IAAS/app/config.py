@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     os_endpoint_template: str = "https://{service}-api.openstack.internal:25443"
     os_interface: str = "internal"   # catalog 모드에서 쓸 엔드포인트 interface
 
+    # 웹 콘솔(noVNC) URL 외부 접속용 base 치환. Nova 가 내부주소/포트(443)로 URL을 줘서
+    # 브라우저가 못 여는 경우, scheme+host[:port] 를 이 값으로 바꾼다(path·query 유지).
+    # 예: https://novnc.openstack.internal:25443  (비우면 치환 안 함)
+    os_console_public_base: str = ""
+
     # MNT-CORE 주소 (ConfigMap)
     core_api_base: str = ""
 
