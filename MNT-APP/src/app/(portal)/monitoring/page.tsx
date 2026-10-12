@@ -615,9 +615,9 @@ function VendorUtilChart({ series }: { series: UtilSeriesRow[] }) {
         <XAxis dataKey="t" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} interval={3} />
         <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
         <RTooltip content={<ChartTooltipContent />} />
-        <Line type="monotone" dataKey="gpu" stroke="var(--brand-indigo-500)" strokeWidth={2} dot={false} />
-        <Line type="monotone" dataKey="furiosa" stroke="var(--brand-mint-500)" strokeWidth={2} dot={false} />
-        <Line type="monotone" dataKey="rebellions" stroke="#f59e0b" strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="gpu" stroke="var(--brand-indigo-500)" strokeWidth={2} dot={false} connectNulls />
+        <Line type="monotone" dataKey="furiosa" stroke="var(--brand-mint-500)" strokeWidth={2} dot={false} connectNulls />
+        <Line type="monotone" dataKey="rebellions" stroke="#f59e0b" strokeWidth={2} dot={false} connectNulls />
       </LineChart>
     </ChartContainer>
   );
