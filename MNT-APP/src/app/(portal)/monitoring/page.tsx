@@ -61,6 +61,18 @@ const COMMON_METRICS = [
 ];
 
 // MNT-OBS 가속기 공통 지표 응답(벤더별)을 표 8행으로 변환. 데이터 없으면 목업 폴백.
+// 가속기 공통지표 각 행의 원천 필드 (모두 /clusters/{c}/nodes/{n}/accelerators)
+const ACCEL_FIELD: Record<string, string> = {
+  "온도": "temperature_celsius",
+  "전력": "power_watts",
+  "사용률": "utilization_percent",
+  "메모리 사용량": "memory_used_bytes",
+  "메모리 총량": "memory_total_bytes",
+  "health": "healthy",
+  "전력 모드 / 캡": "power_state · power_capped · power_limit_percent",
+  "Throttling": "throttled · throttle_reasons",
+};
+
 function fmtGB(bytes: number | null | undefined) {
   return bytes ? `${(bytes / 1e9).toFixed(1)} GB` : "—";
 }
@@ -162,7 +174,15 @@ export default function MonitoringOverviewPage() {
             <tbody className="[&_td]:py-1.5 [&_td]:pr-3 [&_td]:align-top">
               {commonMetrics.map((m) => (
                 <tr key={m.name} className="border-b border-border/60 last:border-0">
-                  <td className="font-medium">{m.name}<span className="ml-1 text-muted-foreground">{m.unit}</span></td>
+                  <td className="font-medium">
+                    <span className="inline-flex items-center gap-1">
+                      {m.name}
+                      {m.unit && <span className="text-muted-foreground">{m.unit}</span>}
+                      {ACCEL_FIELD[m.name] && (
+                        <InfoHint text={`원천: /api/v2/clusters/{c}/nodes/{n}/accelerators\n필드: ${ACCEL_FIELD[m.name]}`} />
+                      )}
+                    </span>
+                  </td>
                   <td className="font-mono tabular-nums">{m.rngd}</td>
                   <td className="font-mono tabular-nums">{m.atom}</td>
                   <td className="font-mono tabular-nums">{m.l40s}</td>
