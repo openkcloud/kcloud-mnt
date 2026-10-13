@@ -7,13 +7,27 @@
  *   - ""(빈값)      → same-origin 상대경로 (/api/paas) — 게이트웨이 운영
  *   - "http://..."  → 고정 주소
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { usePollingInterval } from "@/lib/polling";
 
 const RAW = process.env.NEXT_PUBLIC_PAAS_API;
 export const PAAS_BASE = RAW === undefined ? "http://localhost:8002" : RAW;
+
+async function sendJson<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${PAAS_BASE}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let msg = `${res.status}`;
+    try { msg = (await res.json()).detail ?? msg; } catch { /* keep */ }
+    throw new Error(String(msg));
+  }
+  return (res.status === 204 ? undefined : await res.json()) as T;
+}
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
@@ -200,5 +214,101 @@ export function useK8sConfigs(clusterId: string, namespace?: string) {
     queryFn: () => fetchJson<{ configmaps: ConfigMapRow[]; secrets: SecretRow[] }>(
       `${PAAS_BASE}/api/paas/clusters/${clusterId}/configs${nsQ(namespace)}`),
     retry: 0, refetchInterval: pollMs || false,
+  });
+}
+
+// ── 쓰기(네임스페이스 리소스 CRUD) ──
+const base = (clusterId: string) => `/api/paas/clusters/${clusterId}`;
+
+/** 워크로드 생성(기본 Deployment) */
+export interface CreateWorkloadInput {
+  namespace: string; name: string; image: string; replicas: number;
+  cpu?: string; memory?: string; acceleratorKind?: string; acceleratorCount?: number;
+}
+export function useCreateWorkload(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateWorkloadInput) => sendJson("POST", `${base(clusterId)}/workloads`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] }),
+  });
+}
+export function useScaleWorkload(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ kind, namespace, name, replicas }: { kind: string; namespace: string; name: string; replicas: number }) =>
+      sendJson("POST", `${base(clusterId)}/workloads/${kind}/${namespace}/${name}/scale`, { replicas }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] }),
+  });
+}
+export function useRestartWorkload(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) =>
+      sendJson("POST", `${base(clusterId)}/workloads/${kind}/${namespace}/${name}/restart`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] }),
+  });
+}
+export function useDeleteWorkload(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) =>
+      sendJson<void>("DELETE", `${base(clusterId)}/workloads/${kind}/${namespace}/${name}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] }),
+  });
+}
+
+/** ConfigMap CRUD */
+export function useCreateConfigMap(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { namespace: string; name: string; data: Record<string, string> }) =>
+      sendJson("POST", `${base(clusterId)}/configmaps`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-configs", clusterId] }),
+  });
+}
+export function useUpdateConfigMap(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ namespace, name, data }: { namespace: string; name: string; data: Record<string, string> }) =>
+      sendJson("PUT", `${base(clusterId)}/configmaps/${namespace}/${name}`, { data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-configs", clusterId] }),
+  });
+}
+export function useDeleteConfigMap(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ namespace, name }: { namespace: string; name: string }) =>
+      sendJson<void>("DELETE", `${base(clusterId)}/configmaps/${namespace}/${name}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-configs", clusterId] }),
+  });
+}
+
+/** Secret CRUD + 값 열람 */
+export async function revealSecret(clusterId: string, namespace: string, name: string) {
+  return fetchJson<{ name: string; namespace: string; type: string; data: Record<string, string> }>(
+    `${PAAS_BASE}${base(clusterId)}/secrets/${namespace}/${name}`);
+}
+export function useCreateSecret(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { namespace: string; name: string; type?: string; data: Record<string, string> }) =>
+      sendJson("POST", `${base(clusterId)}/secrets`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-configs", clusterId] }),
+  });
+}
+export function useUpdateSecret(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ namespace, name, data }: { namespace: string; name: string; data: Record<string, string> }) =>
+      sendJson("PUT", `${base(clusterId)}/secrets/${namespace}/${name}`, { data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-configs", clusterId] }),
+  });
+}
+export function useDeleteSecret(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ namespace, name }: { namespace: string; name: string }) =>
+      sendJson<void>("DELETE", `${base(clusterId)}/secrets/${namespace}/${name}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-configs", clusterId] }),
   });
 }
