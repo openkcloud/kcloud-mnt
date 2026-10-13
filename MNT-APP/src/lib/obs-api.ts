@@ -220,3 +220,64 @@ export function useErrorLogs(limit = 4) {
     refetchInterval: pollMs || false,
   });
 }
+
+// ── 로그·이벤트 (LogQL 검색/라벨/볼륨/내보내기/스트림) ──
+export interface LogRow {
+  timestamp: string;
+  log_level: string;
+  message: string;
+  labels: Record<string, string>;
+  detected_fields: Record<string, string>;
+  trace_id?: string;
+  span_id?: string;
+}
+export interface LogSearchResult {
+  logs: LogRow[];
+  pagination: { total: number; limit: number; offset: number; has_next: boolean; next_cursor?: string };
+  warnings: string[];
+}
+/** LogQL 검색 — params(쿼리스트링)는 '검색' 시점에 스냅샷으로 넘긴다(매 렌더 재계산 금지). */
+export function useLogSearch(params: string | null) {
+  return useQuery({
+    queryKey: ["obs-logs-search", params],
+    queryFn: () => obsFetch<LogSearchResult>(`/monitoring/logs/search?${params}`),
+    enabled: !!params,
+    refetchOnWindowFocus: false,
+  });
+}
+export function useLogLabels() {
+  return useQuery({
+    queryKey: ["obs-log-labels"],
+    queryFn: () => obsFetch<{ labels: string[] }>(`/monitoring/logs/labels`),
+    staleTime: 5 * 60_000,
+  });
+}
+export function useLogLabelValues(label: string | null) {
+  return useQuery({
+    queryKey: ["obs-log-label-values", label],
+    queryFn: () => obsFetch<{ label: string; values: string[] }>(`/monitoring/logs/label-values?label=${encodeURIComponent(label!)}`),
+    enabled: !!label,
+    staleTime: 5 * 60_000,
+  });
+}
+export interface LogVolumeRow {
+  labels: Record<string, string>;
+  volume: string; // bytes(문자열)
+}
+export function useLogVolume() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-log-volume"],
+    queryFn: () => obsFetch<{ volume: LogVolumeRow[] }>(`/monitoring/logs/volume`),
+    refetchInterval: pollMs || false,
+  });
+}
+/** 스트림(EventSource)·내보내기(다운로드)는 fetch 가 아니라 브라우저 직접 접속 → 전체 URL 생성. */
+export function logStreamUrl(params: URLSearchParams): string {
+  return `${OBS_BASE}/api/obs/monitoring/logs/stream?${params.toString()}`;
+}
+export function logExportUrl(format: "csv" | "json", params: URLSearchParams): string {
+  const p = new URLSearchParams(params);
+  p.set("format", format);
+  return `${OBS_BASE}/api/obs/monitoring/logs/export?${p.toString()}`;
+}
