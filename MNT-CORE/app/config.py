@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     # 로컬: localhost:7233 (MNT-WORKFLOW/run-local.sh) / 파드: mnt-workflow.<ns>.svc.cluster.local:7233
     temporal_api_base: str = ""
 
+    # ── Keycloak(OIDC) — 토큰 검증·관리 API(서비스 계정). 비밀키만 Secret, 나머지 ConfigMap ──
+    # 로컬: http://keycloak.dev.okestro:8080/realms/openkcloud_realm
+    # 파드: 발급자는 외부 주소(https://portal.kcloud.etri:25443/auth/realms/openkcloud_realm),
+    #       JWKS 는 클러스터 내부(http://keycloak-http.<ns>.svc.cluster.local/realms/openkcloud_realm/...)
+    keycloak_issuer: str = ""
+    keycloak_jwks_url: str = ""
+    keycloak_audience: str = "mnt-core-client"     # API 토큰 aud 에 이 값이 있어야 통과
+    keycloak_client_id: str = "mnt-core-client"    # 서비스 계정(관리 API 호출용)
+    keycloak_client_secret: str = ""
+
     class Config:
         env_file = "config.env"
         env_file_encoding = "utf-8"
