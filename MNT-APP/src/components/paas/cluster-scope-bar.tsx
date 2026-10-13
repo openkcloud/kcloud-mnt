@@ -27,14 +27,15 @@ export function useClusterScope() {
   return { clusterId, setClusterId, clusters: ready, isLoading: clusters.isLoading };
 }
 
-/** 툴바 한 줄: 클러스터 → 네임스페이스 → children(검색 등) → (우측) 새로고침 */
+/** 툴바 한 줄: 클러스터 → 네임스페이스 → children(검색 등) → (우측) 새로고침 + trailing(생성 등) */
 export function ClusterScopeBar({
-  queryKeys, namespace, onNamespaceChange, children,
+  queryKeys, namespace, onNamespaceChange, children, trailing,
 }: {
   queryKeys: QueryKey[];
   namespace?: string;
   onNamespaceChange?: (ns: string) => void;
   children?: React.ReactNode;
+  trailing?: React.ReactNode;
 }) {
   const { clusterId, setClusterId, clusters, isLoading } = useClusterScope();
   const namespaces = useNamespaces(clusterId);
@@ -65,8 +66,9 @@ export function ClusterScopeBar({
         </Select>
       )}
       {children}
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-2">
         <RefreshControls queryKeys={queryKeys} />
+        {trailing}
       </div>
     </div>
   );

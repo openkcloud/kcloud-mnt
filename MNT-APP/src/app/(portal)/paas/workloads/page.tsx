@@ -78,6 +78,11 @@ export default function WorkloadsPage() {
           queryKeys={[["paas-workloads"], ["paas-namespaces"]]}
           namespace={namespace}
           onNamespaceChange={setNamespace}
+          trailing={
+            <Button size="sm" disabled={!clusterId} onClick={() => setCreateOpen(true)}>
+              <Plus className="size-3.5" /> 워크로드 생성
+            </Button>
+          }
         >
           <Select value={kind} onValueChange={setKind}>
             <SelectTrigger className="w-36"><SelectValue placeholder="유형" /></SelectTrigger>
@@ -91,9 +96,6 @@ export default function WorkloadsPage() {
             <Input placeholder="워크로드 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-52 pl-9" />
           </div>
           <span className="text-xs text-muted-foreground">총 {items.length}개</span>
-          <Button size="sm" disabled={!clusterId} onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" /> 워크로드 생성
-          </Button>
         </ClusterScopeBar>
       </Card>
 
