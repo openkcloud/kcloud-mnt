@@ -1,18 +1,29 @@
-"""서비스 클러스터 내부 K8s 리소스 조회 — 선택된 클러스터의 API 를 직접 질의.
+"""서비스 클러스터 내부 K8s 리소스 조회·관리 — 선택된 클러스터의 API 를 직접 질의.
 
 경로 규칙: /clusters/{id}/... (프론트의 전역 클러스터 선택기와 1:1).
-쓰기(CRUD)는 다음 단계 — 여기는 읽기만.
+쓰기(CRUD)는 네임스페이스 리소스(사용자 self-service)만 — 클러스터·PV·StorageClass 는 관리자 영역.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+import base64
+from datetime import datetime, timezone
 
-from ..k8s_client import k8s_get
+import httpx
+from fastapi import APIRouter, Body, HTTPException, Query
+
+from ..k8s_client import k8s_get, k8s_request
 
 router = APIRouter(tags=["k8s"])
 
 
 def _err(e: Exception) -> HTTPException:  # noqa: ANN001
+    # K8s 가 준 상태코드·메시지를 그대로 전달(409 충돌·404·422 검증 등 프론트가 구분)
+    if isinstance(e, httpx.HTTPStatusError):
+        try:
+            msg = e.response.json().get("message", e.response.text)
+        except Exception:  # noqa: BLE001
+            msg = e.response.text
+        return HTTPException(status_code=e.response.status_code, detail=msg)
     return HTTPException(status_code=502, detail=f"k8s api error: {type(e).__name__}: {e}")
 
 
@@ -221,3 +232,194 @@ def configs(cluster_id: str, namespace: str | None = Query(None)):
     } for m in sec.get("items", [])]
 
     return {"configmaps": cms, "secrets": secrets}
+
+
+# ════════════════════════════════════════════════════════════════════
+# 쓰기 — 네임스페이스 리소스(사용자 self-service). 클러스터/PV/SC 는 제외.
+# ════════════════════════════════════════════════════════════════════
+_WORKLOAD_API = {
+    "Deployment": ("apps/v1", "deployments"),
+    "StatefulSet": ("apps/v1", "statefulsets"),
+    "DaemonSet": ("apps/v1", "daemonsets"),
+    "Job": ("batch/v1", "jobs"),
+    "CronJob": ("batch/v1", "cronjobs"),
+}
+_SCALABLE = {"Deployment", "StatefulSet"}
+_RESTARTABLE = {"Deployment", "StatefulSet", "DaemonSet"}
+
+
+def _wl_path(kind: str, ns: str, name: str | None = None) -> str:
+    if kind not in _WORKLOAD_API:
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 워크로드 종류: {kind}")
+    grp, plural = _WORKLOAD_API[kind]
+    base = f"/apis/{grp}/namespaces/{ns}/{plural}"
+    return f"{base}/{name}" if name else base
+
+
+# ── 워크로드 ──
+@router.post("/clusters/{cluster_id}/workloads", status_code=201)
+def create_workload(cluster_id: str, body: dict = Body(...)):
+    """기본 Deployment 생성(가장 흔한 경우). 종류·이미지·레플리카·자원·가속기."""
+    ns = body["namespace"]
+    name = body["name"]
+    requests: dict = {}
+    limits: dict = {}
+    if body.get("cpu"):
+        requests["cpu"] = str(body["cpu"])
+    if body.get("memory"):
+        requests["memory"] = str(body["memory"])
+    acc_kind, acc_count = body.get("acceleratorKind"), int(body.get("acceleratorCount") or 0)
+    if acc_kind and acc_count > 0:
+        limits[acc_kind] = str(acc_count)  # 가속기는 requests=limits 가 원칙
+        requests[acc_kind] = str(acc_count)
+    manifest = {
+        "apiVersion": "apps/v1", "kind": "Deployment",
+        "metadata": {"name": name, "namespace": ns, "labels": {"app": name}},
+        "spec": {
+            "replicas": int(body.get("replicas") or 1),
+            "selector": {"matchLabels": {"app": name}},
+            "template": {
+                "metadata": {"labels": {"app": name}},
+                "spec": {"containers": [{
+                    "name": name,
+                    "image": body["image"],
+                    **({"resources": {"requests": requests, "limits": limits or requests}} if requests else {}),
+                }]},
+            },
+        },
+    }
+    try:
+        return k8s_request(cluster_id, "POST", _wl_path("Deployment", ns), json=manifest)
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.post("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/scale")
+def scale_workload(cluster_id: str, kind: str, namespace: str, name: str, body: dict = Body(...)):
+    """레플리카 조정 — scale 서브리소스 PATCH."""
+    if kind not in _SCALABLE:
+        raise HTTPException(status_code=400, detail=f"{kind} 은(는) 레플리카 조정을 지원하지 않습니다.")
+    replicas = int(body["replicas"])
+    try:
+        return k8s_request(
+            cluster_id, "PATCH", f"{_wl_path(kind, namespace, name)}/scale",
+            content=f'{{"spec":{{"replicas":{replicas}}}}}'.encode(),
+            content_type="application/merge-patch+json",
+        )
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.post("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/restart")
+def restart_workload(cluster_id: str, kind: str, namespace: str, name: str):
+    """롤아웃 재시작 — template 에 restartedAt 주석 PATCH(kubectl rollout restart 와 동일)."""
+    if kind not in _RESTARTABLE:
+        raise HTTPException(status_code=400, detail=f"{kind} 은(는) 재시작을 지원하지 않습니다.")
+    now = datetime.now(timezone.utc).isoformat()
+    patch = {"spec": {"template": {"metadata": {"annotations": {
+        "kubectl.kubernetes.io/restartedAt": now}}}}}
+    try:
+        import json as _json
+        return k8s_request(
+            cluster_id, "PATCH", _wl_path(kind, namespace, name),
+            content=_json.dumps(patch).encode(),
+            content_type="application/strategic-merge-patch+json",
+        )
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.delete("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}")
+def delete_workload(cluster_id: str, kind: str, namespace: str, name: str):
+    try:
+        return k8s_request(cluster_id, "DELETE", _wl_path(kind, namespace, name))
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+# ── ConfigMap ──
+@router.post("/clusters/{cluster_id}/configmaps", status_code=201)
+def create_configmap(cluster_id: str, body: dict = Body(...)):
+    ns, name = body["namespace"], body["name"]
+    manifest = {"apiVersion": "v1", "kind": "ConfigMap",
+                "metadata": {"name": name, "namespace": ns},
+                "data": body.get("data") or {}}
+    try:
+        return k8s_request(cluster_id, "POST", f"/api/v1/namespaces/{ns}/configmaps", json=manifest)
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.put("/clusters/{cluster_id}/configmaps/{namespace}/{name}")
+def update_configmap(cluster_id: str, namespace: str, name: str, body: dict = Body(...)):
+    """data 전체 교체(merge patch)."""
+    try:
+        import json as _json
+        return k8s_request(
+            cluster_id, "PATCH", f"/api/v1/namespaces/{namespace}/configmaps/{name}",
+            content=_json.dumps({"data": body.get("data") or {}}).encode(),
+            content_type="application/merge-patch+json",
+        )
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.delete("/clusters/{cluster_id}/configmaps/{namespace}/{name}")
+def delete_configmap(cluster_id: str, namespace: str, name: str):
+    try:
+        return k8s_request(cluster_id, "DELETE", f"/api/v1/namespaces/{namespace}/configmaps/{name}")
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+# ── Secret ──
+@router.get("/clusters/{cluster_id}/secrets/{namespace}/{name}")
+def reveal_secret(cluster_id: str, namespace: str, name: str):
+    """Secret 값 열람 — base64 디코드해서 평문 반환(명시적 요청 시에만)."""
+    try:
+        d = k8s_get(cluster_id, f"/api/v1/namespaces/{namespace}/secrets/{name}")
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+    decoded: dict = {}
+    for k, v in (d.get("data") or {}).items():
+        try:
+            decoded[k] = base64.b64decode(v).decode("utf-8")
+        except Exception:  # noqa: BLE001
+            decoded[k] = "(바이너리 — 표시 불가)"
+    return {"name": name, "namespace": namespace, "type": d.get("type", ""), "data": decoded}
+
+
+@router.post("/clusters/{cluster_id}/secrets", status_code=201)
+def create_secret(cluster_id: str, body: dict = Body(...)):
+    """Opaque Secret 생성 — 평문 data 를 base64 로 인코딩해 stringData 대신 data 로."""
+    ns, name = body["namespace"], body["name"]
+    data = {k: base64.b64encode(str(v).encode()).decode() for k, v in (body.get("data") or {}).items()}
+    manifest = {"apiVersion": "v1", "kind": "Secret",
+                "metadata": {"name": name, "namespace": ns},
+                "type": body.get("type") or "Opaque", "data": data}
+    try:
+        return k8s_request(cluster_id, "POST", f"/api/v1/namespaces/{ns}/secrets", json=manifest)
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.put("/clusters/{cluster_id}/secrets/{namespace}/{name}")
+def update_secret(cluster_id: str, namespace: str, name: str, body: dict = Body(...)):
+    data = {k: base64.b64encode(str(v).encode()).decode() for k, v in (body.get("data") or {}).items()}
+    try:
+        import json as _json
+        return k8s_request(
+            cluster_id, "PATCH", f"/api/v1/namespaces/{namespace}/secrets/{name}",
+            content=_json.dumps({"data": data}).encode(),
+            content_type="application/merge-patch+json",
+        )
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.delete("/clusters/{cluster_id}/secrets/{namespace}/{name}")
+def delete_secret(cluster_id: str, namespace: str, name: str):
+    try:
+        return k8s_request(cluster_id, "DELETE", f"/api/v1/namespaces/{namespace}/secrets/{name}")
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)

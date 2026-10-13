@@ -94,3 +94,12 @@ def k8s_get(cluster_id: str, path: str) -> dict:
     r = k8s(cluster_id).get(path)
     r.raise_for_status()
     return r.json()
+
+
+def k8s_request(cluster_id: str, method: str, path: str, json: dict | None = None,
+                content: bytes | None = None, content_type: str | None = None) -> dict:
+    """쓰기 공용 — POST/PUT/PATCH/DELETE. content_type 지정 시 그 헤더로(패치의 strategic-merge 등)."""
+    headers = {"Content-Type": content_type} if content_type else None
+    r = k8s(cluster_id).request(method, path, json=json, content=content, headers=headers)
+    r.raise_for_status()
+    return r.json() if r.content else {}
