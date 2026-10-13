@@ -39,7 +39,7 @@ STOP_ANNOTATION = "kubeflow-resource-stopped"
 
 # ══════════════════════════════════════════════════════════════════
 # 환경 설정 — config.env 로 주입 (uvicorn --env-file config.env)
-#   미설정 시 기본값 = 표준 클러스터(원청 테스트베드) 기준.
+#   미설정 시 기본값 = 표준 클러스터(테스트베드) 기준.
 #   로컬 WSL 개발환경 전용 우회는 값을 채워서 활성화한다.
 #   예시: config.env.example 참고
 # ══════════════════════════════════════════════════════════════════
@@ -503,7 +503,7 @@ def create_notebook(body: CreateNotebook):
         "metadata": {"name": body.name, "namespace": body.namespace},
         "spec": {"template": {"spec": {
             # 학습 Job·서빙과 동일하게 DEV_PIN_NODE 적용 — 없으면 스케줄러가
-            # 원격 노드(yoon)로 보내는데, WSL 크로스노드 스트리밍이 불안정해
+            # 다른 노드로 보내는데, WSL 크로스노드 스트리밍이 불안정해
             # 노트북 접속이 됐다 안 됐다 한다
             **({"nodeSelector": _pin_selector()} if DEV_PIN_NODE else {}),
             # GPU 요청 시 nvidia 컨테이너 런타임을 지정해야 실제 디바이스가
@@ -2940,8 +2940,8 @@ def pipeline_run_metrics(limit: int = 6):
         pass
 
     # 파이프라인이 만든 모델을 실제로 서비스하는 곳을 찾아 붙인다.
-    # 같은 모델을 여러 서비스가 함께 쓸 수 있어(예: dm-code-classifier와
-    # gps-dm이 같은 s3://models/dm-code/serve) 목록으로 돌려준다.
+    # 같은 모델을 여러 서비스가 함께 쓸 수 있어(예: 두 서비스가 같은
+    # s3://models/dm-code/serve 를 쓰는 경우) 목록으로 돌려준다.
     svc_by_path: dict = {}
     try:
         for i in crd.list_cluster_custom_object(
