@@ -46,6 +46,10 @@ spec:
     - match:
         - uri:
             prefix: {{ $b.env.API_PREFIX | quote }}
+        {{- range $b.extraPrefixes }}
+        - uri:
+            prefix: {{ . | quote }}
+        {{- end }}
       route:
         - destination:
             host: {{ printf "mnt-%s.%s.svc.cluster.local" $name $g.namespace }}

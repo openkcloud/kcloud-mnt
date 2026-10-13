@@ -33,7 +33,7 @@ backends:
       IAAS_API_BASE: http://mnt-iaas.openkcloud-mnt.svc.cluster.local
       PAAS_API_BASE: http://mnt-paas.openkcloud-mnt.svc.cluster.local
       OBS_API_BASE: http://mnt-obs.openkcloud-mnt.svc.cluster.local
-      AINB_API_BASE: ""
+      AINB_API_BASE: http://mnt-ainb.openkcloud-mnt.svc.cluster.local
       TEMPORAL_API_BASE: mnt-workflow.openkcloud-mnt.svc.cluster.local:7233   # Temporal 서버(gRPC)
 
   iaas:
@@ -83,6 +83,31 @@ backends:
       # 파드에서 닿는 주소 = master3 노드IP:8000. ⚠️ 파드 도달 확인 필요(netcheck);
       # 안 되면 Service/Endpoints(→172.29.236.153:8000) 구성 후 그 DNS 로 교체.
       MONITOR_BASE_URL: http://172.29.236.153:8000/api/v2
+
+  ainb:
+    image: mnt-ainb
+    port: 8000
+    replicas: 1                        # 1대 고정 — IDE 연결(port-forward)·성능 분석 상태를 프로세스가 들고 있다
+    secretName: mnt-ainb-secret        # CMP_SESSION_SECRET / MODEL_STORE_KEY / MODEL_STORE_SECRET 제공
+    # 노트북이 도는 서비스 클러스터 kubeconfig — Secret(키 config)을 /etc/mnt-ainb/kubeconfig 에 마운트
+    kubeconfigSecret: mnt-ainb-kubeconfig
+    # 게이트웨이 경로 추가 — 노트북 IDE 프록시(노트북 서버가 /notebook/{ns}/{name}/ 경로로 링크를 만든다)
+    extraPrefixes:
+      - /notebook/
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits: { cpu: "2", memory: 2Gi }
+    env:
+      SERVICE_NAME: mnt-ainb
+      API_PREFIX: /api/ainb
+      CORS_ORIGINS: ""
+      CORE_API_BASE: http://mnt-core.openkcloud-mnt.svc.cluster.local
+      TEMPORAL_API_BASE: mnt-workflow.openkcloud-mnt.svc.cluster.local:7233   # Temporal 서버(gRPC)
+      PUBLIC_BASE_URL: https://portal.kcloud.etri:25443   # 브라우저가 여는 포털 주소 — IDE 주소 발급용
+      KUBECONFIG: /etc/mnt-ainb/kubeconfig/config
+      DEFAULT_NAMESPACE: okc
+      ACCEL_RESOURCE: furiosa.ai/rngd  # 서비스 클러스터 NPU(device plugin 설치 후 노출되는 이름)
+      GPU_RUNTIME_CLASS: ""
 
 # ── Temporal 서버(MNT-WORKFLOW) — 프로비저닝 워크플로의 작업 장부 ─────────
 # 한 파드(replicas 1, Recreate): initContainer schema(스키마 자동 설치·업그레이드) + temporal(:7233) + ui(:8080)

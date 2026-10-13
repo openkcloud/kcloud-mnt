@@ -70,6 +70,18 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml (default $g.resources $b.resources) | nindent 12 }}
+          {{- if $b.kubeconfigSecret }}
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /etc/{{ $full }}/kubeconfig
+              readOnly: true
+          {{- end }}
+      {{- if $b.kubeconfigSecret }}
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: {{ $b.kubeconfigSecret }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

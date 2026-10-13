@@ -1,4 +1,4 @@
-"""자원신청 티켓(VM) — 신청 · 목록 · VM 이름 중복 확인 · 승인·반려 · 프로비저닝(Temporal 워크플로) · 진행 조회.
+"""자원신청 티켓(VM · AI 워크스페이스) — 신청 · 목록 · VM 이름 중복 확인 · 승인·반려 · 프로비저닝(Temporal 워크플로) · 진행 조회.
 
 티켓 1건 = VM 1대. 사용자는 username 으로 식별(요청별 토큰 검증은 Keycloak 도입 시).
 OpenStack 값(프로젝트·플레이버·이미지·서버 이름)은 MNT-IAAS 라이브 조회로 확인하고,
@@ -291,6 +291,107 @@ def create_ticket(body: CreateTicketBody, db: Session = Depends(get_db)):
     return _to_item(row)
 
 
+# ── AI 워크스페이스 신청(type ai-workspace) — AI 워크스페이스 = 프로젝트 1:1 (Kubeflow Profile) ─────────
+# 승인·반려는 VM 과 같은 PATCH, 프로비저닝은 아래 provision-ai-workspace(Temporal AiWorkspaceProvision).
+
+_WS_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+
+
+def _ainb(path: str):
+    """MNT-AINB GET(JSON). 주소 미설정은 503, 연결·응답 실패는 502."""
+    if not settings.ainb_api_base:
+        raise HTTPException(503, "MNT-AINB 주소(AINB_API_BASE)가 설정되지 않았습니다")
+    url = settings.ainb_api_base.rstrip("/") + "/api/ainb" + path
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        raise HTTPException(502, f"AI 노트북(MNT-AINB) 조회 실패: {e.read().decode(errors='replace')[:300] or e}")
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ValueError) as e:
+        raise HTTPException(502, f"AI 노트북(MNT-AINB) 조회 실패: {e}")
+
+
+def _workspace_name(project_name: str, project_id: str) -> str:
+    """프로젝트 이름 → 워크스페이스(네임스페이스) 이름: 소문자·숫자·하이픈만 63자. 남는 게 없으면 ws-<ID 앞 8자리>."""
+    name = re.sub(r"-+", "-", re.sub(r"[^a-z0-9-]", "-", project_name.lower()))[:63].strip("-")
+    return name if _WS_NAME_RE.match(name) else f"ws-{project_id.replace('-', '')[:8].lower()}"
+
+
+class CreateAiWorkspaceBody(BaseModel):
+    requestedBy: str             # 신청자 username
+    projectId: str               # OpenStack 프로젝트 UUID — 이 프로젝트의 AI 워크스페이스
+    purpose: str = ""
+    cpu: int = 4
+    memoryGi: int = 16
+    acceleratorCount: int = 0
+    storageGi: int = 50
+
+
+@router.post("/tickets/ai-workspace", status_code=201)
+def create_ai_workspace_ticket(body: CreateAiWorkspaceBody, db: Session = Depends(get_db)):
+    """AI 워크스페이스 신청 — 멤버·역할, 프로젝트(라이브), 프로젝트당 1개, 워크스페이스 이름 사용 가능(MNT-AINB) 확인."""
+    user_id = db.execute(
+        text("SELECT id FROM iam_user WHERE username = :u AND status = 'active'"), {"u": body.requestedBy},
+    ).scalar()
+    if user_id is None:
+        raise HTTPException(404, "사용자를 찾을 수 없습니다")
+    role = db.execute(
+        text("""SELECT pm.role FROM iam_project_member pm
+                  JOIN iam_project p ON p.project_id = pm.project_id
+                 WHERE pm.project_id = :p AND pm.user_id = :u"""),
+        {"p": body.projectId, "u": user_id},
+    ).scalar()
+    if role not in _REQUEST_ROLES:
+        raise HTTPException(403, "신청할 수 없는 프로젝트입니다 (조직이 할당된 프로젝트의 owner·member 만 신청 가능)")
+    db.rollback()  # 확인용 조회 트랜잭션을 닫는다 — 아래 MNT-IAAS·AINB 호출 동안 커넥션을 잡지 않게
+
+    for label, v in (("vCPU", body.cpu), ("메모리", body.memoryGi), ("저장공간", body.storageGi)):
+        if v < 1:
+            raise HTTPException(400, f"{label}는 1 이상이어야 합니다")
+    if body.acceleratorCount < 0:
+        raise HTTPException(400, "가속기는 0 이상이어야 합니다")
+    project = next((p for p in _iaas("/projects")["items"]
+                    if p["id"] == body.projectId and p.get("enabled", True)), None)
+    if not project:
+        raise HTTPException(400, "OpenStack 프로젝트를 찾을 수 없습니다")
+    ws_name = _workspace_name(project["name"], body.projectId)
+    chk = _ainb(f"/workspace-name-check?name={quote(ws_name, safe='')}")
+    if not chk["available"]:
+        raise HTTPException(409, f"워크스페이스 이름 {ws_name}: {chk['reason']}")
+
+    # 여기부터 저장까지 한 트랜잭션 — 같은 프로젝트 동시 신청은 잠금으로 직렬화
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"tkt-ai-workspace:{body.projectId}"})
+    if db.execute(text("""SELECT 1 FROM tkt_request
+                           WHERE type = 'ai-workspace' AND project_id = :p AND status <> 'rejected'"""),
+                  {"p": body.projectId}).first():
+        raise HTTPException(409, "이 프로젝트에는 이미 AI 워크스페이스 신청이 있습니다 (프로젝트당 1개)")
+
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('tkt-request-no'))"))
+    day = db.execute(text("SELECT to_char(now() AT TIME ZONE 'Asia/Seoul', 'YYMMDD')")).scalar()
+    last = db.execute(
+        text("SELECT max(split_part(id, '-', 3)::int) FROM tkt_request WHERE id LIKE :p"),
+        {"p": f"req-{day}-%"},
+    ).scalar()
+    ticket_id = f"req-{day}-{(last or 0) + 1:03d}"
+    spec = {
+        "projectName": project["name"],
+        "workspaceName": ws_name,
+        "purpose": body.purpose.strip()[:300],
+        "cpu": body.cpu,
+        "memoryGi": body.memoryGi,
+        "acceleratorCount": body.acceleratorCount,
+        "storageGi": body.storageGi,
+    }
+    db.execute(
+        text("""INSERT INTO tkt_request (id, type, project_id, requested_by, request_spec)
+                VALUES (:id, 'ai-workspace', :p, :u, CAST(:s AS jsonb))"""),
+        {"id": ticket_id, "p": body.projectId, "u": user_id, "s": json.dumps(spec, ensure_ascii=False)},
+    )
+    db.commit()
+    row = db.execute(text(_SELECT + " WHERE r.id = :id"), {"id": ticket_id}).mappings().one()
+    return _to_item(row)
+
+
 class ReviewBody(BaseModel):
     action: str                  # approve | reject
     processedBy: str             # 처리자 username (admin 역할)
@@ -498,6 +599,82 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, db: Session = Depends(
                    {"id": ticket_id, "st": t["status"], "by": t["provisioning_by"], "at": t["provisioning_at"],
                     "wf": t["workflow_id"], "err": t["error_message"],
                     "spec": json.dumps(t["provision_spec"], ensure_ascii=False) if t["provision_spec"] else None,
+                    "res": json.dumps(t["result"]) if t["result"] else None})
+        db.commit()
+        raise HTTPException(503, f"프로비저닝 워크플로를 시작하지 못했습니다: {e}")
+    return _to_item(db.execute(text(_SELECT + " WHERE r.id = :id"), {"id": ticket_id}).mappings().one())
+
+
+class ProvisionAiWorkspaceBody(BaseModel):
+    processedBy: str                   # 처리자 username (admin 역할)
+    expectedStatus: str | None = None  # 화면이 보고 있던 상태 — 다르면 409
+    # 승인하며 조정한 자원 한도 (비우면 신청 값)
+    cpu: int | None = None
+    memoryGi: int | None = None
+    acceleratorCount: int | None = None
+    storageGi: int | None = None
+
+
+@router.post("/tickets/{ticket_id}/provision-ai-workspace")
+def provision_ai_workspace_ticket(ticket_id: str, body: ProvisionAiWorkspaceBody, db: Session = Depends(get_db)):
+    """AI 워크스페이스 생성 시작(관리자) — 승인(approved)된 신청, 또는 실패(failed)한 신청의 재시도.
+    자원 한도를 확정해 생성 중(provisioning)으로 바꾼 뒤 Temporal 워크플로(AiWorkspaceProvision)를 새 회차로 시작한다.
+    워크플로 시작에 실패하면 이전 상태·값으로 되돌린다."""
+    if not settings.temporal_api_base:
+        raise HTTPException(503, "Temporal 주소(TEMPORAL_API_BASE)가 설정되지 않았습니다")
+    admin_id = _admin_id(db, body.processedBy, "프로비저닝은 관리자만 할 수 있습니다")
+    t = db.execute(text("""SELECT r.status, r.type, r.project_id, r.request_spec, r.provision_spec, r.result,
+                                  r.error_message, r.provisioning_by, r.provisioning_at, r.workflow_id,
+                                  u.username, u.email
+                             FROM tkt_request r JOIN iam_user u ON u.id = r.requested_by
+                            WHERE r.id = :id"""),
+                   {"id": ticket_id}).mappings().first()
+    if t is None:
+        raise HTTPException(404, "신청을 찾을 수 없습니다")
+    if body.expectedStatus and body.expectedStatus != t["status"]:
+        raise HTTPException(409, "다른 관리자가 먼저 처리했습니다. 목록을 새로 고쳐 확인하세요")
+    if t["type"] != "ai-workspace" or t["status"] not in ("approved", "failed"):
+        raise HTTPException(409, "승인되었거나 실패한 AI 워크스페이스 신청만 생성(재시도)할 수 있습니다")
+    rs = t["request_spec"]
+    spec = {k: rs[k] if getattr(body, k) is None else getattr(body, k)
+            for k in ("cpu", "memoryGi", "acceleratorCount", "storageGi")}
+    for label, k in (("vCPU", "cpu"), ("메모리", "memoryGi"), ("저장공간", "storageGi")):
+        if spec[k] < 1:
+            raise HTTPException(400, f"{label}는 1 이상이어야 합니다")
+    if spec["acceleratorCount"] < 0:
+        raise HTTPException(400, "가속기는 0 이상이어야 합니다")
+
+    attempt = db.execute(text("SELECT coalesce(max(attempt), 0) + 1 FROM tkt_provision_step WHERE request_id = :id"),
+                         {"id": ticket_id}).scalar()
+    workflow_id = f"ai-workspace-provision-{ticket_id}-{attempt}"
+    res = db.execute(
+        text("""UPDATE tkt_request
+                   SET status = 'provisioning', provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
+                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL
+                 WHERE id = :id AND status = :cur"""),
+        {"id": ticket_id, "spec": json.dumps(spec), "by": admin_id, "wf": workflow_id, "cur": t["status"]},
+    )
+    if res.rowcount == 0:
+        db.rollback()
+        raise HTTPException(409, "다른 관리자가 먼저 처리했습니다. 목록을 새로 고쳐 확인하세요")
+    db.commit()
+
+    inp = {
+        "ticketId": ticket_id, "attempt": attempt, "projectId": t["project_id"],
+        "projectName": rs.get("projectName"), "workspaceName": rs["workspaceName"],
+        "ownerEmail": t["email"] or f"{t['username']}@openkcloud.local", **spec,
+    }
+    try:
+        from_thread.run(runtime.start_ai_workspace_provision, workflow_id, inp)
+    except Exception as e:  # noqa: BLE001 — 시작 실패면 이전 상태(승인·실패)와 값으로 되돌린다
+        db.execute(text("""UPDATE tkt_request
+                              SET status = :st, provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
+                                  provisioning_at = :at, workflow_id = :wf, error_message = :err,
+                                  result = CAST(:res AS jsonb)
+                            WHERE id = :id AND status = 'provisioning'"""),
+                   {"id": ticket_id, "st": t["status"], "by": t["provisioning_by"], "at": t["provisioning_at"],
+                    "wf": t["workflow_id"], "err": t["error_message"],
+                    "spec": json.dumps(t["provision_spec"]) if t["provision_spec"] else None,
                     "res": json.dumps(t["result"]) if t["result"] else None})
         db.commit()
         raise HTTPException(503, f"프로비저닝 워크플로를 시작하지 못했습니다: {e}")
