@@ -942,10 +942,17 @@ def _profile_exists(name: str) -> bool:
 
 
 @app.get("/api/v1/workspace-name-check")
-def workspace_name_check(name: str):
-    """워크스페이스(=Profile·네임스페이스) 이름 사용 가능 여부 — 포털 자원신청 접수 때 확인용."""
+def workspace_name_check(name: str, projectId: Optional[str] = None):
+    """워크스페이스(=Profile·네임스페이스) 이름 사용 가능 여부 — 포털 자원신청 접수 때 확인용.
+    projectId 를 주면 그 프로젝트의 워크스페이스(프로젝트 라벨)가 이미 있는지도 본다(프로젝트당 1개)."""
     if not _WS_NAME.match(name):
         return {"available": False, "reason": "영문 소문자·숫자·하이픈(-) 63자 이내여야 합니다."}
+    if projectId:
+        own = crd.list_cluster_custom_object(GROUP, VERSION, P_PLURAL,
+                                             label_selector=f"{PROJECT_LABEL}={projectId}")["items"]
+        if own:
+            return {"available": False,
+                    "reason": f"이 프로젝트의 워크스페이스({own[0]['metadata']['name']})가 이미 있습니다."}
     if _profile_exists(name):
         return {"available": False, "reason": f"'{name}' 워크스페이스가 이미 있습니다."}
     return {"available": True, "reason": None}

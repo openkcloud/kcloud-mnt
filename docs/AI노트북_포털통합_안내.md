@@ -65,11 +65,11 @@ kubectl -n openkcloud-mnt exec deploy/mnt-ainb -- kubectl get profiles    # 서�
 ## 4. API (추가·변경분)
 | API | 내용 |
 |---|---|
-| `POST /api/core/tickets/ai-workspace` | 신청. `{requestedBy, projectId, purpose, cpu, memoryGi, acceleratorCount, storageGi}` → 201. 멤버 아님 403, 프로젝트에 신청이 이미 있음·이름 충돌 409 |
+| `POST /api/core/tickets/ai-workspace` | 신청. `{requestedBy, projectId, purpose, cpu, memoryGi, acceleratorCount, storageGi}` → 201. 멤버 아님 403, 처리 중인 신청(대기·승인·생성 중·실패)이 있거나 그 프로젝트의 워크스페이스가 이미 있으면 409. 워크스페이스를 지운 프로젝트는 다시 신청할 수 있다 |
 | `PATCH /api/core/tickets/{id}` | 승인·반려 — 기존 그대로 |
 | `POST /api/core/tickets/{id}/provision-ai-workspace` | 생성 시작·재시도(관리자). `{processedBy, expectedStatus, cpu?, memoryGi?, acceleratorCount?, storageGi?}` — 비운 값은 신청 값 |
 | `GET /api/core/tickets/{id}/steps` | 진행 단계 — 기존 그대로(코드 그룹 `TKT_PROVISION_STEP_AINB`·`TKT_PROVISION_SUBSTEP_AINB`) |
-| `GET /api/ainb/workspace-name-check?name=` | 워크스페이스 이름 사용 가능 여부 `{available, reason}` |
+| `GET /api/ainb/workspace-name-check?name=&projectId=` | 이름 사용 가능 여부 + 그 프로젝트의 워크스페이스(라벨)가 이미 있는지 `{available, reason}` |
 | `GET /api/ainb/profiles` | 항목에 `projectId`·`projectName` 추가 |
 | `POST /api/ainb/auth/login` · `logout`, `GET /api/ainb/auth/me` | IDE 세션 쿠키 발급·해제·확인 |
 | 그 밖의 `/api/ainb/*` | 기존 cmp-backend `/api/v1/*` 와 같다(접두어만 다름) |
@@ -81,15 +81,20 @@ kubectl -n openkcloud-mnt exec deploy/mnt-ainb -- kubectl get profiles    # 서�
 | 항목 | 결과 |
 |---|---|
 | 로그인 | 틀린 비밀번호 401, 맞으면 200 + 세션 쿠키 |
-| 신청 API | 201, 같은 프로젝트 두 번째 409, 일반 사용자의 승인 시도 403 |
-| 화면 — 사용자 신청 | 워크스페이스가 있는 프로젝트는 선택 불가, 신청 뒤 '승인 대기' 표시 |
+| 신청 API | 201, 처리 중인 신청이 있는 프로젝트 409, 워크스페이스가 있는 프로젝트 409, 일반 사용자의 승인 시도 403 |
+| 화면 — 사용자 신청 | 워크스페이스가 있거나 신청이 처리 중인 프로젝트는 선택 불가, 신청 뒤 '승인 대기' 표시 |
 | 화면 — 관리자 | 유형 'AI 워크스페이스' 표시, 승인 → 생성 시작(vCPU 1→2 조정) → 3/3 단계 완료(약 4.5초) |
-| 클러스터 | Profile 라벨 `project-id`, ResourceQuota `cpu 2 / memory 1Gi / requests.storage 1Gi`(가속기 0이면 항목 없음) |
+| 반려 | 사유 없으면 확정 불가, 사용자 화면에 반려 사유 표시, 반려 뒤 같은 프로젝트 재신청 가능 |
+| 실패 → 재시도 | 같은 이름·다른 프로젝트의 워크스페이스가 있을 때 '실패'와 사유 표시, 정리 단계는 그 워크스페이스를 지우지 않음, 치운 뒤 재시도 → 2차 시도 완료 |
+| 삭제 뒤 재신청 | 워크스페이스를 지운 프로젝트는 '완료' 신청 기록이 있어도 다시 신청 가능 |
+| 클러스터 | Profile 라벨 `project-id`, ResourceQuota `cpu 2 / memory 1Gi / requests.storage 1Gi`, 가속기 1장이면 `requests.<가속기 자원>: 1` 추가(0이면 항목 없음) |
 | 화면 — 사용자 확인 | 프로젝트 선택에 새 워크스페이스가 나타나고 전환된다 |
+| 노트북 | 생성 → 1분 안에 실행 → IDE(VS Code)가 포털 안에서 `/notebook/{ns}/{name}/` 로 열림 → 정지 → 시작 → 삭제(볼륨까지 정리) |
 | IDE 경로 | 쿠키 없으면 401 + 로그인 안내 화면, 있으면 프록시 통과 |
+| 배포 형태 화면 | `build:gateway` 정적 빌드를 nginx 와 같은 규칙으로 서빙 — AI 노트북 화면 7개(개요·워크스페이스·개발환경·학습·실험·모델 배포·성능 분석) 오류 없음, 백엔드 호출 모두 200 |
 | 차트 | `helm template` — mnt-ainb Deployment·Service, VirtualService 경로 `/api/ainb`·`/notebook/` |
 | 이미지 | `docker build` 후 uid 10001 로 기동, `/healthz`·`/api/ainb/profiles` 정상 |
-| 프런트 | `next build` 통과, 바뀐 파일 eslint 새 경고 없음 |
+| 프런트 | 정적 빌드 통과, 바뀐 파일 eslint 새 경고 없음 |
 
 ## 6. Keycloak 적용 전 임시 인증
 - AI 노트북 계정은 따로 두지 않는다. 포털 로그인(MNT-CORE) 직후 화면이 같은 계정으로 `POST /api/ainb/auth/login` 을 부르고, MNT-AINB 는 MNT-CORE 로그인 API 로 확인한 뒤 서명한 세션 쿠키(`okc_session`, HttpOnly, 8시간)를 준다. 실패해도 포털 로그인은 유지되고 IDE 만 막힌다.
@@ -104,6 +109,7 @@ kubectl -n openkcloud-mnt exec deploy/mnt-ainb -- kubectl get profiles    # 서�
 4. **시간 표시** — 신청 일시가 DB 시각(UTC) 그대로 보인다. 신청 관리 화면의 기존 표시(`fmtDt`)와 같은 방식이라 맞춰 두었다(VM 상세처럼 고칠 때 함께).
 5. **가속기** — 서비스 클러스터에 Furiosa device plugin 이 설치돼야 `furiosa.ai/rngd` 가 노출되고 가속기 노트북이 뜬다.
 6. **이미지 수신** — 테스트배드에서 외부 이미지 수신이 불안정하면 `deploy/kubeflow/images.txt` 의 이미지를 Harbor 로 옮긴 뒤 매니페스트 image 를 바꾼다.
+7. **기존 화면 그대로 둔 것** — 노트북 삭제 확인은 브라우저 기본 확인창(`window.confirm`)이다. '마지막 활동'은 백엔드가 날짜만 주므로 '몇 시간 전' 표시가 정확하지 않다.
 
 ## 8. 바뀐 파일
 - `MNT-AINB/` — 신규 모듈(앱·Temporal 활동·Dockerfile·`deploy/`·`README.md`)

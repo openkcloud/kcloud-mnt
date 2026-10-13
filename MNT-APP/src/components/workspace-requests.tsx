@@ -93,6 +93,11 @@ export function WorkspaceRequestForm({ onDone }: { onDone: () => void }) {
   // 이미 워크스페이스가 있는 프로젝트는 고를 수 없다 (프로젝트당 1개 — 서버도 다시 확인)
   const { data: prof } = useProfiles() as { data?: { items: { name: string; projectId?: string | null }[] } };
   const taken = new Map((prof?.items ?? []).flatMap((p) => (p.projectId ? [[p.projectId, p.name] as const] : [])));
+  // 처리 중인 내 신청이 있는 프로젝트도 고를 수 없다 (다른 구성원의 신청은 서버가 다시 확인)
+  const { data: mine } = useTickets({ type: "ai-workspace", requestedBy: user?.username ?? "" }, !!user);
+  const pending = new Set((mine?.items ?? [])
+    .filter((r) => ["pending", "approved", "provisioning", "failed"].includes(r.status))
+    .map((r) => r.projectId));
   const [projectId, setProjectId] = React.useState("");
   const [purpose, setPurpose] = React.useState("");
   const [limits, setLimits] = React.useState<WorkspaceLimitsInput>({
@@ -131,9 +136,9 @@ export function WorkspaceRequestForm({ onDone }: { onDone: () => void }) {
             <SelectTrigger><SelectValue placeholder="워크스페이스를 만들 프로젝트" /></SelectTrigger>
             <SelectContent>
               {projects.map((p) => (
-                <SelectItem key={p.id} value={p.id} disabled={taken.has(p.id)}>
+                <SelectItem key={p.id} value={p.id} disabled={taken.has(p.id) || pending.has(p.id)}>
                   {p.name}{p.orgName ? ` (${p.orgName})` : ""}
-                  {taken.has(p.id) ? ` — 워크스페이스 있음 (${taken.get(p.id)})` : ""}
+                  {taken.has(p.id) ? ` — 워크스페이스 있음 (${taken.get(p.id)})` : pending.has(p.id) ? " — 신청 처리 중" : ""}
                 </SelectItem>
               ))}
             </SelectContent>
