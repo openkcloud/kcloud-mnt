@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 
 from ..monitor_client import monitor
 
@@ -152,6 +153,119 @@ def error_logs(limit: int = Query(4)):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
     return {"logs": d.get("data", [])}
+
+
+# ── 로그·이벤트 (LogQL 검색/라벨/볼륨/내보내기/스트림) — Monitor v2 /logs/* 중개 ──
+def _log_params(query: str, log_level: str | None, start: str | None,
+                end: str | None, direction: str, limit: int) -> dict:
+    """search/stream/export 공통 파라미터. 전체 레벨(log_level 없음)은 생략."""
+    p: dict = {"query": query, "direction": direction, "limit": limit}
+    if log_level:
+        p["log_level"] = log_level
+    if start:
+        p["start"] = start
+    if end:
+        p["end"] = end
+    return p
+
+
+@router.get("/monitoring/logs/search")
+def logs_search(
+    query: str = Query(...),
+    log_level: str | None = Query(None),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    direction: str = Query("backward"),
+    limit: int = Query(100),
+):
+    """LogQL 검색 — /logs/search 중개."""
+    try:
+        d = monitor.get("/logs/search", params=_log_params(query, log_level, start, end, direction, limit))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    return {"logs": d.get("data", []), "pagination": d.get("pagination", {}), "warnings": d.get("warnings", [])}
+
+
+@router.get("/monitoring/logs/labels")
+def logs_labels():
+    """사용 가능한 라벨 키 목록 — /logs/labels."""
+    try:
+        return {"labels": monitor.get("/logs/labels").get("data", [])}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+
+
+@router.get("/monitoring/logs/label-values")
+def logs_label_values(label: str = Query(...)):
+    """라벨 값 목록 — /logs/label-values?label=."""
+    try:
+        d = monitor.get("/logs/label-values", params={"label": label})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    return {"label": label, "values": d.get("data", [])}
+
+
+@router.get("/monitoring/logs/volume")
+def logs_volume(
+    query: str | None = Query(None),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+):
+    """라벨 조합별 로그 볼륨(bytes) — /logs/volume."""
+    params: dict = {}
+    if query:
+        params["query"] = query
+    if start:
+        params["start"] = start
+    if end:
+        params["end"] = end
+    try:
+        d = monitor.get("/logs/volume", params=params or None)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    return {"volume": d.get("data", [])}
+
+
+@router.get("/monitoring/logs/export")
+def logs_export(
+    format: str = Query("csv"),
+    query: str = Query(...),
+    log_level: str | None = Query(None),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    direction: str = Query("backward"),
+    limit: int = Query(1000),
+):
+    """CSV/JSON 내보내기 — /logs/export 원시 응답 중계(파일 다운로드)."""
+    params = _log_params(query, log_level, start, end, direction, limit)
+    params["format"] = format
+    try:
+        r = monitor.get_raw("/logs/export", params=params)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    ext = "csv" if format == "csv" else "json"
+    media = "text/csv" if format == "csv" else "application/json"
+    return Response(
+        content=r.content,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="logs.{ext}"'},
+    )
+
+
+@router.get("/monitoring/logs/stream")
+def logs_stream(
+    query: str = Query(...),
+    log_level: str | None = Query(None),
+    direction: str = Query("backward"),
+    limit: int = Query(100),
+):
+    """실시간 로그 스트림(SSE) — /logs/stream 중계."""
+    params = _log_params(query, log_level, None, None, direction, limit)
+    return StreamingResponse(
+        monitor.iter_sse("/logs/stream", params=params),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 @router.get("/monitoring/power/breakdown")
