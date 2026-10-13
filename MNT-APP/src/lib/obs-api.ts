@@ -7,7 +7,7 @@
  *   - ""(빈값)      → same-origin 상대경로 (/api/obs) — 게이트웨이 운영
  *   - "http://..."  → 고정 주소
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePollingInterval } from "@/lib/polling";
 
 const RAW = process.env.NEXT_PUBLIC_OBS_API;
@@ -63,6 +63,16 @@ async function obsFetch<T>(path: string): Promise<T> {
   const res = await fetch(`${OBS_BASE}/api/obs${path}`, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`OBS ${res.status}`);
   return res.json() as Promise<T>;
+}
+
+async function obsSend<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${OBS_BASE}/api/obs${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`OBS ${res.status} ${await res.text()}`);
+  return (res.status === 204 ? undefined : await res.json()) as T;
 }
 
 export function useAcceleratorSummary(cluster = "mgmt") {
@@ -280,4 +290,133 @@ export function logExportUrl(format: "csv" | "json", params: URLSearchParams): s
   const p = new URLSearchParams(params);
   p.set("format", format);
   return `${OBS_BASE}/api/obs/monitoring/logs/export?${p.toString()}`;
+}
+
+// ── 알람 (활성 알람·채널·정책) — Monitor v2 /alerts/* 중개 ──
+export type AlertSeverity = "critical" | "warning" | "info";
+export interface AlertTarget {
+  cluster?: string | null;
+  node?: string | null;
+  acc_id?: string | null;
+  model?: string | null;
+}
+export interface AlertActive {
+  fingerprint: string;
+  policy_id: string;
+  state: string; // firing | resolved ...
+  severity: AlertSeverity | string;
+  target: AlertTarget;
+  value: number;
+  message: string;
+  started_at: string;
+  fired_at: string;
+  resolved_at: string | null;
+  last_notified_at: string | null;
+  acked_at: string | null;
+  duration_seconds: number;
+}
+export interface AlertChannel {
+  id: string;
+  name: string;
+  type: "email" | "slack" | "webhook" | string;
+  config: Record<string, unknown>;
+  notify_resolved: boolean;
+  enabled: boolean;
+  created_at?: string;
+}
+export interface AlertMetric {
+  key: string;
+  kind: "resource" | "log" | "slo" | string;
+  label: string;
+  unit: string;
+}
+export interface AlertPolicy {
+  id: string;
+  name: string;
+  description: string;
+  kind: "resource" | "log" | "slo" | string;
+  metric: string;
+  op: string;
+  threshold: number;
+  window_min: number;
+  for_min: number;
+  severity: AlertSeverity | string;
+  target: AlertTarget;
+  selector: string;
+  duration: string;
+  channel_ids: string[];
+  channels: Record<string, unknown>;
+  enabled: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export function useActiveAlerts() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-alerts-active"],
+    queryFn: () => obsFetch<{ alerts: AlertActive[]; total: number }>(`/monitoring/alerts/active`),
+    refetchInterval: pollMs || false,
+  });
+}
+export function useAlertMetrics() {
+  return useQuery({
+    queryKey: ["obs-alert-metrics"],
+    queryFn: () => obsFetch<{ metrics: AlertMetric[] }>(`/monitoring/alerts/metrics`),
+    staleTime: 10 * 60_000,
+  });
+}
+export function useAlertChannels() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-alert-channels"],
+    queryFn: () => obsFetch<{ channels: AlertChannel[] }>(`/monitoring/alerts/channels`),
+    refetchInterval: pollMs || false,
+  });
+}
+export function useAlertPolicies() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-alert-policies"],
+    queryFn: () => obsFetch<{ policies: AlertPolicy[] }>(`/monitoring/alerts/policies`),
+    refetchInterval: pollMs || false,
+  });
+}
+
+export function useCreateChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Partial<AlertChannel>) => obsSend<AlertChannel>("POST", `/monitoring/alerts/channels`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["obs-alert-channels"] }),
+  });
+}
+export function useUpdateChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Partial<AlertChannel> }) =>
+      obsSend<AlertChannel>("PATCH", `/monitoring/alerts/channels/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["obs-alert-channels"] }),
+  });
+}
+export function useDeleteChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => obsSend<void>("DELETE", `/monitoring/alerts/channels/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["obs-alert-channels"] }),
+  });
+}
+export function useUpdatePolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Partial<AlertPolicy> }) =>
+      obsSend<AlertPolicy>("PATCH", `/monitoring/alerts/policies/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["obs-alert-policies"] }),
+  });
+}
+export function useDeletePolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => obsSend<void>("DELETE", `/monitoring/alerts/policies/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["obs-alert-policies"] }),
+  });
 }
