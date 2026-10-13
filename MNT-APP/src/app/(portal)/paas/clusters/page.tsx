@@ -113,7 +113,7 @@ export default function ClustersPage() {
                 <ClusterRow
                   key={c.id}
                   c={c}
-                  projectName={projName.get(c.projectId) ?? c.projectId.slice(0, 8)}
+                  projectName={projName.get(c.projectId) ?? (c.projectId || "—").slice(0, 8)}
                   accel={flavorAccel.get(c.flavorId) ?? null}
                   onDetail={() => setDetailId(c.id)}
                 />

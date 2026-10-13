@@ -14,12 +14,14 @@ import { ticketCoreOverlapHandlers, ticketHandlers, ticketIaasOverlapHandlers } 
 const useRealIaas = process.env.NEXT_PUBLIC_IAAS_API === "";
 // /api/core 도 같은 이유 — 게이트웨이 빌드(NEXT_PUBLIC_CORE_API "")에서는 실연동과 겹치는 목업(조직·사용자 프로젝트)을 뺀다
 const useRealCore = process.env.NEXT_PUBLIC_CORE_API === "";
+// /api/paas 도 같은 이유 — 목 /api/paas/clusters·workloads 가 실 MNT-PAAS 경로와 겹친다
+const useRealPaas = process.env.NEXT_PUBLIC_PAAS_API === "";
 
 export const handlers = [
   ...dashboardHandlers,
   ...acceleratorHandlers,
   ...(useRealIaas ? [] : iaasHandlers),
-  ...paasHandlers,
+  ...(useRealPaas ? [] : paasHandlers),
   ...kubeflowHandlers,
   ...resourceMapHandlers,
   ...infrastructureHandlers,
