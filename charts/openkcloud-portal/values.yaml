@@ -151,3 +151,13 @@ gateway:
   tls:
     mode: SIMPLE
     credentialName: portal-wildcard-tls
+  # 포털 호스트의 Keycloak 로그인 경로 — /auth/realms/<realm>/·/auth/resources/ 만 Keycloak 으로(접두사 떼고 전달).
+  # /auth/login 은 포털 화면(mnt-app). 관리 화면·master realm 은 keycloak.kcloud.etri 로만 접근.
+  # 켜기 전: realm 의 Frontend URL = https://portal.kcloud.etri:25443/auth
+  keycloak:
+    enabled: false # 개발 단계
+    pathPrefix: /auth
+    realm: openkcloud_realm
+    service: keycloak-http.openkcloud-mnt.svc.cluster.local
+    port: 80
+    externalPort: "25443"   # 외부 NAT 포트(keycloak-vs 와 같은 값)
