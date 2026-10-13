@@ -49,5 +49,27 @@ class MonitorClient:
         r.raise_for_status()
         return r.json()
 
+    def get_raw(self, path: str, params: dict | None = None) -> httpx.Response:
+        """원시 응답(바이트) — CSV/JSON 파일 내보내기 중계용."""
+        self._ensure_token()
+        headers = {"Authorization": f"Bearer {self._token}"}
+        r = self._client.get(path, headers=headers, params=params)
+        if r.status_code == 401:
+            with self._lock:
+                self._login()
+            headers["Authorization"] = f"Bearer {self._token}"
+            r = self._client.get(path, headers=headers, params=params)
+        r.raise_for_status()
+        return r
+
+    def iter_sse(self, path: str, params: dict | None = None):
+        """SSE 스트림을 청크 단위로 중계(제너레이터). 연결 유지 위해 read timeout 없음."""
+        self._ensure_token()
+        headers = {"Authorization": f"Bearer {self._token}", "Accept": "text/event-stream"}
+        with self._client.stream("GET", path, headers=headers, params=params, timeout=None) as r:
+            r.raise_for_status()
+            for chunk in r.iter_raw():
+                yield chunk
+
 
 monitor = MonitorClient()
