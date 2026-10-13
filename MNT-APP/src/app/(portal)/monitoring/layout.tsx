@@ -21,6 +21,9 @@ const OBS_KEYS = [
   ["obs-util-timeseries"],
   ["obs-power-breakdown"],
   ["obs-power-timeseries"],
+  ["obs-alerts-active"],
+  ["obs-alert-policies"],
+  ["obs-alert-channels"],
 ];
 
 export default function Layout({ children }: { children: React.ReactNode }) {
