@@ -1711,7 +1711,7 @@ def _to_isvc(s: dict) -> dict:
         "p95LatencyMs": 0,
         "requests": 0,
         **_isvc_status(meta["name"], meta["namespace"], ready),
-        "endpoint": f"{PUBLIC_BASE_URL}/api/v1/serving/{meta['name']}/predict",
+        "endpoint": f"{PUBLIC_BASE_URL}{API_PREFIX or '/api/v1'}/serving/{meta['name']}/predict",
     }
 
 
@@ -4113,7 +4113,7 @@ text-decoration:none;padding:10px 22px;border-radius:8px;font-size:.9rem;font-we
 var tries = 0;
 setInterval(function () {
   tries++;
-  fetch('/api/v1/auth/me', { credentials: 'include' })
+  fetch('{me}', { credentials: 'include' })
     .then(function (r) { if (r.ok) location.reload(); })
     .catch(function () {});
   if (tries === 20) {
@@ -4137,7 +4137,8 @@ async def notebook_proxy(ns: str, name: str, path: str, request: Request):
         portal = ("" if not PORTAL_URL
                   else f"{request.url.scheme}://{host}:{PORTAL_URL.rsplit(':', 1)[-1]}" if host
                   else PORTAL_URL)
-        html = _AUTH_DENIED_HTML.replace("{portal}", f"{portal}/login")
+        html = (_AUTH_DENIED_HTML.replace("{portal}", f"{portal}/login")
+                .replace("{me}", f"{API_PREFIX or '/api/v1'}/auth/me"))   # 게이트웨이 밖에서 보이는 경로
         return Response(content=html, status_code=401, media_type="text/html")
     url = _upstream_for(ns, name, path)
     headers = {k: v for k, v in request.headers.items()
