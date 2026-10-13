@@ -2,9 +2,10 @@
 /**
  * 설정 관리 — 선택한 서비스 클러스터의 ConfigMap·Secret 라이브 조회.
  * 값은 표시하지 않는다(키 목록만) — 값 열람·편집은 다음 단계에서 권한과 함께.
+ * 레이아웃·폰트는 IaaS 목록 화면 규약과 동일.
  */
 import * as React from "react";
-import { Search, AlertCircle, Lock } from "lucide-react";
+import { Search, Lock, Settings2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -27,37 +28,39 @@ export default function ConfigPage() {
 
   return (
     <div className="space-y-4">
-      <Card className="space-y-3 p-4">
+      <Card className="p-4">
         <ClusterScopeBar
           queryKeys={[["paas-configs"], ["paas-namespaces"]]}
           namespace={namespace}
           onNamespaceChange={setNamespace}
-        />
-        <div className="flex items-center gap-2">
+        >
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름 검색" className="w-[240px] pl-9 text-xs" />
+            <Input placeholder="이름 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-52 pl-9" />
           </div>
-        </div>
+          <span className="text-xs text-muted-foreground">총 {cms.length + secrets.length}개</span>
+        </ClusterScopeBar>
+      </Card>
 
-        {!clusterId ? (
-          <Empty text="먼저 서비스 클러스터를 선택하세요." />
-        ) : data.isLoading ? (
-          <Skeleton className="h-64" />
-        ) : data.isError ? (
-          <Empty error text="설정 조회 실패 — 클러스터 API 응답 오류." />
-        ) : (
-          <Tabs defaultValue="cm">
-            <TabsList>
-              <TabsTrigger value="cm">ConfigMap ({cms.length})</TabsTrigger>
-              <TabsTrigger value="secret">Secret ({secrets.length})</TabsTrigger>
-            </TabsList>
+      {!clusterId ? (
+        <Card><EmptyBox text="먼저 서비스 클러스터를 선택하세요." /></Card>
+      ) : data.isLoading ? (
+        <Skeleton className="h-64" />
+      ) : data.isError ? (
+        <Card><EmptyBox text="설정 조회 실패 — 클러스터 API 응답 오류." /></Card>
+      ) : (
+        <Tabs defaultValue="cm">
+          <TabsList>
+            <TabsTrigger value="cm">ConfigMap ({cms.length})</TabsTrigger>
+            <TabsTrigger value="secret">Secret ({secrets.length})</TabsTrigger>
+          </TabsList>
 
-            <TabsContent value="cm">
+          <TabsContent value="cm" className="pt-3">
+            <Card>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>이름</TableHead>
+                    <TableHead>ConfigMap</TableHead>
                     <TableHead>네임스페이스</TableHead>
                     <TableHead>키</TableHead>
                   </TableRow>
@@ -65,7 +68,12 @@ export default function ConfigPage() {
                 <TableBody>
                   {cms.map((c) => (
                     <TableRow key={`${c.namespace}/${c.name}`}>
-                      <TableCell className="font-medium">{c.name}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Settings2 className="size-3.5 text-brand-indigo-600" />
+                          <span className="max-w-[240px] truncate font-mono text-sm font-semibold">{c.name}</span>
+                        </div>
+                      </TableCell>
                       <TableCell className="font-mono text-xs">{c.namespace}</TableCell>
                       <TableCell>
                         <div className="flex max-w-[420px] flex-wrap gap-1">
@@ -75,7 +83,7 @@ export default function ConfigPage() {
                           {c.keys.length > 6 && (
                             <span className="text-[11px] text-muted-foreground">+{c.keys.length - 6}</span>
                           )}
-                          {c.keys.length === 0 && <span className="text-xs text-muted-foreground">—</span>}
+                          {c.keys.length === 0 && <span className="text-muted-foreground">—</span>}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -83,16 +91,18 @@ export default function ConfigPage() {
                   {cms.length === 0 && <EmptyRow colSpan={3} />}
                 </TableBody>
               </Table>
-            </TabsContent>
+            </Card>
+          </TabsContent>
 
-            <TabsContent value="secret">
-              <p className="mb-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <TabsContent value="secret" className="pt-3">
+            <Card>
+              <div className="flex items-center gap-1.5 border-b border-border px-4 py-2 text-xs text-muted-foreground">
                 <Lock className="size-3" /> 값은 포털에 표시하지 않습니다(키 목록만).
-              </p>
+              </div>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>이름</TableHead>
+                    <TableHead>Secret</TableHead>
                     <TableHead>네임스페이스</TableHead>
                     <TableHead>타입</TableHead>
                     <TableHead>키</TableHead>
@@ -101,7 +111,12 @@ export default function ConfigPage() {
                 <TableBody>
                   {secrets.map((s) => (
                     <TableRow key={`${s.namespace}/${s.name}`}>
-                      <TableCell className="font-medium">{s.name}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Lock className="size-3.5 text-brand-indigo-600" />
+                          <span className="max-w-[240px] truncate font-mono text-sm font-semibold">{s.name}</span>
+                        </div>
+                      </TableCell>
                       <TableCell className="font-mono text-xs">{s.namespace}</TableCell>
                       <TableCell className="max-w-[220px] truncate font-mono text-[11px] text-muted-foreground">{s.type}</TableCell>
                       <TableCell>
@@ -119,20 +134,16 @@ export default function ConfigPage() {
                   {secrets.length === 0 && <EmptyRow colSpan={4} />}
                 </TableBody>
               </Table>
-            </TabsContent>
-          </Tabs>
-        )}
-      </Card>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      )}
     </div>
   );
 }
 
-function Empty({ text, error }: { text: string; error?: boolean }) {
-  return (
-    <div className={`flex items-center gap-2 py-10 text-sm ${error ? "text-rose-500" : "text-muted-foreground"}`}>
-      <AlertCircle className="size-4" /> {text}
-    </div>
-  );
+function EmptyBox({ text }: { text: string }) {
+  return <div className="py-10 text-center text-sm text-muted-foreground">{text}</div>;
 }
 function EmptyRow({ colSpan }: { colSpan: number }) {
   return (
