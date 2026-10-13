@@ -1,7 +1,7 @@
 # AI 노트북(MNT-AINB) 포털 통합 — 1차 통합본
 
 2026-10-12 요청(develop 기준 통합)에 대한 1차 결과다.
-브랜치 `feature/ainb-integration`(develop `3030d0d` 기준) · 그랜드파워솔루션 · 2026-10-14
+브랜치 `feature/ainb-integration`(develop `3030d0d` 기준) → develop 병합 요청(PR) · 그랜드파워솔루션 · 2026-10-14
 
 ## 1. 요청 대비 반영
 | 요청 | 반영 |
@@ -100,7 +100,8 @@ kubectl -n openkcloud-mnt exec deploy/mnt-ainb -- kubectl get profiles    # 서�
 - AI 노트북 계정은 따로 두지 않는다. 포털 로그인(MNT-CORE) 직후 화면이 같은 계정으로 `POST /api/ainb/auth/login` 을 부르고, MNT-AINB 는 MNT-CORE 로그인 API 로 확인한 뒤 서명한 세션 쿠키(`okc_session`, HttpOnly, 8시간)를 준다. 실패해도 포털 로그인은 유지되고 IDE 만 막힌다.
 - 쿠키는 노트북 IDE 프록시(`/notebook/*`)만 검사한다. IDE 는 브라우저가 직접 여는 주소라 화면의 토큰을 실어 보낼 수 없기 때문이다.
 - `/api/ainb/*` 는 아직 요청자를 확인하지 않는다(포털 다른 모듈과 같은 단계). '내 프로젝트만 보기'는 화면이 거른다.
-- Keycloak·oauth2-proxy 연동 뒤에는 게이트웨이가 넘기는 사용자 정보로 바꾼다 — 이 방식을 그대로 둘지, 다른 임시 방식을 쓸지 의견 부탁드린다.
+- 10/13 회신(포털 로그인 세션 스토어 `openkcloud-auth` 값 사용)대로 AI 노트북 화면은 그 값(사용자·역할)을 그대로 쓴다. 위 세션 쿠키는 브라우저 저장소 값을 실어 보낼 수 없는 IDE 경로 때문에 덧붙인 것이다.
+- Keycloak·oauth2-proxy 연동 뒤에는 게이트웨이가 넘기는 사용자 정보로 바꾸고 이 쿠키는 없앤다.
 
 ## 7. 확인 부탁·남은 일
 1. **DB 컬럼** — 저장소 `ddl.sql` 에 `tkt_*` 테이블이 없어, VM 프로비저닝 코드가 쓰는 운영 DB 컬럼(`cmn_code.upper_code`, `tkt_provision_step.step_group_code`, `tkt_provision_substep.substep_group_code`)을 기준으로 `ai_workspace.sql`·진행 단계 기록을 작성했다. 실제 스키마와 맞는지 확인 부탁드린다.
