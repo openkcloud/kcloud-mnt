@@ -193,7 +193,8 @@ function ClusterDetailDialog({ id, onClose }: { id: string; onClose: () => void 
   const { data: d, isLoading, isError } = useCluster(id);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
+      {/* grid 자식이 min-content 로 모달을 뚫지 않게 max-h+세로 스크롤, 노드풀 표 여유폭 3xl */}
+      <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
         {isLoading || !d ? (
           isError ? (
             <div className="py-10 text-center text-sm text-muted-foreground">상세 조회 실패</div>
@@ -216,7 +217,7 @@ function ClusterDetailDialog({ id, onClose }: { id: string; onClose: () => void 
               <DialogDescription className="font-mono text-xs">{d.id}</DialogDescription>
             </DialogHeader>
 
-            <Card className="space-y-2.5 p-4 text-xs">
+            <Card className="min-w-0 space-y-2.5 p-4 text-xs">
               <Field label="K8s 버전" value={d.k8sVersion || "—"} mono />
               <Field label="API 주소" value={d.apiAddress || "—"} mono />
               <Field label="생성일" value={fmtDateTime(d.createdAt)} mono />
@@ -236,9 +237,9 @@ function ClusterDetailDialog({ id, onClose }: { id: string; onClose: () => void 
               )}
             </Card>
 
-            <div>
+            <div className="min-w-0">
               <div className="mb-1.5 text-xs font-medium text-muted-foreground">노드풀</div>
-              <Card>
+              <Card className="overflow-hidden">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -294,7 +295,7 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   return (
     <div className="flex items-baseline justify-between gap-3">
       <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className={mono ? "truncate font-mono" : "truncate"}>{value}</span>
+      <span className={mono ? "min-w-0 truncate font-mono" : "min-w-0 truncate"}>{value}</span>
     </div>
   );
 }
