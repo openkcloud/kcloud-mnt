@@ -672,7 +672,7 @@ export function useDeleteFlavor() {
 // ────── 가상서버 (Nova, 운영: 조회·전원·삭제·볼륨 연결/분리) ──────
 export interface ServerAddress { network: string; ip: string; type: string | null }
 export interface ServerSummary {
-  id: string; name: string; tenantId: string; status: string; vmState: string; powerState: number;
+  id: string; name: string; tenantId: string; status: string; vmState: string; taskState: string | null; powerState: number;
   flavorName: string; vcpus: number; ramMb: number; accelerator: string | null; host: string;
   keyName: string | null; imageId: string | null; addresses: ServerAddress[]; volumeCount: number; createdAt: string;
 }
@@ -685,6 +685,9 @@ export interface ServerDetail extends ServerSummary {
 
 // 진행 중(전이) 상태면 폴링, 안정되면 중단
 const SERVER_SETTLED = new Set(["ACTIVE", "SHUTOFF", "ERROR", "PAUSED", "SUSPENDED"]);
+// status가 안정값이어도 taskState(powering-off/on·rebooting 등)가 남아 있으면 아직 전이 중 → 폴링 유지.
+// (정지 직후 Nova는 잠시 status=ACTIVE + taskState=powering-off 로 머문다 → status만 보면 폴링이 멈춰 뱃지가 안 바뀜)
+const isServerBusy = (s: { status: string; taskState?: string | null }) => !SERVER_SETTLED.has(s.status) || !!s.taskState;
 
 export function useServers() {
   const pollMs = usePollingInterval((s) => s.intervalMs);
@@ -694,7 +697,7 @@ export function useServers() {
       (await fetchJson<{ items: ServerSummary[] }>(`${IAAS_BASE}/api/iaas/servers`)).items,
     staleTime: 20 * 1000, retry: 0,
     // 진행 중(BUILD/REBOOT 등)이면 4초로 빠르게, 평상시엔 사용자 설정 주기
-    refetchInterval: (q) => ((q.state.data as ServerSummary[] | undefined)?.some((s) => !SERVER_SETTLED.has(s.status)) ? 4000 : (pollMs || false)),
+    refetchInterval: (q) => ((q.state.data as ServerSummary[] | undefined)?.some((s) => isServerBusy(s)) ? 4000 : (pollMs || false)),
   });
 }
 export function useServer(id: string | undefined) {
@@ -703,7 +706,7 @@ export function useServer(id: string | undefined) {
     enabled: !!id,
     queryFn: async (): Promise<ServerDetail> => fetchJson<ServerDetail>(`${IAAS_BASE}/api/iaas/servers/${id}`),
     staleTime: 10 * 1000, retry: 0,
-    refetchInterval: (q) => { const d = q.state.data as ServerDetail | undefined; return d && !SERVER_SETTLED.has(d.status) ? 4000 : false; },
+    refetchInterval: (q) => { const d = q.state.data as ServerDetail | undefined; return d && isServerBusy(d) ? 4000 : false; },
   });
 }
 
