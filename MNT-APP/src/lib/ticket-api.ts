@@ -1,6 +1,6 @@
 "use client";
 /**
- * 자원신청 티켓(VM) — MNT-CORE 연동(포털 DB). 사용자는 username 으로 식별.
+ * 자원신청 티켓(VM · AI 워크스페이스) — MNT-CORE 연동(포털 DB). 사용자는 username 으로 식별.
  * 티켓 관련 호출은 MSW 목업으로 폴백하지 않는다 — 실패하면 오류를 보여준다(실제 티켓과 목업 데이터가 섞이지 않게).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -110,6 +110,52 @@ export function useProvisionTicket() {
   return useMutation({
     mutationFn: ({ id, ...body }: ProvisionTicketInput) =>
       coreFetch<ResourceRequest>(`/tickets/${encodeURIComponent(id)}/provision`, { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: (_data, { id }) => qc.resetQueries({ queryKey: ["tickets", "steps", id], exact: true }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["tickets", "list"] }),
+  });
+}
+
+export interface CreateAiWorkspaceTicketInput {
+  requestedBy: string;
+  projectId: string;       // 이 프로젝트의 AI 워크스페이스 (프로젝트당 1개)
+  purpose: string;
+  cpu: number;
+  memoryGi: number;
+  acceleratorCount: number;
+  storageGi: number;
+}
+
+/** AI 워크스페이스 신청 — 서버가 멤버·프로젝트·중복·워크스페이스 이름(MNT-AINB)을 다시 확인한 뒤 저장. */
+export function useCreateAiWorkspaceTicket() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateAiWorkspaceTicketInput) =>
+      coreFetch<ResourceRequest>(`/tickets/ai-workspace`, { method: "POST", body: JSON.stringify(input) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tickets", "list"] }),
+  });
+}
+
+export interface ProvisionAiWorkspaceInput {
+  id: string;
+  processedBy: string;     // 처리자 username (admin 역할)
+  expectedStatus: string;  // 화면이 보고 있던 상태 — 그사이 바뀌었으면 서버가 409
+  // 한도 조정 — 빼면 신청 값 그대로
+  cpu?: number;
+  memoryGi?: number;
+  acceleratorCount?: number;
+  storageGi?: number;
+}
+
+/** AI 워크스페이스 생성 시작(승인 → 생성 중) · 재시도(실패 → 생성 중, 새 회차) — Temporal 워크플로 시작.
+ *  VM 과 같이 진행 기록을 비워 새 회차부터 다시 받는다. */
+export function useProvisionAiWorkspaceTicket() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: ProvisionAiWorkspaceInput) =>
+      coreFetch<ResourceRequest>(`/tickets/${encodeURIComponent(id)}/provision-ai-workspace`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
     onSuccess: (_data, { id }) => qc.resetQueries({ queryKey: ["tickets", "steps", id], exact: true }),
     onSettled: () => qc.invalidateQueries({ queryKey: ["tickets", "list"] }),
   });

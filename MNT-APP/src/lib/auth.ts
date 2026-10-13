@@ -4,6 +4,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { CORE_BASE } from "@/lib/menu-api";
+import { ainbLogin, ainbLogout } from "@/lib/ainb-api";
 
 export type Role = "admin" | "user";
 
@@ -107,9 +108,14 @@ export const useAuth = create<AuthState>()(
           projects: [],
         };
         set({ user, token: mockJwt(user) });
+        // AI 노트북(MNT-AINB) 세션 쿠키도 같은 계정으로 발급 — IDE 프록시 인증용. 기다리지 않고, 실패해도 포털 로그인은 유지
+        void ainbLogin(username, password);
         return user;
       },
-      logout: () => set({ user: null, token: null }),
+      logout: () => {
+        ainbLogout();
+        set({ user: null, token: null });
+      },
     }),
     { name: "openkcloud-auth" },
   ),

@@ -401,6 +401,8 @@ export interface KFPipeline {
   description: string;
   ownerId: string;
   steps: number;
+  /** Kubeflow Profile 네임스페이스 = 프로젝트 */
+  namespace?: string;
   runs: number;
   successRate: number;
   lastRun?: string;
@@ -412,19 +414,42 @@ export interface KFExperiment {
   name: string;
   pipelineId: string;
   ownerId: string;
+  /** Kubeflow Profile 네임스페이스 = 프로젝트 */
+  namespace?: string;
   objective: string;
   goal: number;
   bestMetric: number;
   trials: number;
   status: "Running" | "Succeeded" | "Failed";
   createdAt: string;
+  /** HPO가 찾아낸 최적 설정값 — 이 값을 학습 코드에 반영해서 쓴다 */
+  bestParams?: { name: string; value: string }[];
+  bestTrial?: string;
+  searchSpace?: { name: string; type: string; range: string[] }[];
+  algorithm?: string;
+  maxTrials?: number;
+  parallelTrials?: number;
+  /** 실제 학습을 하는 실험인지 (계산식으로 점수만 내는 검증용과 구분) */
+  realTraining?: boolean;
 }
-export interface KFInferenceService {
+export interface KFInferenceServiceResources {
+  /** 실백엔드(MNT-AINB)에서만 내려온다 (mock 데이터에는 없음) */
+  namespace?: string;
+  storageUri?: string;
+  /** 지금까지 처리한 요청 수 (실측) */
+  requests?: number;
+  cpu?: string;
+  memoryGi?: number;
+  gpu?: number;
+}
+export interface KFInferenceService extends KFInferenceServiceResources {
   id: string;
   name: string;
   modelName: string;
   modelVersion: string;
   ownerId: string;
+  /** Kubeflow Profile 네임스페이스 = 프로젝트 */
+  namespace?: string;
   acceleratorKind: AcceleratorKind;
   replicas: number;
   rpsAvg: number;
@@ -452,7 +477,7 @@ export interface Alert {
 }
 
 // ───────── 자원 신청 ─────────
-export type RequestType = "vm" | "cluster";
+export type RequestType = "vm" | "cluster" | "ai-workspace";
 export type RequestStatus =
   | "pending"
   | "approved"
@@ -479,6 +504,7 @@ export interface ProvisionResult {
   serverId?: string;
   fixedIp?: string;
   floatingIp?: string;
+  namespace?: string;      // AI 워크스페이스 — 만들어진 네임스페이스
 }
 
 export interface ProvisionStepsResp {
@@ -603,6 +629,13 @@ export interface ResourceRequest {
   k8sVersion?: string;
   nodeCount?: number;      // Worker 노드 수
   masterCount?: number;    // Control Plane 노드 수
+  // AI 워크스페이스 (프로젝트당 1개) — 가속기 수는 위 acceleratorCount.
+  // 생성 시작 때 관리자가 조정한 한도는 provisionSpec 에 {cpu, memoryGi, acceleratorCount, storageGi} 로 담긴다
+  workspaceName?: string;  // = Kubeflow Profile·네임스페이스 이름 (서버가 프로젝트 이름으로 정함)
+  purpose?: string;
+  cpu?: number;
+  memoryGi?: number;
+  storageGi?: number;
   // 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려)
   approvedBy?: string;
   approvedByName?: string;
