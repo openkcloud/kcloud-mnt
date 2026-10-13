@@ -1,11 +1,10 @@
 "use client";
 /**
- * 서비스 클러스터 스코프 바 — 워크로드·서비스·스토리지·설정 공용.
+ * 서비스 클러스터 스코프 바 — 워크로드·서비스·스토리지·설정 공용 툴바 조각.
  * K8s 리소스는 "어느 클러스터를 볼지"가 선행되므로, 선택을 전역(persist)으로 공유한다.
- * 클러스터가 준비(*_COMPLETE + api_address)된 것만 선택지로 노출.
+ * 레이아웃·폰트는 IaaS 목록 툴바 규약(Card p-4, Select w-44, ml-auto RefreshControls)과 동일.
  */
 import * as React from "react";
-import { Boxes } from "lucide-react";
 import type { QueryKey } from "@tanstack/react-query";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -28,21 +27,22 @@ export function useClusterScope() {
   return { clusterId, setClusterId, clusters: ready, isLoading: clusters.isLoading };
 }
 
+/** 툴바 한 줄: 클러스터 → 네임스페이스 → children(검색 등) → (우측) 새로고침 */
 export function ClusterScopeBar({
-  queryKeys, namespace, onNamespaceChange,
+  queryKeys, namespace, onNamespaceChange, children,
 }: {
   queryKeys: QueryKey[];
   namespace?: string;
   onNamespaceChange?: (ns: string) => void;
+  children?: React.ReactNode;
 }) {
   const { clusterId, setClusterId, clusters, isLoading } = useClusterScope();
   const namespaces = useNamespaces(clusterId);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Boxes className="size-4 text-brand-indigo-700" />
+    <div className="flex flex-wrap items-center gap-3">
       <Select value={clusterId || undefined} onValueChange={setClusterId}>
-        <SelectTrigger className="w-[220px]">
+        <SelectTrigger className="w-52">
           <SelectValue placeholder={isLoading ? "클러스터 불러오는 중…" : "서비스 클러스터 선택"} />
         </SelectTrigger>
         <SelectContent>
@@ -53,7 +53,7 @@ export function ClusterScopeBar({
       </Select>
       {onNamespaceChange && (
         <Select value={namespace ?? "all"} onValueChange={onNamespaceChange}>
-          <SelectTrigger className="w-[180px] font-mono text-xs">
+          <SelectTrigger className="w-44">
             <SelectValue placeholder="네임스페이스" />
           </SelectTrigger>
           <SelectContent>
@@ -64,6 +64,7 @@ export function ClusterScopeBar({
           </SelectContent>
         </Select>
       )}
+      {children}
       <div className="ml-auto">
         <RefreshControls queryKeys={queryKeys} />
       </div>
