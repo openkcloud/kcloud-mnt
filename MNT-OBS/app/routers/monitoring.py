@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 
 from ..monitor_client import monitor
@@ -266,6 +266,106 @@ def logs_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
+
+
+# ── 알람 (활성 알람·채널·정책) — Monitor v2 /alerts/* 중개(stateless 프록시) ──
+def _mon_err(e: Exception) -> HTTPException:  # noqa: ANN001
+    return HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+
+
+@router.get("/monitoring/alerts/active")
+def alerts_active():
+    """현재 발생 중인 알람 — /alerts/active."""
+    try:
+        d = monitor.get("/alerts/active")
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+    return {"alerts": d.get("data", []), "total": d.get("total", 0)}
+
+
+@router.get("/monitoring/alerts/metrics")
+def alerts_metrics():
+    """알람 지표 목록 — /alerts/metrics."""
+    try:
+        return {"metrics": monitor.get("/alerts/metrics").get("data", [])}
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+
+
+@router.get("/monitoring/alerts/channels")
+def alerts_channels():
+    """알림 채널 목록 — /alerts/channels."""
+    try:
+        return {"channels": monitor.get("/alerts/channels").get("data", [])}
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+
+
+@router.post("/monitoring/alerts/channels")
+def alerts_channel_create(body: dict = Body(...)):
+    try:
+        return monitor.request("POST", "/alerts/channels", json=body)
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+
+
+@router.patch("/monitoring/alerts/channels/{channel_id}")
+def alerts_channel_update(channel_id: str, body: dict = Body(...)):
+    try:
+        return monitor.request("PATCH", f"/alerts/channels/{channel_id}", json=body)
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+
+
+@router.delete("/monitoring/alerts/channels/{channel_id}")
+def alerts_channel_delete(channel_id: str):
+    try:
+        return monitor.request("DELETE", f"/alerts/channels/{channel_id}")
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+
+
+@router.get("/monitoring/alerts/policies")
+def alerts_policies():
+    """알람 정책 목록 — /alerts/policies."""
+    try:
+        return {"policies": monitor.get("/alerts/policies").get("data", [])}
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+
+
+@router.get("/monitoring/alerts/policies/{policy_id}")
+def alerts_policy_detail(policy_id: str):
+    try:
+        return {"policy": monitor.get(f"/alerts/policies/{policy_id}").get("data", {})}
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+
+
+@router.post("/monitoring/alerts/policies")
+def alerts_policy_create(body: dict = Body(...)):
+    """정책 생성 — 상위 API 개발 중일 수 있음(그 경우 Monitor 가 에러 반환)."""
+    try:
+        return monitor.request("POST", "/alerts/policies", json=body)
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+
+
+@router.patch("/monitoring/alerts/policies/{policy_id}")
+def alerts_policy_update(policy_id: str, body: dict = Body(...)):
+    """정책 수정(활성 토글 포함) — PATCH {enabled} 등."""
+    try:
+        return monitor.request("PATCH", f"/alerts/policies/{policy_id}", json=body)
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+
+
+@router.delete("/monitoring/alerts/policies/{policy_id}")
+def alerts_policy_delete(policy_id: str):
+    try:
+        return monitor.request("DELETE", f"/alerts/policies/{policy_id}")
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
 
 
 @router.get("/monitoring/power/breakdown")
