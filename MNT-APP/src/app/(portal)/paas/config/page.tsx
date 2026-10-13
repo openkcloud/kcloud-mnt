@@ -49,6 +49,7 @@ export default function ConfigPage() {
   const [q, setQ] = React.useState("");
   const [dialog, setDialog] = React.useState<{ kind: "cm" | "secret" } | null>(null);
   const [reveal, setReveal] = React.useState<SecretRow | null>(null);
+  const [tab, setTab] = React.useState<"cm" | "secret">("cm");
 
   const data = useK8sConfigs(clusterId, namespace === "all" ? undefined : namespace);
   const cms = (data.data?.configmaps ?? []).filter((c) => !q || c.name.includes(q));
@@ -61,6 +62,11 @@ export default function ConfigPage() {
           queryKeys={[["paas-configs"], ["paas-namespaces"]]}
           namespace={namespace}
           onNamespaceChange={setNamespace}
+          trailing={
+            <Button size="sm" disabled={!clusterId} onClick={() => setDialog({ kind: tab })}>
+              <Plus className="size-3.5" /> {tab === "cm" ? "ConfigMap" : "Secret"} 생성
+            </Button>
+          }
         >
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
@@ -77,18 +83,13 @@ export default function ConfigPage() {
       ) : data.isError ? (
         <Card><EmptyBox text="설정 조회 실패 — 클러스터 API 응답 오류." /></Card>
       ) : (
-        <Tabs defaultValue="cm">
-          <div className="flex items-center justify-between">
-            <TabsList>
-              <TabsTrigger value="cm">ConfigMap ({cms.length})</TabsTrigger>
-              <TabsTrigger value="secret">Secret ({secrets.length})</TabsTrigger>
-            </TabsList>
-          </div>
+        <Tabs value={tab} onValueChange={(v) => setTab(v as "cm" | "secret")}>
+          <TabsList>
+            <TabsTrigger value="cm">ConfigMap ({cms.length})</TabsTrigger>
+            <TabsTrigger value="secret">Secret ({secrets.length})</TabsTrigger>
+          </TabsList>
 
           <TabsContent value="cm" className="pt-3">
-            <div className="mb-2 flex justify-end">
-              <Button size="sm" onClick={() => setDialog({ kind: "cm" })}><Plus className="size-4" /> ConfigMap 생성</Button>
-            </div>
             <Card>
               <Table>
                 <TableHeader>
@@ -108,11 +109,8 @@ export default function ConfigPage() {
           </TabsContent>
 
           <TabsContent value="secret" className="pt-3">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Lock className="size-3" /> 목록엔 값을 표시하지 않습니다 — '값 보기'로 열람.
-              </span>
-              <Button size="sm" onClick={() => setDialog({ kind: "secret" })}><Plus className="size-4" /> Secret 생성</Button>
+            <div className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Lock className="size-3" /> 목록엔 값을 표시하지 않습니다 — '값 보기'로 열람.
             </div>
             <Card>
               <Table>
