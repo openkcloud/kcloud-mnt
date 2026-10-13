@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   Square,
   RefreshCw,
+  Play,
   FileCode,
   Folder,
   TerminalSquare,
@@ -123,10 +124,10 @@ function NotebookDetailPage() {
     refetchInterval: 30000,
   });
 
-  async function act(action: "stop" | "restart") {
+  async function act(action: "start" | "stop" | "restart") {
     try {
       await notebookAction(id, action);
-      toast.success(`${action === "stop" ? "정지" : "재시작"} 요청 완료`);
+      toast.success(`${action === "start" ? "시작" : action === "stop" ? "정지" : "재시작"} 요청 완료`);
       qc.invalidateQueries({ queryKey: ["kf", "notebooks"] });
     } catch (e) {
       toast.error(`요청 실패: ${(e as Error).message}`);
@@ -171,12 +172,21 @@ function NotebookDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => act("restart")}>
-            <RefreshCw className="size-3.5" /> 재시작
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => act("stop")}>
-            <Square className="size-3.5" /> 정지
-          </Button>
+          {/* 정지된 노트북은 재시작(파드 재생성)으로 켜지지 않는다 — 시작(정지 해제)을 보여 준다 */}
+          {nb.status === "Stopped" ? (
+            <Button variant="outline" size="sm" onClick={() => act("start")}>
+              <Play className="size-3.5" /> 시작
+            </Button>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" onClick={() => act("restart")}>
+                <RefreshCw className="size-3.5" /> 재시작
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => act("stop")}>
+                <Square className="size-3.5" /> 정지
+              </Button>
+            </>
+          )}
           <Button size="sm" asChild>
             <a href={`/notebooks/ide/?id=${encodeURIComponent(nb.id)}`} target="_blank" rel="noopener noreferrer">
               <TerminalSquare className="size-3.5" /> 개발환경 열기

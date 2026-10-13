@@ -329,7 +329,8 @@ class CreateAiWorkspaceBody(BaseModel):
 
 @router.post("/tickets/ai-workspace", status_code=201)
 def create_ai_workspace_ticket(body: CreateAiWorkspaceBody, db: Session = Depends(get_db)):
-    """AI 워크스페이스 신청 — 멤버·역할, 프로젝트(라이브), 프로젝트당 1개, 워크스페이스 이름 사용 가능(MNT-AINB) 확인."""
+    """AI 워크스페이스 신청 — 멤버·역할, 프로젝트(라이브), 프로젝트당 1개(처리 중인 신청·기존 워크스페이스),
+    워크스페이스 이름 사용 가능(MNT-AINB) 확인."""
     user_id = db.execute(
         text("SELECT id FROM iam_user WHERE username = :u AND status = 'active'"), {"u": body.requestedBy},
     ).scalar()
@@ -355,16 +356,18 @@ def create_ai_workspace_ticket(body: CreateAiWorkspaceBody, db: Session = Depend
     if not project:
         raise HTTPException(400, "OpenStack 프로젝트를 찾을 수 없습니다")
     ws_name = _workspace_name(project["name"], body.projectId)
-    chk = _ainb(f"/workspace-name-check?name={quote(ws_name, safe='')}")
+    # 워크스페이스가 이미 있는지는 클러스터(프로젝트 라벨·이름)로 본다 — 완료된 신청이 있어도 워크스페이스를 지웠으면 다시 신청할 수 있다
+    chk = _ainb(f"/workspace-name-check?name={quote(ws_name, safe='')}&projectId={quote(body.projectId, safe='')}")
     if not chk["available"]:
-        raise HTTPException(409, f"워크스페이스 이름 {ws_name}: {chk['reason']}")
+        raise HTTPException(409, f"AI 워크스페이스를 신청할 수 없습니다 — {chk['reason']}")
 
     # 여기부터 저장까지 한 트랜잭션 — 같은 프로젝트 동시 신청은 잠금으로 직렬화
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"tkt-ai-workspace:{body.projectId}"})
     if db.execute(text("""SELECT 1 FROM tkt_request
-                           WHERE type = 'ai-workspace' AND project_id = :p AND status <> 'rejected'"""),
+                           WHERE type = 'ai-workspace' AND project_id = :p
+                             AND status IN ('pending', 'approved', 'provisioning', 'failed')"""),
                   {"p": body.projectId}).first():
-        raise HTTPException(409, "이 프로젝트에는 이미 AI 워크스페이스 신청이 있습니다 (프로젝트당 1개)")
+        raise HTTPException(409, "이 프로젝트에는 처리 중인 AI 워크스페이스 신청이 있습니다 (프로젝트당 1개)")
 
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext('tkt-request-no'))"))
     day = db.execute(text("SELECT to_char(now() AT TIME ZONE 'Asia/Seoul', 'YYMMDD')")).scalar()
