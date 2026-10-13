@@ -12,7 +12,7 @@ IITP 「AI반도체 클라우드 플랫폼(openKcloud)」 과제에서 오케스
 | [MNT-IAAS](MNT-IAAS/) | OpenStack 자원 중개 | FastAPI | 스캐폴드 |
 | [MNT-PAAS](MNT-PAAS/) | Magnum/K8s 중개 | FastAPI | 스캐폴드 |
 | [MNT-OBS](MNT-OBS/) | Prometheus/Loki 질의 | FastAPI | 스캐폴드 |
-| MNT-AINB | AI 노트북/Kubeflow 중개 | FastAPI | `feature/cmp-backend` 브랜치 (추후 귀속) |
+| [MNT-AINB](MNT-AINB/) | AI 노트북/Kubeflow 중개 | FastAPI | 귀속(기존 cmp-backend) + 자원신청 `ai-workspace` 연동 |
 
 ## 아키텍처 원칙
 - **API Gateway = Istio(Envoy) + oauth2-proxy** (코드 모듈 아님). 각 모듈이 `/api/<domain>` 을
