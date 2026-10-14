@@ -36,10 +36,13 @@ backends:
       AINB_API_BASE: ""
       TEMPORAL_API_BASE: mnt-workflow.openkcloud-mnt.svc.cluster.local:7233   # Temporal 서버(gRPC)
       # Keycloak(로그인 토큰 검증) — 발급자는 브라우저가 보는 주소, JWKS·관리 API 는 클러스터 내부(25443 은 외부 NAT 전용)
-      # 비밀키 KEYCLOAK_CLIENT_SECRET 은 mnt-core-secret 에. SESSION_SINGLE_LOGIN 은 기본 true(동시 로그인 제한)
+      # 비밀키 KEYCLOAK_CLIENT_SECRET 은 mnt-core-secret 에
       KEYCLOAK_ISSUER: https://portal.kcloud.etri:25443/auth/realms/openkcloud_realm
       KEYCLOAK_JWKS_URL: http://keycloak-http.openkcloud-mnt.svc.cluster.local/realms/openkcloud_realm/protocol/openid-connect/certs
       KEYCLOAK_INTERNAL_URL: http://keycloak-http.openkcloud-mnt.svc.cluster.local/realms/openkcloud_realm
+      # 동시 로그인 제한 — "true": 같은 계정이 다른 곳(다른 브라우저)에서 로그인하면 앞의 세션을 끝낸다("다른곳에서 로그인되었습니다.")
+      #                   "false": 여러 곳 동시 로그인 허용(계정을 여럿이 같이 쓸 때). 관리자 포함 전체 적용
+      SESSION_SINGLE_LOGIN: "true"
 
   iaas:
     image: mnt-iaas
