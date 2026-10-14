@@ -96,6 +96,13 @@ def k8s_get(cluster_id: str, path: str) -> dict:
     return r.json()
 
 
+def k8s_get_text(cluster_id: str, path: str) -> str:
+    """텍스트 응답(파드 로그 등) — JSON 이 아니라 평문."""
+    r = k8s(cluster_id).get(path)
+    r.raise_for_status()
+    return r.text
+
+
 def k8s_request(cluster_id: str, method: str, path: str, json: dict | None = None,
                 content: bytes | None = None, content_type: str | None = None) -> dict:
     """쓰기 공용 — POST/PUT/PATCH/DELETE. content_type 지정 시 그 헤더로(패치의 strategic-merge 등)."""
