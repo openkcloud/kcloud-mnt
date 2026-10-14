@@ -162,7 +162,14 @@ const SECTION_OPS: NavSection = {
         { label: "감사 로그", href: "/iam/audit", icon: ShieldCheck },
       ],
     },
-    { label: "시스템 설정", href: "/settings", icon: Settings },
+    {
+      label: "시스템 설정",
+      href: "/settings",
+      icon: Settings,
+      children: [
+        { label: "메뉴 관리", href: "/settings/menus", icon: Settings, roles: ["admin"] as Role[] },
+      ],
+    },
   ],
 };
 
