@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     keycloak_audience: str = "mnt-core-client"     # API 토큰 aud 에 이 값이 있어야 통과
     keycloak_client_id: str = "mnt-core-client"    # 서비스 계정(관리 API 호출용)
     keycloak_client_secret: str = ""
+    # 토큰 발급·관리 API 를 부를 realm 주소(클러스터 내부). 비우면 keycloak_issuer 사용(로컬)
+    keycloak_internal_url: str = ""
+    keycloak_app_client_id: str = "mnt-app-client"  # 브라우저 클라이언트 — 로그아웃 통보(logout token)의 aud
+    # 동시 로그인 제한 — 같은 사용자의 새 세션(브라우저)이 오면 이전 세션을 끝낸다. 로컬 개발은 false(admin 공유)
+    session_single_login: bool = True
 
     class Config:
         env_file = "config.env"
