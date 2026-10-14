@@ -120,7 +120,9 @@ FROM (VALUES
     ('ops.iam',        'iam.users',       '사용자',           '/iam/users',              'ShieldCheck',  10),
     ('ops.iam',        'iam.roles',       '역할·권한',        '/iam/roles',              'ShieldCheck',  20),
     ('ops.iam',        'iam.apikeys',     'API Key',          '/iam/api-keys',           'ShieldCheck',  30),
-    ('ops.iam',        'iam.audit',       '감사 로그',        '/iam/audit',              'ShieldCheck',  40)
+    ('ops.iam',        'iam.audit',       '감사 로그',        '/iam/audit',              'ShieldCheck',  40),
+    -- 시스템 설정 하위
+    ('ops.settings',   'settings.menus',  '메뉴 관리',        '/settings/menus',         'Settings',     10)
 ) AS v(parent, code, label, path, icon, ord)
 JOIN mnu_menu p ON p.code = v.parent;
 
@@ -221,7 +223,8 @@ FROM (VALUES
     ('admin', 'iam.roles',         NULL, NULL),
     ('admin', 'iam.apikeys',       NULL, NULL),
     ('admin', 'iam.audit',         NULL, NULL),
-    ('admin', 'ops.settings',      NULL, NULL)
+    ('admin', 'ops.settings',      NULL, NULL),
+    ('admin', 'settings.menus',    NULL, NULL)
 ) AS v(role, code, ord, label_ov)
 JOIN iam_role r ON r.code = v.role
 JOIN mnu_menu m ON m.code = v.code;
