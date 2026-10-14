@@ -99,7 +99,8 @@ def decode_token(token: str, audience: str, *, allow_expired: bool = False,
         return jwt.decode(
             token, key, algorithms=["RS256"], audience=audience, issuer=settings.keycloak_issuer,
             leeway=_EXPIRED_OK_SECONDS if allow_expired else 0,
-            options={"require": list(require)},
+            # iat 는 있는지만 본다 — Keycloak 시계가 조금 빠르면 막 발급된 토큰이 '미래 발급'으로 거부된다
+            options={"require": list(require), "verify_iat": False},
         )
     except jwt.ExpiredSignatureError:
         raise AuthError(401, "TOKEN_EXPIRED", "로그인이 만료되었습니다. 다시 로그인하세요.")
