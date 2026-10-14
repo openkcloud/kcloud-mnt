@@ -144,9 +144,13 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
     master_flavor_id: base?.master_flavor_id ?? "",
     keypair_id: base?.keypair_id ?? "",
     external_network_id: base?.external_network_id ?? "",
+    fixed_network: base?.fixed_network ?? "",
+    fixed_subnet: base?.fixed_subnet ?? "",
     dns_nameserver: base?.dns_nameserver ?? "",
     network_driver: base?.network_driver ?? "calico",
+    volume_driver: base?.volume_driver ?? "",
     docker_storage_driver: base?.docker_storage_driver ?? "overlay2",
+    docker_volume_size: base?.docker_volume_size ?? null,
     server_type: base?.server_type ?? "vm",
     public: base?.public ?? false,
     hidden: base?.hidden ?? false,
@@ -211,6 +215,21 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
                 options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
             </Field>
             <Field label="키페어"><Input value={f.keypair_id ?? ""} onChange={(e) => set("keypair_id", e.target.value)} placeholder="my-key" className="font-mono text-xs" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="볼륨 드라이버">
+                <Select value={f.volume_driver || "none"} onValueChange={(v) => set("volume_driver", v === "none" ? "" : v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">없음</SelectItem>
+                    <SelectItem value="cinder">cinder</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="도커 볼륨 크기(GB, 0=없음)">
+                <Input type="number" min={0} value={f.docker_volume_size ?? 0}
+                  onChange={(e) => set("docker_volume_size", Number(e.target.value) || null)} />
+              </Field>
+            </div>
             <Field label="Docker 스토리지 드라이버"><Input value={f.docker_storage_driver ?? ""} onChange={(e) => set("docker_storage_driver", e.target.value)} className="font-mono text-xs" /></Field>
           </TabsContent>
 
@@ -220,6 +239,10 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
                 options={(networks.data?.items ?? []).map((n) => ({ value: n.name, label: n.name }))} />
             </Field>
             <Field label="네트워크 드라이버"><Input value={f.network_driver ?? ""} onChange={(e) => set("network_driver", e.target.value)} className="font-mono text-xs" placeholder="calico" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="고정 네트워크(선택)"><Input value={f.fixed_network ?? ""} onChange={(e) => set("fixed_network", e.target.value)} className="font-mono text-xs" placeholder="네트워크 ID/이름" /></Field>
+              <Field label="고정 서브넷(선택)"><Input value={f.fixed_subnet ?? ""} onChange={(e) => set("fixed_subnet", e.target.value)} className="font-mono text-xs" placeholder="서브넷 ID/이름" /></Field>
+            </div>
             <Field label="DNS"><Input value={f.dns_nameserver ?? ""} onChange={(e) => set("dns_nameserver", e.target.value)} className="font-mono text-xs" placeholder="8.8.8.8" /></Field>
             <div className="flex items-center gap-6">
               <SwitchField label="마스터 LB" checked={!!f.master_lb_enabled} onChange={(v) => set("master_lb_enabled", v)} />
