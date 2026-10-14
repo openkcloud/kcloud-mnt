@@ -686,7 +686,6 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
   req: ResourceRequest | null; open: boolean; onClose: () => void; canRetry?: boolean;
 }) {
   const qc = useQueryClient();
-  const user = useAuth((s) => s.user);
   const { data } = useTicketSteps(open ? req?.id : undefined);
   const retry = useProvisionTicket();
   const steps = data?.items ?? [];
@@ -720,7 +719,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
   function handleRetry() {
     if (!req?.provisionSpec) return;
     retry.mutate(
-      { id: req.id, processedBy: user?.username ?? "", expectedStatus: "failed", provisionSpec: toProvisionBody(req.provisionSpec) },
+      { id: req.id, expectedStatus: "failed", provisionSpec: toProvisionBody(req.provisionSpec) },
       {
         onSuccess: () => toast.success("재시도를 시작했습니다", { description: "새 회차로 처음부터 진행합니다" }),
         onError: (e) => toast.error("재시도하지 못했습니다", {
@@ -860,7 +859,6 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
 
 // ─────────── 관리자 뷰 ───────────
 function AdminView() {
-  const reviewer = useAuth((s) => s.user);
   const [statusFilter, setStatusFilter] = React.useState("all");
   const [typeFilter, setTypeFilter] = React.useState("all");
   const [orgFilter, setOrgFilter] = React.useState("all");
@@ -914,7 +912,6 @@ function AdminView() {
       await reviewMutation.mutateAsync({
         id: r.id,
         action,
-        processedBy: reviewer?.username ?? "",
         reason: action === "reject" ? rejectReason.trim() : undefined,
         expectedStatus: r.status,
       });
@@ -936,7 +933,6 @@ function AdminView() {
     try {
       const started = await provisionMutation.mutateAsync({
         id: r.id,
-        processedBy: reviewer?.username ?? "",
         expectedStatus: r.status,
         provisionSpec: toProvisionBody(spec),
       });
@@ -1190,8 +1186,8 @@ function UserView({ username }: { username: string }) {
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
 
-  // 내 신청 = MNT-CORE 실제 티켓 (목업 폴백 없음)
-  const filters: Record<string, string> = { requestedBy: username };
+  // 내 신청 = MNT-CORE 실제 티켓 (목업 폴백 없음). 신청자는 서버가 토큰으로 정한다
+  const filters: Record<string, string> = {};
   if (statusFilter !== "all") filters.status = statusFilter;
   const { data, isLoading, error } = useTickets(filters, !!username);
 

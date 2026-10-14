@@ -25,7 +25,7 @@ backends:
     image: mnt-core
     port: 8000
     replicas: 1
-    secretName: mnt-core-secret        # DATABASE_URL 제공
+    secretName: mnt-core-secret        # DATABASE_URL, KEYCLOAK_CLIENT_SECRET 제공
     env:
       SERVICE_NAME: mnt-core
       API_PREFIX: /api/core
@@ -35,6 +35,11 @@ backends:
       OBS_API_BASE: http://mnt-obs.openkcloud-mnt.svc.cluster.local
       AINB_API_BASE: ""
       TEMPORAL_API_BASE: mnt-workflow.openkcloud-mnt.svc.cluster.local:7233   # Temporal 서버(gRPC)
+      # Keycloak(로그인 토큰 검증) — 발급자는 브라우저가 보는 주소, JWKS·관리 API 는 클러스터 내부(25443 은 외부 NAT 전용)
+      # 비밀키 KEYCLOAK_CLIENT_SECRET 은 mnt-core-secret 에. SESSION_SINGLE_LOGIN 은 기본 true(동시 로그인 제한)
+      KEYCLOAK_ISSUER: https://portal.kcloud.etri:25443/auth/realms/openkcloud_realm
+      KEYCLOAK_JWKS_URL: http://keycloak-http.openkcloud-mnt.svc.cluster.local/realms/openkcloud_realm/protocol/openid-connect/certs
+      KEYCLOAK_INTERNAL_URL: http://keycloak-http.openkcloud-mnt.svc.cluster.local/realms/openkcloud_realm
 
   iaas:
     image: mnt-iaas

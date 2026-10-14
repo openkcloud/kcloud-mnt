@@ -290,7 +290,7 @@ function ProjectDetailBody({ project, isAdmin, onClose }: { project: Tenant; isA
 
 // 프로젝트 멤버 = 포털 DB. 역할 구분 없이 "현재 멤버 ↔ 후보" 전송 목록(화살표)+각 목록 검색.
 function MembersTab({ projectId, members, isAdmin }: { projectId: string; members: ProjectMember[] | undefined; isAdmin: boolean }) {
-  const { data: users } = usePortalUsers();
+  const { data: users } = usePortalUsers(isAdmin); // 사용자 목록은 관리자 전용(멤버 추가 후보) — 사용자 화면은 부르지 않음
   const add = useAddProjectMember(projectId);
   const remove = useRemoveProjectMember(projectId);
   const [qCand, setQCand] = React.useState("");
@@ -301,14 +301,14 @@ function MembersTab({ projectId, members, isAdmin }: { projectId: string; member
   const toggle = (set: React.Dispatch<React.SetStateAction<Set<string>>>, id: string) =>
     set((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
-  if (!members || !users) return <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> 멤버 조회 중…</div>;
+  if (!members || (isAdmin && !users)) return <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> 멤버 조회 중…</div>;
 
   const matchU = (u: { username: string; name: string }, q: string) => {
     const s = q.trim().toLowerCase();
     return !s || u.username.toLowerCase().includes(s) || u.name.toLowerCase().includes(s);
   };
   const memberIds = new Set(members.map((m) => m.userId));
-  const candFiltered = users.filter((u) => !memberIds.has(u.id) && matchU(u, qCand));
+  const candFiltered = (users ?? []).filter((u) => !memberIds.has(u.id) && matchU(u, qCand)); // 사용자 화면은 users 없음
   const memFiltered = members.filter((m) => matchU(m, qMem));
 
   async function moveToMembers() {
