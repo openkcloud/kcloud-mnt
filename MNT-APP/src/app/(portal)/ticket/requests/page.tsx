@@ -60,7 +60,7 @@ import { ResourceRequestWizard } from "@/components/resource-request-wizard";
 import {
   WorkspaceLimitFields, limitsBody, limitsOf, limitsOk, limitsText, toLimitsInput, type WorkspaceLimitsInput,
 } from "@/components/workspace-requests";
-import { accKindClass, cn } from "@/lib/utils";
+import { accKindClass, cn, formatDateTime } from "@/lib/utils";
 import { nodes, vms, accelerators } from "@/mocks/fixtures";
 import type {
   ProvisionSpec, ProvisionStep, ProvStepStatus, ResourceRequest, RequestStatus, RequestType,
@@ -202,7 +202,7 @@ function SpecCell({ r }: { r: ResourceRequest }) {
 }
 
 function fmtDt(iso: string) {
-  return iso.replace("T", " ").slice(0, 16);
+  return formatDateTime(iso); // 한국 시각 — 문자열을 잘라 쓰면 서버 시간대(UTC) 그대로 보인다
 }
 
 // 반려 사유 — 승인 단계 또는 프로비저닝 단계
