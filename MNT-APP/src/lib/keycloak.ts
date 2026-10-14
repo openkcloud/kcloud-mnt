@@ -1,0 +1,57 @@
+/* Keycloak(OIDC Authorization Code + PKCE) — 브라우저 로그인. 토큰은 메모리(keycloak-js)에만 둔다.
+ *
+ * 주소(NEXT_PUBLIC_KEYCLOAK_URL) — API 주소(NEXT_PUBLIC_CORE_API 등)와 같은 규칙:
+ *   - 미설정        → http://keycloak.dev.okestro:8080 (로컬 dev, 개발 Keycloak 직접)
+ *   - ""(빈값)      → 같은 출처 /auth (게이트웨이: portal.kcloud.etri/auth/realms/… → Keycloak)
+ *   - "http://..."  → 고정 주소
+ * PKCE 는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작한다 — 다른 PC 에서 http://IP:3000 으로는 로그인 불가.
+ */
+import Keycloak from "keycloak-js";
+
+const RAW = process.env.NEXT_PUBLIC_KEYCLOAK_URL;
+export const KEYCLOAK_REALM = "openkcloud_realm";
+export const KEYCLOAK_CLIENT_ID = "mnt-app-client";
+
+function keycloakUrl(): string {
+  if (RAW === undefined) return "http://keycloak.dev.okestro:8080";
+  if (RAW === "") return `${window.location.origin}/auth`;
+  return RAW;
+}
+
+let kc: Keycloak | null = null;
+let initPromise: Promise<boolean> | null = null;
+
+export function getKeycloak(): Keycloak {
+  kc ??= new Keycloak({ url: keycloakUrl(), realm: KEYCLOAK_REALM, clientId: KEYCLOAK_CLIENT_ID });
+  return kc;
+}
+
+/** 페이지당 1회 — 로그인 세션 확인(조용히). Keycloak 에서 돌아온 경우(#code=…)는 토큰 교환까지 한다. */
+export function initKeycloak(): Promise<boolean> {
+  initPromise ??= getKeycloak().init({
+    onLoad: "check-sso",
+    pkceMethod: "S256",
+    checkLoginIframe: false, // 세션 변화는 MNT-CORE /auth/session 으로 확인(관리자 강제 종료까지 잡으려고)
+    silentCheckSsoRedirectUri: `${window.location.origin}/silent-check-sso.html`,
+    silentCheckSsoFallback: true, // 제3자 쿠키가 막히면(로컬 dev) Keycloak 을 잠깐 다녀오는 방식으로
+  });
+  return initPromise;
+}
+
+/** API 호출용 토큰 — 30초 안에 만료되면 먼저 갱신한다. 로그인 전·갱신 실패면 undefined(호출부가 401 처리). */
+export async function accessToken(): Promise<string | undefined> {
+  const k = getKeycloak();
+  if (!k.authenticated) return undefined;
+  try {
+    await k.updateToken(30);
+  } catch {
+    return k.token; // 갱신 실패 — 서버가 만료·종료 원인을 알려 준다
+  }
+  return k.token;
+}
+
+/** Keycloak 로그인 화면으로 — 로그인 후 /auth/login 으로 돌아와 next 로 간다. */
+export function loginRedirect(next?: string): Promise<void> {
+  const q = next ? `?next=${encodeURIComponent(next)}` : "";
+  return getKeycloak().login({ redirectUri: `${window.location.origin}/auth/login/${q}` });
+}

@@ -1,6 +1,6 @@
 """사용자 SSH 공개키(키페어) — self-service.
 
-사용자 스코프(owner=포털 username). 프로젝트/OpenStack과 무관하게 포털 DB가 소유.
+사용자 스코프(owner=포털 username = 토큰 사용자). 프로젝트/OpenStack과 무관하게 포털 DB가 소유.
 개인키(private)는 절대 받지도 저장하지도 않는다 — 공개키만 보관.
 연결된 VM 수는 자원신청(tkt) 연동 후 집계 예정 — 현재는 0.
 """
@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from ..auth import CurrentUser, current_user
 from ..db import get_db
 
 router = APIRouter(tags=["iam_ssh_key"])
@@ -45,29 +46,27 @@ def _row(r) -> dict:
 
 
 @router.get("/ssh-keys")
-def list_ssh_keys(owner: str, db: Session = Depends(get_db)):
-    """내(owner) SSH 공개키 목록."""
+def list_ssh_keys(user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    """내 SSH 공개키 목록."""
     rows = db.execute(
         text("SELECT id, name, public_key, fingerprint, created_at FROM iam_ssh_key "
              "WHERE owner = :o ORDER BY created_at DESC"),
-        {"o": owner},
+        {"o": user.username},
     ).mappings().all()
     return {"items": [_row(r) for r in rows], "count": len(rows)}
 
 
 class CreateSshKeyBody(BaseModel):
-    owner: str
+    owner: str | None = None  # 옛 화면 호환용 — 쓰지 않음(소유자 = 토큰 사용자)
     name: str
     publicKey: str
 
 
 @router.post("/ssh-keys", status_code=201)
-def create_ssh_key(body: CreateSshKeyBody, db: Session = Depends(get_db)):
+def create_ssh_key(body: CreateSshKeyBody, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     """공개키 등록(생성/가져오기 공통). 개인키는 받지 않음."""
-    owner = body.owner.strip()
+    owner = user.username
     name = body.name.strip()
-    if not owner:
-        raise HTTPException(400, "owner가 필요합니다")
     if not name:
         raise HTTPException(400, "키 이름이 필요합니다")
     fp = _fingerprint(body.publicKey)
@@ -87,11 +86,11 @@ def create_ssh_key(body: CreateSshKeyBody, db: Session = Depends(get_db)):
 
 
 @router.delete("/ssh-keys/{key_id}", status_code=204)
-def delete_ssh_key(key_id: int, owner: str, db: Session = Depends(get_db)):
-    """내 키 삭제(owner 범위로 한정 — 남의 키 삭제 방지)."""
+def delete_ssh_key(key_id: int, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    """내 키 삭제(소유자 범위로 한정 — 남의 키 삭제 방지)."""
     res = db.execute(
         text("DELETE FROM iam_ssh_key WHERE id = :id AND owner = :o"),
-        {"id": key_id, "o": owner},
+        {"id": key_id, "o": user.username},
     )
     db.commit()
     if res.rowcount == 0:
