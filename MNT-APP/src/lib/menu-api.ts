@@ -9,7 +9,7 @@
  *
  * 실패 시 정적 nav.ts 로 폴백 — 백엔드가 없어도 목업은 기존대로 동작한다.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   Server,
@@ -135,4 +135,63 @@ export function useMenusFromCore(role: Role | undefined) {
     staleTime: 5 * 60 * 1000, // 메뉴는 자주 안 바뀜
     retry: 1,
   });
+}
+
+// ── 메뉴 관리(관리자, /settings) — mnu_menu 원장 CRUD ──
+export interface AdminMenu {
+  id: number;
+  parent_id: number | null;
+  menu_type: "section" | "menu" | "submenu";
+  code: string;
+  label: string;
+  path: string | null;
+  icon: string | null;
+  sort_order: number;
+  is_active: boolean;
+  roles: string[]; // ["admin","user"]
+}
+export interface AdminMenuInput {
+  parent_id?: number | null;
+  menu_type?: string;
+  code?: string;
+  label?: string;
+  path?: string | null;
+  icon?: string | null;
+  is_active?: boolean;
+  sort_order?: number;
+  roles?: string[];
+}
+const ADMIN_MENUS_KEY = ["core-menus-all"] as const;
+
+export function useAllMenus() {
+  return useQuery({
+    queryKey: ADMIN_MENUS_KEY,
+    queryFn: () => coreFetch<{ items: AdminMenu[] }>("/menus/all").then((d) => d.items),
+    staleTime: 30 * 1000,
+  });
+}
+function useMenuMutation<V>(fn: (v: V) => Promise<unknown>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ADMIN_MENUS_KEY });
+      qc.invalidateQueries({ queryKey: ["core-menus"] }); // 사이드바도 갱신
+    },
+  });
+}
+export function useCreateMenu() {
+  return useMenuMutation((body: AdminMenuInput) =>
+    coreFetch<{ id: number }>("/menus", { method: "POST", body: JSON.stringify(body) }));
+}
+export function useUpdateMenu() {
+  return useMenuMutation(({ id, body }: { id: number; body: AdminMenuInput }) =>
+    coreFetch<{ id: number }>(`/menus/${id}`, { method: "PATCH", body: JSON.stringify(body) }));
+}
+export function useDeleteMenu() {
+  return useMenuMutation((id: number) => coreFetch(`/menus/${id}`, { method: "DELETE" }));
+}
+export function useReorderMenus() {
+  return useMenuMutation((items: { id: number; sort_order: number }[]) =>
+    coreFetch(`/menus/reorder`, { method: "POST", body: JSON.stringify(items) }));
 }
