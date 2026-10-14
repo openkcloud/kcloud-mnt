@@ -169,7 +169,7 @@ gateway:
   # /auth/login 은 포털 화면(mnt-app). 관리 화면·master realm 은 keycloak.kcloud.etri 로만 접근.
   # 켜기 전: realm 의 Frontend URL = https://portal.kcloud.etri:25443/auth
   keycloak:
-    enabled: false # 개발 단계
+    enabled: true # 2026-10-14 테스트배드 로그인 연동 적용
     pathPrefix: /auth
     realm: openkcloud_realm
     service: keycloak-http.openkcloud-mnt.svc.cluster.local
