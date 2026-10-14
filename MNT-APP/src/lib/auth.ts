@@ -133,6 +133,7 @@ let channel: BroadcastChannel | null = null;
 
 async function endSession(reason: string, opts: { server?: boolean; broadcast?: boolean; message?: string } = {}) {
   if (useAuth.getState().status !== "authenticated") return;
+  if (opts.broadcast) channel?.postMessage({ type: "ended", reason }); // stopWatchers 가 채널을 닫기 전에 알린다
   stopWatchers();
   if (opts.server) {
     // 포털 세션 종료 기록 + Keycloak 세션 삭제(서버) — 그래서 Keycloak 화면으로 넘어가지 않고 이 자리에 안내한다
@@ -142,7 +143,6 @@ async function endSession(reason: string, opts: { server?: boolean; broadcast?: 
       });
     } catch {}
   }
-  if (opts.broadcast) channel?.postMessage({ type: "ended", reason });
   getKeycloak().clearToken();
   useAuth.setState({
     status: "ended", user: null,

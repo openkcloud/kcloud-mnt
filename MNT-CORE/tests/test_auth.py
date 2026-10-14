@@ -29,6 +29,12 @@ def test_만료된_토큰(client):
     assert r.status_code == 401 and r.json()["code"] == "TOKEN_EXPIRED"
 
 
+def test_발급_시각이_조금_미래여도_통과(client):
+    # Keycloak 시계가 몇 초 빠르면 막 받은 토큰의 iat 가 이 서버 시각보다 뒤다
+    t = make_token(iat=int(time.time()) + 5)
+    assert client.get("/api/core/menus", headers=bearer(t)).status_code == 200
+
+
 # ── 사용자 ────────────────────────────────────────────────────────
 
 def test_포털에_없는_사용자(client):
