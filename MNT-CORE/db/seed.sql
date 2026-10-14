@@ -109,6 +109,7 @@ FROM (VALUES
     ('cloud.paas',     'paas.services',   '서비스·인그레스',  '/paas/services',          'Globe',        30),
     ('cloud.paas',     'paas.storage',    '스토리지',         '/paas/storage',           'Database',     40),
     ('cloud.paas',     'paas.config',     '설정 관리',        '/paas/config',            'Boxes',        50),
+    ('cloud.paas',     'paas.templates',  '클러스터 템플릿',  '/paas/templates',         'Boxes',        60),
     -- AI 노트북 하위 (v2.1 C안: 업무 중심 한글 용어)
     ('aidev.notebook', 'aidev.workspace', '워크스페이스',     '/ai-development/profiles',       'BrainCircuit', 10),
     ('aidev.notebook', 'aidev.env',       '개발환경',         '/ai-development/notebooks',      'BrainCircuit', 20),
@@ -119,7 +120,9 @@ FROM (VALUES
     ('ops.iam',        'iam.users',       '사용자',           '/iam/users',              'ShieldCheck',  10),
     ('ops.iam',        'iam.roles',       '역할·권한',        '/iam/roles',              'ShieldCheck',  20),
     ('ops.iam',        'iam.apikeys',     'API Key',          '/iam/api-keys',           'ShieldCheck',  30),
-    ('ops.iam',        'iam.audit',       '감사 로그',        '/iam/audit',              'ShieldCheck',  40)
+    ('ops.iam',        'iam.audit',       '감사 로그',        '/iam/audit',              'ShieldCheck',  40),
+    -- 시스템 설정 하위
+    ('ops.settings',   'settings.menus',  '메뉴 관리',        '/settings/menus',         'Settings',     10)
 ) AS v(parent, code, label, path, icon, ord)
 JOIN mnu_menu p ON p.code = v.parent;
 
@@ -204,6 +207,7 @@ FROM (VALUES
     ('admin', 'paas.services',     NULL, NULL),
     ('admin', 'paas.storage',      NULL, NULL),
     ('admin', 'paas.config',       NULL, NULL),
+    ('admin', 'paas.templates',    NULL, NULL),
     ('admin', 'market.catalog',    NULL, NULL),
     ('admin', 'aidev.notebook',    NULL, NULL),
     ('admin', 'aidev.workspace',   NULL, NULL),
@@ -219,7 +223,8 @@ FROM (VALUES
     ('admin', 'iam.roles',         NULL, NULL),
     ('admin', 'iam.apikeys',       NULL, NULL),
     ('admin', 'iam.audit',         NULL, NULL),
-    ('admin', 'ops.settings',      NULL, NULL)
+    ('admin', 'ops.settings',      NULL, NULL),
+    ('admin', 'settings.menus',    NULL, NULL)
 ) AS v(role, code, ord, label_ov)
 JOIN iam_role r ON r.code = v.role
 JOIN mnu_menu m ON m.code = v.code;
