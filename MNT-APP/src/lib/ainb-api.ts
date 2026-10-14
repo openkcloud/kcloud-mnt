@@ -10,6 +10,7 @@
  * IDE 프록시(/notebook/*)가 세션 쿠키(okc_session)를 쓰므로 모든 호출에 credentials: "include".
  */
 import { useQuery } from "@tanstack/react-query";
+import { accessToken } from "@/lib/keycloak";
 
 const RAW = process.env.NEXT_PUBLIC_AINB_API;
 export const AINB_BASE = RAW ?? "";
@@ -65,16 +66,17 @@ export function useServing() {
 }
 
 /**
- * 포털 로그인(MNT-CORE) 성공 뒤 같은 계정으로 MNT-AINB 세션(HttpOnly 쿠키 okc_session)을 발급받는다.
- * MNT-AINB 가 MNT-CORE 로 계정을 다시 확인한다. IDE 프록시가 이 쿠키로 인증하므로,
- * 실패하면 IDE 접속만 제한된다 — 포털 로그인은 막지 않고 기록만 남긴다.
+ * 포털 로그인(Keycloak) 성공 뒤 MNT-AINB 세션(HttpOnly 쿠키 okc_session)을 발급받는다.
+ * Keycloak 액세스 토큰을 Bearer 로 넘기면 MNT-AINB 가 MNT-CORE /auth/me 로 신원·역할을 확인한다.
+ * IDE 프록시가 이 쿠키로 인증하므로, 실패하면 IDE 접속만 제한된다 — 포털 로그인은 막지 않고 기록만 남긴다.
  */
-export async function ainbLogin(username: string, password: string): Promise<void> {
+export async function ainbLogin(): Promise<void> {
   try {
+    const token = await accessToken();
+    if (!token) return;
     const res = await ainbFetch("/auth/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) console.warn(`[MNT-AINB] 로그인 실패 (${res.status}) — AI 노트북 개발환경(IDE) 접속이 제한됩니다`);
   } catch (e) {

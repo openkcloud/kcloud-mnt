@@ -63,6 +63,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { IaasNetwork } from "@/lib/types";
 import { useAuth } from "@/lib/auth";
+import { ApiError } from "@/lib/http";
 import RoutersPage from "../routers/page";
 import SecurityGroupsPage from "../security-groups/page";
 
@@ -365,7 +366,7 @@ function CreateNetworkDialog({
 
 function NetworkDetailPanel({ network, projectLabel, onClose }: { network: IaasNetwork; projectLabel: string; onClose: () => void }) {
   const isAdmin = useAuth((s) => s.user?.role === "admin");
-  const { data: detail, isLoading, isError } = useNetwork(network.id);
+  const { data: detail, isLoading, isError, error } = useNetwork(network.id);
   const [addSubnetOpen, setAddSubnetOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [sgEditId, setSgEditId] = React.useState<string | undefined>();
@@ -405,7 +406,12 @@ function NetworkDetailPanel({ network, projectLabel, onClose }: { network: IaasN
             <Loader2 className="size-4 animate-spin" /> Neutron 상세 조회 중…
           </div>
         ) : isError || !detail ? (
-          <div className="p-6 text-sm text-rose-600">네트워크 상세 조회 실패 (OpenStack 연결 확인)</div>
+          <div className="p-6 text-sm text-rose-600">
+            {/* 사용자가 공유·외부망(다른 프로젝트 포트가 보임) 상세를 열면 서버가 403 */}
+            {error instanceof ApiError && error.status === 403
+              ? "관리자만 볼 수 있는 네트워크입니다."
+              : "네트워크 상세 조회 실패 (OpenStack 연결 확인)"}
+          </div>
         ) : (
           <>
         {/* Quick info */}

@@ -20,6 +20,9 @@ services:
       KC_DB_POOL_MAX_SIZE: "20"                 # 기본 100 = PostgreSQL max_connections(100) 와 같아 줄인다
       KC_BOOTSTRAP_ADMIN_USERNAME: admin        # 첫 관리자(임시) — 로그인 후 영구 관리자를 만들고 지운다
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?.env 의 KC_ADMIN_PASSWORD 를 채우세요}
+    volumes:
+      # 로그인 테마(테스트베드는 이 테마를 넣은 이미지). 테마 파일을 바꾸면 docker compose restart
+      - ../keycloak-theme/openkcloud:/opt/keycloak/themes/openkcloud:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"     # colima 등 이 이름이 기본으로 없는 런타임용
     ports:

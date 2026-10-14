@@ -55,13 +55,12 @@ VirtualService openkcloud-portal-temporal-ui   https://temporal.kcloud.etri → 
 
 1. **DB 준비(슈퍼유저, 1회)** — `db/temporal_schema.sql` 의 비밀번호를 채워 적용
    (계정 `temporal`·`temporal_view`, 스키마, `btree_gin` 확장)
-2. **배포(시크릿 함께 생성)** — 1번 비밀번호를 넘기면 차트가 `mnt-workflow-secret` 을 만든다
+2. **배포(시크릿 함께 생성)** — 1번 비밀번호를 `charts/openkcloud-portal/values.yaml` 의 `workflow.dbPassword` 에 적어 커밋하면
+   포털 배포 때 차트가 `mnt-workflow-secret` 을 만든다(`docs/포털_배포_가이드.md` 1장 (6))
    ```bash
-   helm upgrade --install openkcloud-portal charts/openkcloud-portal -n openkcloud-mnt \
-     --set-string workflow.dbPassword='<1번 비밀번호>'
+   helm upgrade --install openkcloud-portal charts/openkcloud-portal -n openkcloud-mnt --set global.image.tag=<태그>
    ```
-   - 처음 배포·비밀번호 변경 때만 붙이고, 평소 재배포에는 빼도 시크릿이 유지된다(`helm.sh/resource-policy: keep`).
-   - 직접 만들려면 `charts/openkcloud-portal/secrets.example.yaml` 의 `mnt-workflow-secret` 을 apply 하고 `dbPassword` 는 넘기지 않는다.
+   - 비워 두면 클러스터에 있는 기존 시크릿 값을 그대로 쓴다. 값을 바꾸면 mnt-workflow 파드가 다시 시작된다.
 3. **확인**
    ```bash
    kubectl -n openkcloud-mnt get pod -l app=mnt-workflow          # 2/2 Running

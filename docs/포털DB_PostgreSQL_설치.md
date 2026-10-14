@@ -196,7 +196,7 @@ Keycloak 은 포털 DB 와 섞지 않고 **전용 DB `keycloak`** 안의 **스�
 | 테이블 | 26.7.4 기준 스키마 `keycloak` 에 100개 (Keycloak 이 처음 기동할 때 생성) |
 | Keycloak 접속 설정 | `KC_DB_URL_HOST=openkcloud-db-rw.openkcloud-mnt.svc.cluster.local`, `KC_DB_URL_DATABASE=keycloak`, `KC_DB_USERNAME=keycloak` |
 
-- 준비 SQL(슈퍼유저, `postgres` DB 에 접속해 1회): `infra/keycloak-dev/keycloak_db.sql` — 계정·DB·스키마. 개발 서버(Mac Mini)도 같은 SQL 로 같은 구조를 만든다.
+- 준비 SQL(슈퍼유저, `postgres` DB 에 접속해 1회): `charts/infra/keycloak-dev/keycloak_db.sql` — 계정·DB·스키마. 개발 서버(Mac Mini)도 같은 SQL 로 같은 구조를 만든다.
   - 개발 서버 PostgreSQL 은 기본 정렬이 `en_US.UTF-8` 이라 SQL 에서 `C` 를 지정한다(`TEMPLATE template0`).
 
 확인(테스트배드·개발 같은 결과여야 함):

@@ -297,7 +297,6 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
     // 이름·스펙·이미지 정보는 서버가 라이브 조회로 다시 확인해 저장한다 — 화면은 식별자만 보낸다
     createTicket.mutate(
       {
-        requestedBy: user?.username ?? "",
         projectId: proj.id,
         vmName,
         networkType: network,

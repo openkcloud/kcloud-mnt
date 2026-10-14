@@ -716,11 +716,11 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
   req: ResourceRequest | null; open: boolean; onClose: () => void; canRetry?: boolean;
 }) {
   const qc = useQueryClient();
-  const user = useAuth((s) => s.user);
   const { data } = useTicketSteps(open ? req?.id : undefined);
   const isWs = req?.type === "ai-workspace";
   const retry = useProvisionTicket();
   const retryWs = useProvisionAiWorkspaceTicket();
+  const user = useAuth((s) => s.user);
   const retrying = isWs ? retryWs : retry;
   const steps = data?.items ?? [];
   // 재시도 직후 새 기록을 받기 전에는 '생성 중'으로 본다(진행 기록을 비웠으므로 이전 실패 화면을 보여 주지 않는다)
@@ -766,7 +766,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
     }
     if (!req?.provisionSpec) return;
     retry.mutate(
-      { id: req.id, processedBy: user?.username ?? "", expectedStatus: "failed", provisionSpec: toProvisionBody(req.provisionSpec) },
+      { id: req.id, expectedStatus: "failed", provisionSpec: toProvisionBody(req.provisionSpec) },
       {
         onSuccess: () => toast.success("재시도를 시작했습니다", { description: "새 회차로 처음부터 진행합니다" }),
         onError: (e) => toast.error("재시도하지 못했습니다", {
@@ -912,7 +912,6 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
 
 // ─────────── 관리자 뷰 ───────────
 function AdminView() {
-  const reviewer = useAuth((s) => s.user);
   const [statusFilter, setStatusFilter] = React.useState("all");
   const [typeFilter, setTypeFilter] = React.useState("all");
   const [orgFilter, setOrgFilter] = React.useState("all");
@@ -929,6 +928,7 @@ function AdminView() {
   const reviewMutation = useReviewTicket();
   const provisionMutation = useProvisionTicket();
   const provisionWsMutation = useProvisionAiWorkspaceTicket();
+  const user = useAuth((s) => s.user);
 
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
@@ -970,7 +970,6 @@ function AdminView() {
       await reviewMutation.mutateAsync({
         id: r.id,
         action,
-        processedBy: reviewer?.username ?? "",
         reason: action === "reject" ? rejectReason.trim() : undefined,
         expectedStatus: r.status,
       });
@@ -996,13 +995,12 @@ function AdminView() {
       const started = isWs
         ? await provisionWsMutation.mutateAsync({
             id: r.id,
-            processedBy: reviewer?.username ?? "",
+            processedBy: user?.username ?? "",
             expectedStatus: r.status,
             ...limitsBody(wsLimits!),
           })
         : await provisionMutation.mutateAsync({
             id: r.id,
-            processedBy: reviewer?.username ?? "",
             expectedStatus: r.status,
             provisionSpec: toProvisionBody(spec!),
           });
@@ -1283,8 +1281,8 @@ function UserView({ username }: { username: string }) {
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
 
-  // 내 신청 = MNT-CORE 실제 티켓 (목업 폴백 없음)
-  const filters: Record<string, string> = { requestedBy: username };
+  // 내 신청 = MNT-CORE 실제 티켓 (목업 폴백 없음). 신청자는 서버가 토큰으로 정한다
+  const filters: Record<string, string> = {};
   if (statusFilter !== "all") filters.status = statusFilter;
   const { data, isLoading, error } = useTickets(filters, !!username);
 

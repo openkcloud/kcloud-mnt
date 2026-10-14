@@ -4,25 +4,7 @@
 {{- $w := .Values.workflow -}}
 {{- $root := . -}}
 {{- $svc := printf "mnt-workflow.%s.svc.cluster.local" $g.namespace -}}
-{{- if $w.dbPassword }}
----
-# DB 비밀번호 시크릿 — 배포 때 --set-string workflow.dbPassword 로 넘긴 경우에만 만든다.
-# keep: 이후 평소 재배포에서 값을 빼도(시크릿이 렌더링되지 않아도) 지우지 않는다. 다시 값을 넘기면 갱신된다.
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ $w.secretName }}
-  namespace: {{ $g.namespace }}
-  labels:
-    app: mnt-workflow
-    {{- include "okc.labels" $root | nindent 4 }}
-  annotations:
-    helm.sh/resource-policy: keep
-type: Opaque
-stringData:
-  POSTGRES_PWD: {{ $w.dbPassword | quote }}
-  VISIBILITY_POSTGRES_PWD: {{ $w.dbPassword | quote }}
-{{- end }}
+{{- /* DB 비밀번호 시크릿(mnt-workflow-secret)은 secrets.yaml */}}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -72,6 +54,7 @@ spec:
       annotations:
         # Istio 사이드카가 주입돼도 initContainer(스키마)의 DB 연결이 막히지 않게
         traffic.sidecar.istio.io/excludeOutboundPorts: {{ $w.env.DB_PORT | quote }}
+        checksum/secret: {{ include (print $root.Template.BasePath "/secrets.yaml") $root | sha256sum }}  # 시크릿이 바뀌면 다시 시작
     spec:
       {{- with $g.imagePullSecrets }}
       imagePullSecrets:

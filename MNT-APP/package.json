@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev --webpack",
     "build": "next build --webpack",
-    "build:gateway": "NEXT_PUBLIC_IAAS_API= NEXT_PUBLIC_CORE_API= NEXT_PUBLIC_OBS_API= NEXT_PUBLIC_PAAS_API= NEXT_PUBLIC_AINB_API= next build --webpack",
+    "build:gateway": "NEXT_PUBLIC_IAAS_API= NEXT_PUBLIC_CORE_API= NEXT_PUBLIC_OBS_API= NEXT_PUBLIC_PAAS_API= NEXT_PUBLIC_AINB_API= NEXT_PUBLIC_KEYCLOAK_URL= next build --webpack",
     "start": "next start",
     "lint": "eslint"
   },
@@ -32,6 +32,7 @@
     "cmdk": "^1.1.1",
     "date-fns": "^4.4.0",
     "jose": "^6.2.3",
+    "keycloak-js": "^26.2.4",
     "lucide-react": "^1.17.0",
     "next": "16.2.6",
     "next-themes": "^0.4.6",

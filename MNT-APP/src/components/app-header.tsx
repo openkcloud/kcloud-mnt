@@ -1,6 +1,6 @@
 "use client";
 import * as React from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { Bell, ChevronDown, LogOut, Search, Settings, UserRound } from "lucide-react";
 import { useAuth, roleLabel } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -40,14 +40,14 @@ function findCrumbs(pathname: string, role: Role | undefined) {
 }
 
 export function AppHeader() {
-  const router = useRouter();
   const pathname = usePathname();
-  const { user, logout } = useAuth();
+  const user = useAuth((s) => s.user);
+  const logout = useAuth((s) => s.logout);
   const crumbs = findCrumbs(pathname, user?.role);
 
+  // 로그아웃 — 서버가 포털·Keycloak 세션을 끝내고, 이 탭은 그 자리에서 안내 화면(레이아웃)으로 바뀐다
   function handleLogout() {
-    logout();
-    router.push("/login");
+    void logout();
   }
 
   return (

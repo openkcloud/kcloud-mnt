@@ -5,8 +5,7 @@ openKcloud 포털 배포됨 — ns {{ .Values.global.namespace }}
        kubectl -n {{ .Values.global.namespace }} create secret docker-registry harbor-pull \
          --docker-server={{ .Values.global.image.registry }} \
          --docker-username=<user> --docker-password=<pass>
-   - 앱 시크릿(secrets.example.yaml 복사 후 실제 값):
-       kubectl -n {{ .Values.global.namespace }} apply -f <작성한 secret>.yaml
+   - 앱 시크릿: 이 차트가 만든다(values.yaml 의 secrets·workflow.dbPassword, 비우면 기존 값 유지)
    - DB 스키마(1회): MNT-CORE/db/ddl.sql + seed.sql 을 CNPG 에 적용
        (docs/포털DB_PostgreSQL_설치.md 참고)
 
