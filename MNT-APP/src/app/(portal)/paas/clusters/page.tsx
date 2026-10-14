@@ -23,6 +23,8 @@ import {
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useProjects, useFlavors } from "@/lib/iaas-api";
 import { useClusters, useCluster, kubeconfigUrl, type ClusterSummary } from "@/lib/paas-api";
+import { useAuth } from "@/lib/auth";
+import { useMyProjectIds } from "@/lib/member-api";
 
 /** Magnum 상태 → 배지 톤. *_IN_PROGRESS 는 진행 중(폴링 대상). */
 function stVariant(s: string): "success" | "warning" | "destructive" | "secondary" {
@@ -41,6 +43,9 @@ function fmtDateTime(iso?: string | null) {
 }
 
 export default function ClustersPage() {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
+  const myUsername = useAuth((s) => s.user?.username);
+  const { data: myProjectIds } = useMyProjectIds(isAdmin ? undefined : myUsername);
   const clusters = useClusters();
   const projects = useProjects();
   const flavors = useFlavors();
@@ -61,14 +66,20 @@ export default function ClustersPage() {
     return m;
   }, [flavors.data]);
 
+  // 내가 볼 수 있는 클러스터 = 관리자 전체 / 사용자는 내 프로젝트 멤버십에 속한 것만
+  const visible = React.useMemo(
+    () => (clusters.data ?? []).filter((c) => isAdmin || myProjectIds?.has(c.projectId)),
+    [clusters.data, isAdmin, myProjectIds],
+  );
+
   const projOptions = React.useMemo(() => {
-    const ids = Array.from(new Set((clusters.data ?? []).map((c) => c.projectId).filter(Boolean)));
+    const ids = Array.from(new Set(visible.map((c) => c.projectId).filter(Boolean)));
     return ids.map((id) => ({ id, name: projName(id) })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [clusters.data, projName]);
+  }, [visible, projName]);
 
   if (clusters.isLoading) return <Skeleton className="h-96" />;
 
-  const items = (clusters.data ?? []).filter(
+  const items = visible.filter(
     (c) =>
       (!q || c.name.toLowerCase().includes(q.toLowerCase())) &&
       (projFilter === "all" || c.projectId === projFilter),
