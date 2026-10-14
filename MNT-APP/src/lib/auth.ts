@@ -13,6 +13,7 @@ import { CORE_BASE } from "@/lib/menu-api";
 import { clearTokens, getKeycloak, initKeycloak, logoutRedirect } from "@/lib/keycloak";
 import { authFetch, readError, setAuthFailureHandler } from "@/lib/http";
 import { getNavByRole, type NavItem } from "@/lib/nav";
+import { ainbLogin, ainbLogout } from "@/lib/ainb-api";
 
 export type Role = "admin" | "user";
 
@@ -124,6 +125,7 @@ export function ensureAuth(): Promise<void> {
         role: me.role, projects: me.projectIds,
       },
     });
+    void ainbLogin(); // AI 노트북 IDE 프록시용 세션 쿠키 발급(Keycloak 토큰 → MNT-AINB). 실패해도 포털 로그인엔 영향 없음
     startWatchers();
   })();
   return started;
@@ -151,6 +153,7 @@ async function endSession(
     } catch {}
   }
   clearTokens();
+  ainbLogout(); // AI 노트북 세션 쿠키도 정리 — redirect 로그아웃 경로에서도 먼저 지운다
   if (opts.redirect) {
     void logoutRedirect(opts.redirect);
     return;

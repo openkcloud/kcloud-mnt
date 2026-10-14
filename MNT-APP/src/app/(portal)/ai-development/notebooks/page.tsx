@@ -1,8 +1,8 @@
 "use client";
+import { toast } from "sonner";
 import * as React from "react";
 import Link from "next/link";
 import {
-  TerminalSquare,
   Cpu,
   Clock,
   Play,
@@ -14,9 +14,9 @@ import {
   BookOpen,
   Code2,
   Container,
-  HardDrive,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { ainbFetch, useNotebooks } from "@/lib/ainb-api";
+import { useProjectContext } from "@/lib/project-context";
 import {
   Card,
   CardContent,
@@ -28,13 +28,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -53,31 +46,103 @@ import {
 import { MoreHorizontal } from "lucide-react";
 import { cn, relativeTime } from "@/lib/utils";
 import type { KFNotebook } from "@/lib/types";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { notebookAction } from "@/lib/notebook-api";
+import { NotebookCreateDialog, type NotebookPreset } from "@/components/notebook-create-dialog";
+import { SnapshotDialog, ResizeDialog } from "@/components/notebook-manage-dialogs";
+
+/** 볼륨 칸 — 총 용량 + 실사용량(du 실측, 60초 갱신, Running일 때만) */
+function VolumeCell({ id, storageGb, running }: { id: string; storageGb: number; running: boolean }) {
+  const { data } = useQuery({
+    queryKey: ["nb-volume", id],
+    queryFn: async () => {
+      const res = await ainbFetch(`/notebooks/${id}/volume`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return (await res.json()) as { usedHuman: string | null; usedPercent: number | null };
+    },
+    enabled: running && storageGb > 0,
+    refetchInterval: 60000,
+    staleTime: 55000,
+  });
+  if (storageGb <= 0) return <span className="text-muted-foreground">—</span>;
+  return (
+    <span>
+      {storageGb} GiB
+      {data?.usedHuman != null && (
+        <span
+          className={cn(
+            "ml-1 text-[10px]",
+            (data.usedPercent ?? 0) >= 90 ? "text-rose-600" : "text-muted-foreground",
+          )}
+        >
+          · {data.usedHuman} 사용
+          {data.usedPercent != null && ` (${data.usedPercent}%)`}
+        </span>
+      )}
+    </span>
+  );
+}
 
 export default function NotebooksPage() {
   const [q, setQ] = React.useState("");
-  const [ns, setNs] = React.useState("all");
-  const { data, isLoading } = api.kubeflow.notebooks() as {
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [preset, setPreset] = React.useState<NotebookPreset | undefined>();
+  const [snapOpen, setSnapOpen] = React.useState(false);
+  const [resizeOpen, setResizeOpen] = React.useState(false);
+  const [target, setTarget] = React.useState<KFNotebook | null>(null);
+  const qc = useQueryClient();
+  // 네임스페이스 = 위에서 고른 프로젝트 (화면별 네임스페이스 선택은 두지 않는다)
+  // 새 노트북은 지금 프로젝트에 만든다. 전체 보기면 볼 수 있는 워크스페이스 중에서 고른다
+  const { match, label, isAll, choices } = useProjectContext();
+  const { data, isLoading } = useNotebooks() as {
     data: { items: KFNotebook[] } | undefined;
     isLoading: boolean;
   };
 
+  async function act(nb: KFNotebook, action: "start" | "stop" | "delete") {
+    let keepVolume = false;
+    if (action === "delete") {
+      const hasVolume = nb.storageGb > 0;
+      if (!hasVolume) {
+        if (!window.confirm(`"${nb.name}" 노트북을 삭제할까요?\n\n이 노트북에는 볼륨이 없어 저장된 작업 파일이 없습니다.`)) return;
+      } else {
+        if (!window.confirm(`"${nb.name}" 노트북을 삭제합니다.\n\n데이터 볼륨(${nb.storageGb}GB) 처리는 다음 단계에서 선택합니다.`)) return;
+        // 볼륨을 남기면 워크스페이스 몫을 계속 차지한다 — 쌓이면 새 노트북을
+        // 만들 수 없게 되므로, 남길지 지울지 반드시 사용자가 고르게 한다
+        keepVolume = window.confirm(
+          `데이터 볼륨(${nb.storageGb}GB)을 남겨둘까요?\n\n[확인] 볼륨 유지 — 같은 이름으로 다시 만들면 작업 파일이 복구됩니다. 단, 워크스페이스 저장 몫(${nb.storageGb}GB)을 계속 차지합니다.\n[취소] 볼륨까지 완전 삭제 — 작업 파일이 사라지고 저장 몫이 반환됩니다.`,
+        );
+      }
+    }
+    try {
+      await notebookAction(nb.id, action, { keepVolume });
+      toast.success(`"${nb.name}" ${action === "start" ? "시작" : action === "stop" ? "정지" : "삭제"} 요청 완료`);
+      qc.invalidateQueries({ queryKey: ["kf", "notebooks"] });
+    } catch (e) {
+      toast.error(`요청 실패: ${(e as Error).message}`);
+    }
+  }
+
   if (isLoading || !data) return <Skeleton className="h-96" />;
-  const items = data.items.filter(
-    (n) =>
-      (!q || n.name.toLowerCase().includes(q.toLowerCase())) &&
-      (ns === "all" || n.namespace === ns),
-  );
-  const namespaces = Array.from(new Set(data.items.map((n) => n.namespace)));
+  const mine = data.items.filter((n) => match(n.namespace));
+  const items = mine.filter((n) => !q || n.name.toLowerCase().includes(q.toLowerCase()));
 
   const counts = {
-    running: data.items.filter((n) => n.status === "Running").length,
-    starting: data.items.filter((n) => n.status === "Starting").length,
-    stopped: data.items.filter((n) => n.status === "Stopped").length,
+    running: mine.filter((n) => n.status === "Running").length,
+    starting: mine.filter((n) => n.status === "Starting").length,
+    stopped: mine.filter((n) => n.status === "Stopped").length,
   };
 
   return (
     <div className="space-y-4">
+      <NotebookCreateDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        namespaces={choices}
+        preset={preset}
+      />
+      <SnapshotDialog nb={target} open={snapOpen} onOpenChange={setSnapOpen} />
+      <ResizeDialog nb={target} open={resizeOpen} onOpenChange={setResizeOpen} />
       {/* Quick stats — Kubeflow style */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatChip label="실행 중" value={counts.running} accent="mint" hint="활성 서버" />
@@ -85,7 +150,7 @@ export default function NotebooksPage() {
         <StatChip label="정지" value={counts.stopped} accent="slate" hint="유휴" />
         <StatChip
           label="총 가속기 할당"
-          value={data.items.reduce((s, n) => s + n.acceleratorCount, 0)}
+          value={mine.reduce((s, n) => s + n.acceleratorCount, 0)}
           accent="indigo"
           hint="GPU·NPU·PIM"
         />
@@ -103,19 +168,9 @@ export default function NotebooksPage() {
               className="w-56 pl-9"
             />
           </div>
-          <Select value={ns} onValueChange={setNs}>
-            <SelectTrigger className="w-48">
-              <SelectValue placeholder="네임스페이스" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">전체 네임스페이스</SelectItem>
-              {namespaces.map((n) => (
-                <SelectItem key={n} value={n}>
-                  {n}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Badge variant="outline" className="h-9 gap-1.5 px-3 text-xs font-normal" title="위의 프로젝트 선택을 따른다">
+            네임스페이스 <span className="font-mono font-semibold">{isAll ? "전체" : label}</span>
+          </Badge>
           <span className="ml-auto text-xs text-muted-foreground">{items.length}개 서버</span>
         </div>
       </Card>
@@ -141,7 +196,7 @@ export default function NotebooksPage() {
               <TableRow key={nb.id}>
                 <TableCell>
                   <Link
-                    href={`/ai-development/notebooks/${nb.id}`}
+                    href={`/ai-development/notebooks/detail/?id=${encodeURIComponent(nb.id)}`}
                     className="flex items-center gap-2 hover:text-primary"
                   >
                     <ImageIcon image={nb.image} />
@@ -171,7 +226,7 @@ export default function NotebooksPage() {
                   )}
                 </TableCell>
                 <TableCell className="font-mono text-xs tabular-nums">
-                  {nb.storageGb} GiB
+                  <VolumeCell id={nb.id} storageGb={nb.storageGb} running={nb.status === "Running"} />
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
                   <span className="inline-flex items-center gap-1">
@@ -180,24 +235,29 @@ export default function NotebooksPage() {
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={nb.status} />
+                  {(nb as KFNotebook & { statusReason?: string }).statusReason && (
+                    <div className="mt-1 max-w-52 text-[10px] leading-snug text-amber-700">
+                      {(nb as KFNotebook & { statusReason?: string }).statusReason}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-1">
                     {nb.status === "Running" ? (
                       <>
                         <Button size="sm" variant="outline" asChild>
-                          <Link href={`/ai-development/notebooks/${nb.id}`}>
+                          <Link href={`/ai-development/notebooks/detail/?id=${encodeURIComponent(nb.id)}`}>
                             상세
                           </Link>
                         </Button>
                         <Button size="sm" asChild>
-                          <Link href={`/notebooks/${nb.id}/ide`}>
+                          <a href={`/notebooks/ide/?id=${encodeURIComponent(nb.id)}`} target="_blank" rel="noopener noreferrer">
                             연결 <ExternalLink className="size-3" />
-                          </Link>
+                          </a>
                         </Button>
                       </>
                     ) : nb.status === "Stopped" ? (
-                      <Button size="sm" variant="outline">
+                      <Button size="sm" variant="outline" onClick={() => act(nb, "start")}>
                         <Play className="size-3" /> 시작
                       </Button>
                     ) : (
@@ -212,13 +272,17 @@ export default function NotebooksPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => act(nb, "stop")}>
                           <Square className="size-4" /> 정지
                         </DropdownMenuItem>
-                        <DropdownMenuItem>볼륨 스냅샷</DropdownMenuItem>
-                        <DropdownMenuItem>리소스 변경</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setTarget(nb); setSnapOpen(true); }}>
+                          볼륨 스냅샷
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setTarget(nb); setResizeOpen(true); }}>
+                          리소스 변경
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-rose-600">
+                        <DropdownMenuItem className="text-rose-600" onClick={() => act(nb, "delete")}>
                           <Trash2 className="size-4" /> 삭제
                         </DropdownMenuItem>
                       </DropdownMenuContent>
@@ -246,11 +310,18 @@ export default function NotebooksPage() {
             {IMAGE_CATALOG.map((tpl) => (
               <button
                 key={tpl.name}
+                disabled={!tpl.preset}
+                onClick={() => {
+                  if (!tpl.preset) return;
+                  setPreset(tpl.preset);
+                  setCreateOpen(true);
+                }}
                 className={cn(
                   "group flex items-start gap-3 rounded-xl border border-border bg-card p-4 text-left transition-colors",
-                  "hover:border-primary/40 hover:bg-secondary/30",
-                )}
-              >
+                  tpl.preset
+                    ? "hover:border-primary/40 hover:bg-secondary/30"
+                    : "cursor-not-allowed opacity-55",
+                )}>
                 <div
                   className={cn(
                     "flex size-10 shrink-0 items-center justify-center rounded-lg",
@@ -264,6 +335,11 @@ export default function NotebooksPage() {
                     <div className="font-semibold leading-tight">{tpl.name}</div>
                     {tpl.recommended && (
                       <Badge variant="success" className="text-[10px]">권장</Badge>
+                    )}
+                    {!tpl.preset && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        {tpl.unavailableNote ?? "하드웨어 도입 후 제공"}
+                      </Badge>
                     )}
                   </div>
                   <div className="text-xs text-muted-foreground">{tpl.description}</div>
@@ -347,6 +423,10 @@ const IMAGE_CATALOG: {
   icon: React.ComponentType<{ className?: string }>;
   color: string;
   recommended?: boolean;
+  /** 실제 생성 가능한 템플릿 프리셋 — 없으면 해당 가속기 하드웨어 미도입 */
+  preset?: NotebookPreset;
+  /** 미제공 사유 배지 문구 */
+  unavailableNote?: string;
 }[] = [
   {
     name: "Kubeflow Code Server (Python)",
@@ -355,6 +435,7 @@ const IMAGE_CATALOG: {
     icon: Code2,
     color: "bg-sky-100 text-sky-700",
     recommended: true,
+    preset: { template: "codeserver", cpu: "2", memoryGi: 4, gpu: 0, storageGb: 10 },
   },
   {
     name: "Kubeflow Notebook (NB)",
@@ -362,6 +443,7 @@ const IMAGE_CATALOG: {
     tags: ["Python 3.11", "Notebook", "interactive"],
     icon: BookOpen,
     color: "bg-brand-indigo-100 text-brand-indigo-700",
+    preset: { template: "jupyter", cpu: "2", memoryGi: 4, gpu: 0, storageGb: 10 },
   },
   {
     name: "RBLN ATOM SDK",
@@ -369,6 +451,7 @@ const IMAGE_CATALOG: {
     tags: ["rbln-sdk 1.4.0", "PyTorch", "ATOM"],
     icon: Cpu,
     color: "bg-brand-mint-50 text-brand-mint-700",
+    unavailableNote: "ATOM NPU 도입 후 제공",
   },
   {
     name: "RBLN REBEL Quad SDK",
@@ -376,6 +459,7 @@ const IMAGE_CATALOG: {
     tags: ["rbln-sdk 1.4.0", "vLLM", "REBEL"],
     icon: Cpu,
     color: "bg-brand-mint-50 text-brand-mint-700",
+    unavailableNote: "REBEL NPU 도입 후 제공",
   },
   {
     name: "CUDA 12.4 Training",
@@ -383,6 +467,7 @@ const IMAGE_CATALOG: {
     tags: ["CUDA 12.4", "DeepSpeed", "PyTorch 2.5"],
     icon: Cpu,
     color: "bg-brand-indigo-100 text-brand-indigo-700",
+    preset: { template: "cuda", cpu: "4", memoryGi: 8, gpu: 1, storageGb: 50 },
   },
   {
     name: "PIM 실험 환경",
@@ -390,5 +475,6 @@ const IMAGE_CATALOG: {
     tags: ["pim-sdk 0.7", "beta", "GEMV"],
     icon: Cpu,
     color: "bg-rose-100 text-rose-700",
+    unavailableNote: "HBM-PIM 도입 후 제공",
   },
 ];
