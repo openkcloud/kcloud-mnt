@@ -5,9 +5,10 @@
 import json as _json
 import math
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..auth import Caller, caller, ensure_project, project_member, require_admin, scoped
 from ..config import settings
 from ..openstack_client import get_conn
 
@@ -56,17 +57,20 @@ def _to_image(i: dict) -> dict:
     }
 
 
+_PUBLIC = ("public", "community")  # 모든 프로젝트가 쓰는 이미지
+
+
 @router.get("/images")
-def list_images():
+def list_images(c: Caller = Depends(caller)):
+    """이미지 목록 — 사용자는 공개 이미지 + 소속 프로젝트 소유 이미지."""
     try:
         d = _glance_req("GET", "/images", params={"limit": 200}).json()
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"이미지 조회 실패: {e}")
-    items = [_to_image(i) for i in d.get("images", [])]
-    return {"items": items, "count": len(items)}
+    return scoped(c, [_to_image(i) for i in d.get("images", [])], also=lambda x: x["visibility"] in _PUBLIC)
 
 
-@router.get("/projects/{project_id}/images")
+@router.get("/projects/{project_id}/images", dependencies=[Depends(project_member)])
 def list_project_images(project_id: str):
     """프로젝트가 쓸 수 있는 active 이미지 — public + 프로젝트 소유 + 공유받은 것(거절 제외). 자원신청 템플릿용.
     서비스 계정이 관리자라 Glance 가 전체를 돌려주므로 여기서 거른다.
@@ -94,19 +98,22 @@ def list_project_images(project_id: str):
 
 
 @router.get("/images/{image_id}")
-def get_image(image_id: str):
+def get_image(image_id: str, c: Caller = Depends(caller)):
     try:
         i = _glance_req("GET", f"/images/{image_id}").json()
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"이미지 상세 조회 실패: {e}")
-    return _to_image(i)
+    d = _to_image(i)
+    if d["visibility"] not in _PUBLIC:
+        ensure_project(c, d["tenantId"])
+    return d
 
 
 class VisibilityBody(BaseModel):
     visibility: str  # public | private | shared | community
 
 
-@router.patch("/images/{image_id}")
+@router.patch("/images/{image_id}", dependencies=[Depends(require_admin)])
 def set_visibility(image_id: str, body: VisibilityBody):
     """이미지 가시성 변경(Glance JSON-Patch)."""
     if body.visibility not in ("public", "private", "shared", "community"):
@@ -123,7 +130,7 @@ def set_visibility(image_id: str, body: VisibilityBody):
     return get_image(image_id)
 
 
-@router.delete("/images/{image_id}", status_code=204)
+@router.delete("/images/{image_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_image(image_id: str):
     try:
         _glance_req("DELETE", f"/images/{image_id}")
