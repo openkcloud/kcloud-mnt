@@ -65,10 +65,19 @@ backends:
     image: mnt-paas
     port: 8000
     replicas: 1
+    secretName: mnt-paas-secret       # OS_USERNAME / OS_PASSWORD 제공 (mnt-iaas-secret 과 동일 값)
     env:
       SERVICE_NAME: mnt-paas
       API_PREFIX: /api/paas
       CORS_ORIGINS: ""
+      # OpenStack(Magnum) — MNT-IAAS 와 동일 규칙: 클러스터 내부는 ingressgateway 443
+      OS_AUTH_URL: https://keystone-api.openstack.internal/v3
+      OS_PROJECT_NAME: admin
+      OS_USER_DOMAIN_NAME: Default
+      OS_PROJECT_DOMAIN_NAME: Default
+      OS_INSECURE: "true"
+      OS_ENDPOINT_MODE: override
+      OS_ENDPOINT_TEMPLATE: "https://{service}-api.openstack.internal"
 
   obs:
     image: mnt-obs

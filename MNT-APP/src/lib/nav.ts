@@ -101,6 +101,7 @@ const SECTION_CLOUD: NavSection = {
         { label: "서비스·인그레스", href: "/paas/services", icon: Globe },
         { label: "스토리지", href: "/paas/storage", icon: Database },
         { label: "설정 관리", href: "/paas/config", icon: Boxes },
+        { label: "클러스터 템플릿", href: "/paas/templates", icon: Boxes, roles: ["admin"] as Role[] },
       ],
     },
   ],
@@ -161,7 +162,14 @@ const SECTION_OPS: NavSection = {
         { label: "감사 로그", href: "/iam/audit", icon: ShieldCheck },
       ],
     },
-    { label: "시스템 설정", href: "/settings", icon: Settings },
+    {
+      label: "시스템 설정",
+      href: "/settings",
+      icon: Settings,
+      children: [
+        { label: "메뉴 관리", href: "/settings/menus", icon: Settings, roles: ["admin"] as Role[] },
+      ],
+    },
   ],
 };
 

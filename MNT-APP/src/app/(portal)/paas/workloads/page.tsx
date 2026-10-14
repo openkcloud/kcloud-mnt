@@ -1,197 +1,118 @@
 "use client";
+/**
+ * 워크로드 — 선택한 서비스 클러스터의 Deployment·StatefulSet·DaemonSet·Job·CronJob 라이브 조회 + 쓰기.
+ * 네임스페이스 리소스는 사용자 self-service: 생성(기본 Deployment)·스케일·재시작·삭제.
+ * 레이아웃·폰트는 IaaS 목록 화면 규약(툴바 Card + 테이블 Card)과 동일.
+ */
 import * as React from "react";
-import {
-  Boxes,
-  Cpu,
-  Search,
-  MoreVertical,
-  Scale,
-  RefreshCw,
-  Edit,
-  Trash2,
-  History,
-  Activity,
-  Terminal,
-  Plus,
-} from "lucide-react";
-import { PageHeader } from "@/components/page-header";
-import { api } from "@/lib/api";
+import { Search, Loader2, Layers, Plus, Scale, RotateCw, Trash2, ScrollText, FileCode } from "lucide-react";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { toast } from "sonner";
-import type { KCluster, KWorkload } from "@/lib/types";
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { useConfirm } from "@/components/ui/confirm";
+import { ClusterScopeBar, useClusterScope } from "@/components/paas/cluster-scope-bar";
+import {
+  useWorkloads, useCreateWorkload, useScaleWorkload, useRestartWorkload, useDeleteWorkload,
+  useApplyWorkload, useUpdateWorkloadYaml, fetchWorkloadYaml, useWorkloadPods, fetchPodLogs,
+  useNamespaces, type WorkloadRow, type PodRow,
+} from "@/lib/paas-api";
 
-function WorkloadActions({ name, kind, replicas }: { name: string; kind: string; replicas: number }) {
-  const [scaleOpen, setScaleOpen] = React.useState(false);
-  const [newReplicas, setNewReplicas] = React.useState(replicas.toString());
-  return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm">
-            <MoreVertical className="size-3.5" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => window.location.assign(`/paas/workloads/${name}`)}>
-            <Activity className="size-3.5" /> 상세 보기
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => setScaleOpen(true)}>
-            <Scale className="size-3.5" /> 스케일
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => toast.success(`${name} 롤아웃 재시작 — kubectl rollout restart`)}>
-            <RefreshCw className="size-3.5" /> 롤아웃 재시작
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => toast.success(`${name} 매니페스트 편집기 열림`)}>
-            <Edit className="size-3.5" /> YAML 편집
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => toast.success(`${name} 이전 버전으로 롤백 — revision 5 → 4`)}>
-            <History className="size-3.5" /> 롤백
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => toast.success(`${name} Pod 컨테이너 셸 진입`)}>
-            <Terminal className="size-3.5" /> 셸 (kubectl exec)
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="text-rose-600" onClick={() => toast.error(`${name} 삭제 요청 — finalizer 실행 중`)}>
-            <Trash2 className="size-3.5" /> 삭제
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <Dialog open={scaleOpen} onOpenChange={(o) => !o && setScaleOpen(false)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>레플리카 스케일 — {name}</DialogTitle>
-            <DialogDescription>{kind} 의 레플리카 개수를 변경합니다.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div className="space-y-1.5">
-              <Label>현재 레플리카</Label>
-              <div className="font-mono text-2xl">{replicas}</div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>새 레플리카 수</Label>
-              <Input type="number" value={newReplicas} onChange={(e) => setNewReplicas(e.target.value)} />
-            </div>
-            <div className="rounded-md bg-amber-50/60 border border-amber-200 p-2 text-xs text-amber-900">
-              💡 HPA (Horizontal Pod Autoscaler) 가 활성화되어 있으면 자동 스케일링과 충돌할 수 있습니다.
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setScaleOpen(false)}>취소</Button>
-            <Button onClick={() => {
-              toast.success(`${name} → ${newReplicas} 레플리카로 스케일`);
-              setScaleOpen(false);
-            }}>적용</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
-  );
+const TEXTAREA_CLS = "w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
+const KINDS = ["Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"] as const;
+const SCALABLE = new Set(["Deployment", "StatefulSet"]);
+const RESTARTABLE = new Set(["Deployment", "StatefulSet", "DaemonSet"]);
+
+function stVariant(s: string): "success" | "warning" | "destructive" | "secondary" {
+  if (s === "Running" || s === "Succeeded") return "success";
+  if (s === "Pending") return "warning";
+  if (s === "Failed") return "destructive";
+  return "secondary";
 }
 
 export default function WorkloadsPage() {
-  const [clusterId, setClusterId] = React.useState("all");
+  const { clusterId } = useClusterScope();
   const [namespace, setNamespace] = React.useState("all");
+  const [kind, setKind] = React.useState("all");
   const [q, setQ] = React.useState("");
   const [createOpen, setCreateOpen] = React.useState(false);
-  const clusters = api.paas.clusters() as { data: { items: KCluster[] } | undefined };
-  const cleanFilters: Record<string, string> = {};
-  if (clusterId !== "all") cleanFilters.clusterId = clusterId;
-  if (namespace !== "all") cleanFilters.namespace = namespace;
-  const { data, isLoading } = api.paas.workloads(cleanFilters) as {
-    data: { items: KWorkload[] } | undefined;
-    isLoading: boolean;
-  };
-  const items = (data?.items ?? []).filter(
-    (w) => !q || w.name.toLowerCase().includes(q.toLowerCase()),
+  const [scaleTarget, setScaleTarget] = React.useState<WorkloadRow | null>(null);
+  const [podsTarget, setPodsTarget] = React.useState<WorkloadRow | null>(null);
+  const [yamlTarget, setYamlTarget] = React.useState<WorkloadRow | null>(null);
+
+  const workloads = useWorkloads(clusterId, namespace === "all" ? undefined : namespace);
+  const restart = useRestartWorkload(clusterId);
+  const del = useDeleteWorkload(clusterId);
+  const confirm = useConfirm();
+  const busy = restart.isPending || del.isPending;
+
+  const items = (workloads.data ?? []).filter(
+    (w) =>
+      (kind === "all" || w.kind === kind) &&
+      (!q || w.name.includes(q) || w.image.includes(q)),
   );
-  const namespaces = Array.from(new Set(data?.items.map((w) => w.namespace) ?? []));
+
+  async function doRestart(w: WorkloadRow) {
+    if (!(await confirm({ title: "롤아웃 재시작", confirmLabel: "재시작", description: `${w.name} 을(를) 재시작할까요? 파드가 순차 교체됩니다.` }))) return;
+    restart.mutate({ kind: w.kind, namespace: w.namespace, name: w.name },
+      { onSuccess: () => toast.success(`${w.name} 재시작 요청됨`), onError: (e) => toast.error("재시작 실패", { description: String((e as Error).message) }) });
+  }
+  async function doDelete(w: WorkloadRow) {
+    if (!(await confirm({ title: "워크로드 삭제", destructive: true, confirmLabel: "삭제", description: `${w.name} 을(를) 삭제할까요? 되돌릴 수 없습니다.` }))) return;
+    del.mutate({ kind: w.kind, namespace: w.namespace, name: w.name },
+      { onSuccess: () => toast.success(`${w.name} 삭제 요청됨`), onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }) });
+  }
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="워크로드"
-        description="Deployment · StatefulSet · DaemonSet · Job · CronJob 통합 관리"
-        actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" /> 워크로드 생성
-          </Button>
-        }
-      />
       <Card className="p-4">
-        <div className="flex flex-wrap items-center gap-3">
+        <ClusterScopeBar
+          queryKeys={[["paas-workloads"], ["paas-namespaces"]]}
+          namespace={namespace}
+          onNamespaceChange={setNamespace}
+          trailing={
+            <Button size="sm" disabled={!clusterId} onClick={() => setCreateOpen(true)}>
+              <Plus className="size-3.5" /> 워크로드 생성
+            </Button>
+          }
+        >
+          <Select value={kind} onValueChange={setKind}>
+            <SelectTrigger className="w-36"><SelectValue placeholder="유형" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">전체 유형</SelectItem>
+              {KINDS.map((k) => <SelectItem key={k} value={k}>{k}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input
-              placeholder="워크로드 이름…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              className="w-56 pl-9"
-            />
+            <Input placeholder="워크로드 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-52 pl-9" />
           </div>
-          <Select value={clusterId} onValueChange={setClusterId}>
-            <SelectTrigger className="w-56">
-              <SelectValue placeholder="클러스터" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">전체 클러스터</SelectItem>
-              {clusters.data?.items.map((c) => (
-                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={namespace} onValueChange={setNamespace}>
-            <SelectTrigger className="w-48">
-              <SelectValue placeholder="네임스페이스" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">전체 네임스페이스</SelectItem>
-              {namespaces.map((n) => (
-                <SelectItem key={n} value={n}>{n}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span className="ml-auto text-xs text-muted-foreground">{items.length}개</span>
-        </div>
+          <span className="text-xs text-muted-foreground">총 {items.length}개</span>
+        </ClusterScopeBar>
       </Card>
-      {isLoading ? (
-        <Skeleton className="h-96" />
-      ) : (
-        <Card>
+
+      <Card>
+        {!clusterId ? (
+          <EmptyBox text="먼저 서비스 클러스터를 선택하세요." />
+        ) : workloads.isLoading ? (
+          <Skeleton className="h-64" />
+        ) : workloads.isError ? (
+          <EmptyBox text="워크로드 조회 실패 — 클러스터 API 응답 오류." />
+        ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -200,282 +121,391 @@ export default function WorkloadsPage() {
                 <TableHead>네임스페이스</TableHead>
                 <TableHead>이미지</TableHead>
                 <TableHead>레플리카</TableHead>
-                <TableHead>리소스</TableHead>
+                <TableHead>요청 자원</TableHead>
                 <TableHead>가속기</TableHead>
                 <TableHead>상태</TableHead>
-                <TableHead className="w-12" />
+                <TableHead className="w-40" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {items.map((w) => (
-                <TableRow key={w.id} className="cursor-pointer" onClick={() => window.location.assign(`/paas/workloads/${w.id}`)}>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <div className="size-6 rounded-md bg-violet-100 p-1 text-violet-700">
-                        <Boxes className="size-4" />
-                      </div>
-                      <div>
-                        <div className="font-medium">{w.name}</div>
-                        <div className="flex flex-wrap gap-0.5 pt-0.5">
-                          {Object.entries(w.labels).slice(0, 2).map(([k, v]) => (
-                            <span key={k} className="rounded bg-secondary px-1 py-0 text-[9px] font-mono text-muted-foreground">
-                              {k}={v}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="font-mono text-[10px]">{w.kind}</Badge>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">{w.namespace}</TableCell>
-                  <TableCell className="font-mono text-[11px] text-muted-foreground">
-                    {w.image}
-                  </TableCell>
-                  <TableCell>
-                    <span className={`font-mono tabular-nums ${w.ready === w.replicas ? "text-foreground" : "text-amber-600"}`}>
-                      {w.ready} / {w.replicas}
-                    </span>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs tabular-nums">
-                    {w.cpu} / {w.mem}
-                  </TableCell>
-                  <TableCell>
-                    {w.accelerators > 0 ? (
-                      <Badge variant="success" className="gap-1">
-                        <Cpu className="size-3" /> {w.accelerators}
-                      </Badge>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={
-                        w.status === "Running" ? "success" :
-                          w.status === "Succeeded" ? "default" :
-                            w.status === "Failed" ? "destructive" : "warning"
-                      }
-                    >
-                      {w.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell onClick={(e) => e.stopPropagation()}>
-                    <WorkloadActions name={w.name} kind={w.kind} replicas={w.replicas} />
+                <Row
+                  key={`${w.kind}/${w.namespace}/${w.name}`}
+                  w={w} busy={busy}
+                  onPods={() => setPodsTarget(w)}
+                  onYaml={() => setYamlTarget(w)}
+                  onScale={() => setScaleTarget(w)}
+                  onRestart={() => doRestart(w)}
+                  onDelete={() => doDelete(w)}
+                />
+              ))}
+              {items.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
+                    조건에 맞는 워크로드가 없습니다.
                   </TableCell>
                 </TableRow>
-              ))}
+              )}
             </TableBody>
           </Table>
-        </Card>
-      )}
-      <CreateWorkloadDialog
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        clusters={clusters.data?.items ?? []}
-      />
+        )}
+      </Card>
+
+      {createOpen && <CreateDialog clusterId={clusterId} defaultNs={namespace === "all" ? "default" : namespace} onClose={() => setCreateOpen(false)} />}
+      {scaleTarget && <ScaleDialog clusterId={clusterId} w={scaleTarget} onClose={() => setScaleTarget(null)} />}
+      {podsTarget && <PodsDialog clusterId={clusterId} w={podsTarget} onClose={() => setPodsTarget(null)} />}
+      {yamlTarget && <YamlDialog clusterId={clusterId} w={yamlTarget} onClose={() => setYamlTarget(null)} />}
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// 워크로드 생성 다이얼로그 — ETRI 260615 §8.i 반영
-// ─────────────────────────────────────────────────────────────
-type WorkloadKind = "Deployment" | "StatefulSet" | "DaemonSet" | "Job" | "CronJob";
-
-const KIND_DESC: Record<WorkloadKind, string> = {
-  Deployment: "무상태 앱 · 롤링 업데이트 · 스케일링에 적합 (웹·API 서비스)",
-  StatefulSet: "안정된 네트워크 ID·영구 스토리지가 필요한 앱 (DB·큐)",
-  DaemonSet: "모든 노드에 하나씩 실행 (로그 수집기·모니터링 에이전트)",
-  Job: "1회 실행 후 종료 (배치 작업·데이터 처리)",
-  CronJob: "주기적 스케줄 실행 (백업·정기 리포트)",
-};
-
-function CreateWorkloadDialog({
-  open, onClose, clusters,
+function Row({
+  w, busy, onPods, onYaml, onScale, onRestart, onDelete,
 }: {
-  open: boolean;
-  onClose: () => void;
-  clusters: KCluster[];
+  w: WorkloadRow; busy: boolean; onPods: () => void; onYaml: () => void; onScale: () => void; onRestart: () => void; onDelete: () => void;
 }) {
-  const [step, setStep] = React.useState(1);
-  const [kind, setKind] = React.useState<WorkloadKind>("Deployment");
-  const [name, setName] = React.useState("");
-  const [ns, setNs] = React.useState("default");
-  const [clusterId, setClusterId] = React.useState(clusters[0]?.id ?? "");
-  const [image, setImage] = React.useState("nginx:1.27");
-  const [replicas, setReplicas] = React.useState("3");
-  const [cpu, setCpu] = React.useState("500m");
-  const [mem, setMem] = React.useState("512Mi");
-  const [gpuCount, setGpuCount] = React.useState("0");
-  const [gpuKind, setGpuKind] = React.useState("NVIDIA A100");
-  const [schedule, setSchedule] = React.useState("0 2 * * *");
-
-  const reset = () => {
-    setStep(1);
-    setKind("Deployment");
-    setName("");
-    setNs("default");
-    setImage("nginx:1.27");
-    setReplicas("3");
-    setCpu("500m");
-    setMem("512Mi");
-    setGpuCount("0");
-    setSchedule("0 2 * * *");
-  };
-
-  const submit = () => {
-    toast.success(
-      `${kind}/${name} 생성 요청 — ${ns} 네임스페이스, ${image}` +
-        (gpuCount !== "0" ? `, ${gpuCount}× ${gpuKind}` : ""),
-    );
-    reset();
-    onClose();
-  };
-
-  const showReplicas = kind === "Deployment" || kind === "StatefulSet";
-  const showSchedule = kind === "CronJob";
-
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) {
-          reset();
-          onClose();
-        }
-      }}
-    >
-      <DialogContent className="max-w-lg">
+    <TableRow>
+      <TableCell>
+        <div className="flex items-center gap-2">
+          <Layers className="size-3.5 text-brand-indigo-600" />
+          <span className="max-w-[220px] truncate font-mono text-sm font-semibold">{w.name}</span>
+        </div>
+      </TableCell>
+      <TableCell><Badge variant="outline" className="text-[10px]">{w.kind}</Badge></TableCell>
+      <TableCell className="font-mono text-xs">{w.namespace}</TableCell>
+      <TableCell className="max-w-[240px] truncate font-mono text-[11px] text-muted-foreground">{w.image}</TableCell>
+      <TableCell className="font-mono text-xs">
+        {w.kind === "CronJob" ? (w.schedule || "—") : `${w.ready}/${w.total}`}
+      </TableCell>
+      <TableCell className="font-mono text-[11px] text-muted-foreground">
+        {[w.requests.cpu, w.requests.memory].filter(Boolean).join(" · ") || "—"}
+      </TableCell>
+      <TableCell>
+        {w.accelerator ? (
+          <Badge variant="default" className="font-mono text-[10px]">{w.accelerator.kind} × {w.accelerator.count}</Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell>
+        <Badge variant={stVariant(w.status)} className="text-[10px]">
+          {w.status === "Pending" && <Loader2 className="size-3 animate-spin" />}
+          {w.status}
+        </Badge>
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-0.5">
+          <Button variant="ghost" size="icon-sm" title="파드·로그" onClick={onPods}><ScrollText className="size-3.5" /></Button>
+          <Button variant="ghost" size="icon-sm" title="YAML 보기·수정" onClick={onYaml}><FileCode className="size-3.5" /></Button>
+          {SCALABLE.has(w.kind) && (
+            <Button variant="ghost" size="icon-sm" title="레플리카 조정" disabled={busy} onClick={onScale}><Scale className="size-3.5" /></Button>
+          )}
+          {RESTARTABLE.has(w.kind) && (
+            <Button variant="ghost" size="icon-sm" title="재시작" disabled={busy} onClick={onRestart}><RotateCw className="size-3.5" /></Button>
+          )}
+          <Button variant="ghost" size="icon-sm" title="삭제" disabled={busy} onClick={onDelete}><Trash2 className="size-3.5 text-rose-600" /></Button>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function ScaleDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadRow; onClose: () => void }) {
+  const scale = useScaleWorkload(clusterId);
+  const [replicas, setReplicas] = React.useState(String(w.total));
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>
-            워크로드 생성 <span className="text-xs text-muted-foreground">· {step}/2 단계</span>
-          </DialogTitle>
-          <DialogDescription>
-            {step === 1 ? "워크로드 유형과 기본 정보를 입력하기" : "리소스와 가속기를 지정하기"}
-          </DialogDescription>
+          <DialogTitle>레플리카 조정</DialogTitle>
+          <DialogDescription className="font-mono text-xs">{w.kind} · {w.name}</DialogDescription>
         </DialogHeader>
-
-        {step === 1 && (
-          <div className="space-y-3 py-2">
-            <div className="space-y-1.5">
-              <Label>워크로드 유형</Label>
-              <div className="grid grid-cols-5 gap-1.5">
-                {(["Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"] as WorkloadKind[]).map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => setKind(k)}
-                    className={`rounded-md border px-2 py-1.5 text-xs font-medium transition-colors ${
-                      kind === k
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border text-muted-foreground hover:border-primary/50"
-                    }`}
-                  >
-                    {k}
-                  </button>
-                ))}
-              </div>
-              <p className="text-[11px] text-muted-foreground">{KIND_DESC[kind]}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>클러스터</Label>
-                <Select value={clusterId} onValueChange={setClusterId}>
-                  <SelectTrigger><SelectValue placeholder="클러스터 선택" /></SelectTrigger>
-                  <SelectContent>
-                    {clusters.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>네임스페이스</Label>
-                <Input value={ns} onChange={(e) => setNs(e.target.value)} placeholder="default" />
-              </div>
-            </div>
-            <div>
-              <Label>이름</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-app" />
-            </div>
-            <div>
-              <Label>컨테이너 이미지</Label>
-              <Input value={image} onChange={(e) => setImage(e.target.value)} className="font-mono text-xs" />
-            </div>
-          </div>
-        )}
-
-        {step === 2 && (
-          <div className="space-y-3 py-2">
-            {showReplicas && (
-              <div>
-                <Label>레플리카 수</Label>
-                <Input type="number" value={replicas} onChange={(e) => setReplicas(e.target.value)} min="1" />
-              </div>
-            )}
-            {showSchedule && (
-              <div>
-                <Label>스케줄 (Cron 표현식)</Label>
-                <Input value={schedule} onChange={(e) => setSchedule(e.target.value)} className="font-mono text-xs" />
-                <p className="mt-1 text-[11px] text-muted-foreground">예: 0 2 * * * → 매일 새벽 2시</p>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>CPU 요청</Label>
-                <Input value={cpu} onChange={(e) => setCpu(e.target.value)} placeholder="500m" className="font-mono" />
-              </div>
-              <div>
-                <Label>메모리 요청</Label>
-                <Input value={mem} onChange={(e) => setMem(e.target.value)} placeholder="512Mi" className="font-mono" />
-              </div>
-            </div>
-            <div className="space-y-1.5 rounded-lg border border-dashed border-border p-3">
-              <div className="text-xs font-medium">AI 가속기 (선택 사항)</div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-[11px]">개수</Label>
-                  <Input type="number" value={gpuCount} onChange={(e) => setGpuCount(e.target.value)} min="0" max="8" />
-                </div>
-                <div>
-                  <Label className="text-[11px]">종류</Label>
-                  <Select value={gpuKind} onValueChange={setGpuKind} disabled={gpuCount === "0"}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="NVIDIA A100">NVIDIA A100</SelectItem>
-                      <SelectItem value="NVIDIA H100">NVIDIA H100</SelectItem>
-                      <SelectItem value="Furiosa RNGD">Furiosa RNGD</SelectItem>
-                      <SelectItem value="Rebellions ATOM">Rebellions ATOM</SelectItem>
-                      <SelectItem value="Samsung HBM-PIM">Samsung HBM-PIM</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <p className="text-[10px] text-muted-foreground">
-                가속기 개수 &gt; 0 지정 시 nodeSelector·tolerations가 자동 주입됨
-              </p>
-            </div>
-          </div>
-        )}
-
+        <div className="space-y-1.5 py-2">
+          <Label>레플리카 수</Label>
+          <Input type="number" min={0} value={replicas} onChange={(e) => setReplicas(e.target.value)} />
+        </div>
         <DialogFooter>
-          {step === 2 && (
-            <Button variant="outline" onClick={() => setStep(1)} className="mr-auto">
-              이전
-            </Button>
-          )}
           <Button variant="outline" onClick={onClose}>취소</Button>
-          {step === 1 ? (
-            <Button onClick={() => setStep(2)} disabled={!name.trim()}>
-              다음
-            </Button>
-          ) : (
-            <Button onClick={submit}>생성</Button>
-          )}
+          <Button
+            disabled={scale.isPending}
+            onClick={() => scale.mutate(
+              { kind: w.kind, namespace: w.namespace, name: w.name, replicas: Number(replicas) },
+              { onSuccess: () => { toast.success(`${w.name} → ${replicas} 레플리카`); onClose(); }, onError: (e) => toast.error("조정 실패", { description: String((e as Error).message) }) },
+            )}
+          >
+            {scale.isPending && <Loader2 className="size-3.5 animate-spin" />} 적용
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+const YAML_SAMPLE = `apiVersion: batch/v1
+kind: Job
+metadata:
+  name: my-train-job
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: trainer
+          image: python:3.12
+          command: ["python", "-c", "print('train')"]
+`;
+
+function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; defaultNs: string; onClose: () => void }) {
+  const create = useCreateWorkload(clusterId);
+  const apply = useApplyWorkload(clusterId);
+  const namespaces = useNamespaces(clusterId);
+  const [form, setForm] = React.useState({
+    kind: "Deployment" as "Deployment" | "StatefulSet",
+    namespace: defaultNs, name: "", image: "", replicas: "1",
+    cpu: "", memory: "", acceleratorKind: "none", acceleratorCount: "1",
+  });
+  const [yaml, setYaml] = React.useState(YAML_SAMPLE);
+  const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const pending = create.isPending || apply.isPending;
+
+  const submitForm = () => {
+    create.mutate({
+      kind: form.kind,
+      namespace: form.namespace, name: form.name, image: form.image,
+      replicas: Number(form.replicas) || 1,
+      cpu: form.cpu || undefined, memory: form.memory || undefined,
+      acceleratorKind: form.acceleratorKind === "none" ? undefined : form.acceleratorKind,
+      acceleratorCount: form.acceleratorKind === "none" ? 0 : Number(form.acceleratorCount),
+    }, {
+      onSuccess: () => { toast.success(`${form.name} 생성됨`); onClose(); },
+      onError: (e) => toast.error("생성 실패", { description: String((e as Error).message) }),
+    });
+  };
+  const submitYaml = () => {
+    apply.mutate(yaml, {
+      onSuccess: () => { toast.success("워크로드 적용됨"); onClose(); },
+      onError: (e) => toast.error("적용 실패", { description: String((e as Error).message) }),
+    });
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>워크로드 생성</DialogTitle>
+          <DialogDescription>폼(Deployment/StatefulSet) 또는 YAML(Job·CronJob 등 모든 종류).</DialogDescription>
+        </DialogHeader>
+        <Tabs defaultValue="form">
+          <TabsList>
+            <TabsTrigger value="form">폼</TabsTrigger>
+            <TabsTrigger value="yaml">YAML</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="form" className="space-y-3 pt-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>종류</Label>
+                <Select value={form.kind} onValueChange={(v) => set("kind", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Deployment">Deployment</SelectItem>
+                    <SelectItem value="StatefulSet">StatefulSet</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>네임스페이스</Label>
+                <Select value={form.namespace} onValueChange={(v) => set("namespace", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(namespaces.data ?? [form.namespace]).map((ns) => (
+                      <SelectItem key={ns} value={ns} className="font-mono text-xs">{ns}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>이름</Label>
+              <Input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="my-app" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>이미지</Label>
+              <Input value={form.image} onChange={(e) => set("image", e.target.value)} placeholder="nginx:1.27" className="font-mono text-xs" />
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label>레플리카</Label>
+                <Input type="number" min={0} value={form.replicas} onChange={(e) => set("replicas", e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>CPU 요청</Label>
+                <Input value={form.cpu} onChange={(e) => set("cpu", e.target.value)} placeholder="500m" className="font-mono text-xs" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>메모리 요청</Label>
+                <Input value={form.memory} onChange={(e) => set("memory", e.target.value)} placeholder="512Mi" className="font-mono text-xs" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>가속기</Label>
+                <Select value={form.acceleratorKind} onValueChange={(v) => set("acceleratorKind", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">없음</SelectItem>
+                    <SelectItem value="nvidia.com/gpu">nvidia.com/gpu</SelectItem>
+                    <SelectItem value="furiosa.ai/rngd">furiosa.ai/rngd</SelectItem>
+                    <SelectItem value="rebellions.ai/atom">rebellions.ai/atom</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {form.acceleratorKind !== "none" && (
+                <div className="space-y-1.5">
+                  <Label>가속기 개수</Label>
+                  <Input type="number" min={1} value={form.acceleratorCount} onChange={(e) => set("acceleratorCount", e.target.value)} />
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>취소</Button>
+              <Button disabled={pending || !form.name || !form.image} onClick={submitForm}>
+                {create.isPending && <Loader2 className="size-3.5 animate-spin" />} 생성
+              </Button>
+            </DialogFooter>
+          </TabsContent>
+
+          <TabsContent value="yaml" className="space-y-2 pt-3">
+            <Label>매니페스트 (Deployment·StatefulSet·DaemonSet·Job·CronJob)</Label>
+            <textarea value={yaml} onChange={(e) => setYaml(e.target.value)} rows={16} className={TEXTAREA_CLS} spellCheck={false} />
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>취소</Button>
+              <Button disabled={pending || !yaml.trim()} onClick={submitYaml}>
+                {apply.isPending && <Loader2 className="size-3.5 animate-spin" />} 적용
+              </Button>
+            </DialogFooter>
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── 파드 드릴다운 + 로그 ──
+function PodsDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadRow; onClose: () => void }) {
+  const pods = useWorkloadPods(clusterId, w.kind, w.namespace, w.name);
+  const [logPod, setLogPod] = React.useState<PodRow | null>(null);
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Layers className="size-4 text-brand-indigo-600" /> {w.name} · 파드</DialogTitle>
+          <DialogDescription className="font-mono text-xs">{w.kind} · {w.namespace}</DialogDescription>
+        </DialogHeader>
+        {pods.isLoading ? <Skeleton className="h-40" /> : pods.isError ? (
+          <div className="py-8 text-center text-sm text-rose-500">파드 조회 실패</div>
+        ) : (
+          <Card className="overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>파드</TableHead><TableHead>상태</TableHead><TableHead>Ready</TableHead>
+                  <TableHead>재시작</TableHead><TableHead>노드</TableHead><TableHead className="w-16" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(pods.data ?? []).map((p) => (
+                  <TableRow key={p.name}>
+                    <TableCell className="max-w-[260px] truncate font-mono text-xs font-medium">{p.name}</TableCell>
+                    <TableCell><Badge variant={stVariant(p.phase === "Running" ? "Running" : p.phase === "Pending" ? "Pending" : p.phase === "Failed" ? "Failed" : "x")} className="text-[10px]">{p.phase}</Badge></TableCell>
+                    <TableCell className="font-mono text-xs">{p.ready}</TableCell>
+                    <TableCell className="font-mono text-xs">{p.restarts}</TableCell>
+                    <TableCell className="font-mono text-[11px] text-muted-foreground">{p.node || "—"}</TableCell>
+                    <TableCell><Button variant="ghost" size="icon-sm" title="로그" onClick={() => setLogPod(p)}><ScrollText className="size-3.5" /></Button></TableCell>
+                  </TableRow>
+                ))}
+                {(pods.data ?? []).length === 0 && (
+                  <TableRow><TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">파드가 없습니다.</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Card>
+        )}
+        {logPod && <LogsDialog clusterId={clusterId} namespace={w.namespace} pod={logPod} onClose={() => setLogPod(null)} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function LogsDialog({ clusterId, namespace, pod, onClose }: { clusterId: string; namespace: string; pod: PodRow; onClose: () => void }) {
+  const [container, setContainer] = React.useState(pod.containers[0] ?? "");
+  const [logs, setLogs] = React.useState<string>("불러오는 중…");
+  React.useEffect(() => {
+    let alive = true;
+    fetchPodLogs(clusterId, namespace, pod.name, container || undefined)
+      .then((d) => { if (alive) setLogs(d.logs || "(로그 없음)"); })
+      .catch((e) => { if (alive) setLogs(`로그 조회 실패: ${e.message}`); });
+    return () => { alive = false; };
+  }, [clusterId, namespace, pod.name, container]);
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 font-mono text-sm">{pod.name}</DialogTitle>
+          <DialogDescription className="flex items-center gap-2">
+            {pod.containers.length > 1 && (
+              <Select value={container} onValueChange={setContainer}>
+                <SelectTrigger className="h-7 w-48"><SelectValue /></SelectTrigger>
+                <SelectContent>{pod.containers.map((c) => <SelectItem key={c} value={c} className="font-mono text-xs">{c}</SelectItem>)}</SelectContent>
+              </Select>
+            )}
+            <span className="text-[11px] text-muted-foreground">최근 500줄</span>
+          </DialogDescription>
+        </DialogHeader>
+        <pre className="max-h-[60vh] overflow-auto rounded bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre-wrap">{logs}</pre>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── YAML 보기·수정 ──
+function YamlDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadRow; onClose: () => void }) {
+  const update = useUpdateWorkloadYaml(clusterId);
+  const [text, setText] = React.useState<string>("");
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let alive = true;
+    fetchWorkloadYaml(clusterId, w.kind, w.namespace, w.name)
+      .then((d) => { if (alive) { setText(d.yaml); setLoading(false); } })
+      .catch((e) => { if (alive) { setText(`# 조회 실패: ${e.message}`); setLoading(false); } });
+    return () => { alive = false; };
+  }, [clusterId, w]);
+  const save = () => update.mutate(
+    { kind: w.kind, namespace: w.namespace, name: w.name, yaml: text },
+    { onSuccess: () => { toast.success(`${w.name} 저장됨`); onClose(); }, onError: (e) => toast.error("저장 실패", { description: String((e as Error).message) }) },
+  );
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><FileCode className="size-4 text-brand-indigo-600" /> {w.name} · YAML</DialogTitle>
+          <DialogDescription className="font-mono text-xs">{w.kind} · {w.namespace} — 수정 후 저장 시 server-side apply</DialogDescription>
+        </DialogHeader>
+        {loading ? <Skeleton className="h-80" /> : (
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={22} className={TEXTAREA_CLS} spellCheck={false} />
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>닫기</Button>
+          <Button disabled={update.isPending || loading} onClick={save}>
+            {update.isPending && <Loader2 className="size-3.5 animate-spin" />} 저장
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EmptyBox({ text }: { text: string }) {
+  return <div className="py-10 text-center text-sm text-muted-foreground">{text}</div>;
 }

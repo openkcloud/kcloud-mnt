@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { usePathname } from "next/navigation";
 import { toast } from "sonner";
 import { Clock } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
@@ -20,16 +21,23 @@ const OBS_KEYS = [
   ["obs-util-timeseries"],
   ["obs-power-breakdown"],
   ["obs-power-timeseries"],
+  ["obs-alerts-active"],
+  ["obs-alert-policies"],
+  ["obs-alert-channels"],
 ];
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [range, setRange] = React.useState(1);
+  const pathname = usePathname();
+  // 로그 화면은 자체 검색/조회기간/실시간(tail) 컨트롤을 쓰므로 전역 조회구간·새로고침 주기는 숨긴다.
+  const hideHeaderControls = pathname?.startsWith("/monitoring/logs");
   return (
     <div className="space-y-6">
       <PageHeader
         title="옵저버빌리티"
         description="인프라·가속기 지표와 전력·클러스터 현황 통합 분석"
         actions={
+          hideHeaderControls ? undefined : (
           <>
             <Button
               variant="outline"
@@ -45,6 +53,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </Button>
             <RefreshControls queryKeys={OBS_KEYS} />
           </>
+          )
         }
       />
       {children}
