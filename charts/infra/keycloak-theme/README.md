@@ -18,12 +18,15 @@ openkcloud/login/
 ├── messages/messages_ko.properties   바꾸는 문구만('사용자 이름' → '아이디' 등)
 └── resources/
     ├── css/openkcloud.css   포털 색·크기(MNT-APP globals.css·components/ui 와 같은 값)
+    ├── js/okc-address.js    포털 주소 밑(테스트배드)으로 열리면 주소창을 /auth/login/ 로 표시(요청은 그대로 Keycloak)
     ├── fonts/PretendardVariable.woff2   포털과 같은 글꼴(테스트배드는 폐쇄망이라 외부 글꼴 불가)
     └── img/favicon.ico      포털 아이콘
 ```
 
 - 오류·만료·로그아웃 확인 같은 다른 화면은 base 템플릿을 그대로 쓰고, 공통 틀·CSS 로 같은 모양이 된다.
 - '로그인 상태 유지'는 처음 열 때 체크(2026-10-14 결정 — 체크하지 않으면 브라우저를 껐다 켤 때 로그인이 풀림), 공용 PC 는 해제할 수 있다.
+- 주소창 표시: 테스트배드는 Keycloak 이 포털 주소 밑(`/auth/realms/…`)이라 로그인 화면 주소를 `/auth/login/` 로 바꿔 보여 준다(같은 주소 안이라 가능,
+  새로고침하면 포털 /auth/login 이 로그인을 다시 시작). 개발은 Keycloak 이 별도 주소라 그대로 둔다.
 - **Keycloak 버전을 올릴 때**: `template.ftl`·`login.ftl` 은 base 복사본이라 새 버전 base 와 비교해 바뀐 부분을 옮긴다
   (`docker create quay.io/keycloak/keycloak:<버전>` → `/opt/keycloak/lib/lib/main/org.keycloak.keycloak-themes-<버전>.jar` 의 `theme/base/login/`).
   `Dockerfile` 의 `FROM` 은 Harbor 에 옮겨 둔 공식 이미지라, 새 버전 공식 이미지를 Harbor `mnt/infra/quay.io/keycloak/keycloak` 에 먼저 옮긴다.
