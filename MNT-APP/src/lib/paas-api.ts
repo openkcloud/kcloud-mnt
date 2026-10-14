@@ -289,8 +289,9 @@ export function useDeleteTemplate() {
 // ── 쓰기(네임스페이스 리소스 CRUD) ──
 const base = (clusterId: string) => `/api/paas/clusters/${clusterId}`;
 
-/** 워크로드 생성(기본 Deployment) */
+/** 워크로드 생성(폼: Deployment/StatefulSet) */
 export interface CreateWorkloadInput {
+  kind?: "Deployment" | "StatefulSet";
   namespace: string; name: string; image: string; replicas: number;
   cpu?: string; memory?: string; acceleratorKind?: string; acceleratorCount?: number;
 }
@@ -324,6 +325,47 @@ export function useDeleteWorkload(clusterId: string) {
       sendJson<void>("DELETE", `${base(clusterId)}/workloads/${kind}/${namespace}/${name}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] }),
   });
+}
+/** YAML 로 워크로드 생성/적용(server-side apply) — Job/CronJob 등 모든 종류 */
+export function useApplyWorkload(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (yaml: string) => sendJson("POST", `${base(clusterId)}/workloads/apply`, { yaml }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] }),
+  });
+}
+/** YAML 직접 수정 저장 */
+export function useUpdateWorkloadYaml(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ kind, namespace, name, yaml }: { kind: string; namespace: string; name: string; yaml: string }) =>
+      sendJson("PUT", `${base(clusterId)}/workloads/${kind}/${namespace}/${name}/yaml`, { yaml }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] }),
+  });
+}
+/** 워크로드 YAML 조회(편집용) — 호출 시점에 가져온다 */
+export function fetchWorkloadYaml(clusterId: string, kind: string, namespace: string, name: string) {
+  return fetchJson<{ yaml: string }>(`${PAAS_BASE}${base(clusterId)}/workloads/${kind}/${namespace}/${name}/yaml`);
+}
+
+// ── 파드 드릴다운 ──
+export interface PodRow {
+  name: string; phase: string; ready: string; restarts: number;
+  node: string; podIP: string; startedAt: string; containers: string[];
+}
+export function useWorkloadPods(clusterId: string, kind: string, namespace: string, name: string, enabled = true) {
+  return useQuery({
+    queryKey: ["paas-pods", clusterId, kind, namespace, name],
+    enabled: enabled && !!clusterId,
+    queryFn: async () => (await fetchJson<{ pods: PodRow[] }>(
+      `${PAAS_BASE}${base(clusterId)}/workloads/${kind}/${namespace}/${name}/pods`)).pods,
+    refetchInterval: 5000,
+  });
+}
+export function fetchPodLogs(clusterId: string, namespace: string, pod: string, container?: string, tail = 500) {
+  const q = new URLSearchParams({ tail: String(tail) });
+  if (container) q.set("container", container);
+  return fetchJson<{ logs: string }>(`${PAAS_BASE}${base(clusterId)}/pods/${namespace}/${pod}/logs?${q.toString()}`);
 }
 
 /** ConfigMap CRUD */
