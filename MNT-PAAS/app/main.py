@@ -6,7 +6,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import clusters, k8s
+from .routers import clusters, k8s, templates
 
 app = FastAPI(title="MNT-PAAS", version="0.1.0")
 
@@ -36,3 +36,4 @@ def root():
 app.include_router(router, prefix=settings.api_prefix)
 app.include_router(clusters.router, prefix=settings.api_prefix)
 app.include_router(k8s.router, prefix=settings.api_prefix)
+app.include_router(templates.router, prefix=settings.api_prefix)

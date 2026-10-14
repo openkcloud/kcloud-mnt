@@ -7,6 +7,7 @@ Magnum 인증서(CA 조회 + CSR 서명)로 클러스터별 클라이언트 인�
 from __future__ import annotations
 
 import tempfile
+import ssl
 import threading
 
 import httpx
@@ -59,6 +60,17 @@ def _write_tmp(content: str, suffix: str) -> str:
     return f.name
 
 
+def _ssl_context(ca_pem: str, cert_pem: str, key_pem: str) -> ssl.SSLContext:
+    """httpx 0.28+ 는 Client(cert=, verify=) 레거시 인자를 무시한다(→ 익명 접속·403).
+    TLS 는 SSLContext 로 직접 구성: CA 로 서버 검증 + 클라이언트 인증서 로드."""
+    ctx = ssl.create_default_context(cafile=_write_tmp(ca_pem, ".ca.crt"))
+    ctx.load_cert_chain(
+        certfile=_write_tmp(cert_pem, ".crt"),
+        keyfile=_write_tmp(key_pem, ".key"),
+    )
+    return ctx
+
+
 def k8s(cluster_id: str) -> httpx.Client:
     """클러스터별 K8s REST 클라이언트(캐시). 인증서 만료·회전 시 프로세스 재시작으로 갱신."""
     cli = _clients.get(cluster_id)
@@ -71,8 +83,7 @@ def k8s(cluster_id: str) -> httpx.Client:
         api_address, ca_pem, cert_pem, key_pem = issue_client_cert(cluster_id)
         cli = httpx.Client(
             base_url=api_address,
-            cert=(_write_tmp(cert_pem, ".crt"), _write_tmp(key_pem, ".key")),
-            verify=_write_tmp(ca_pem, ".ca.crt"),
+            verify=_ssl_context(ca_pem, cert_pem, key_pem),
             timeout=20,
         )
         _clients[cluster_id] = cli
@@ -83,3 +94,12 @@ def k8s_get(cluster_id: str, path: str) -> dict:
     r = k8s(cluster_id).get(path)
     r.raise_for_status()
     return r.json()
+
+
+def k8s_request(cluster_id: str, method: str, path: str, json: dict | None = None,
+                content: bytes | None = None, content_type: str | None = None) -> dict:
+    """쓰기 공용 — POST/PUT/PATCH/DELETE. content_type 지정 시 그 헤더로(패치의 strategic-merge 등)."""
+    headers = {"Content-Type": content_type} if content_type else None
+    r = k8s(cluster_id).request(method, path, json=json, content=content, headers=headers)
+    r.raise_for_status()
+    return r.json() if r.content else {}
