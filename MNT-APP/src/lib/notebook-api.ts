@@ -1,12 +1,12 @@
 /* ════════════════════════════════════════════════════════════════════
- * Notebook API — Kubeflow Notebook Controller 연동 인터페이스
+ * Notebook API — Kubeflow Notebook Controller 연동 인터페이스 (MNT-AINB 경유)
  * ────────────────────────────────────────────────────────────────────
- * 이 파일의 모든 함수는 현재 mock 응답을 반환하지만,
- * 실제 구현 시 fetch 호출만 교체하면 됩니다.
+ * 노트북·파이프라인·워크스페이스 생성과 노트북 접속·시작·정지·삭제.
  * UI 계층은 이 인터페이스에만 의존합니다.
  * ──────────────────────────────────────────────────────────────────── */
 
 import { useQuery } from "@tanstack/react-query";
+import { ainbFetch } from "@/lib/ainb-api";
 
 /** Kubeflow Notebook CRD에 매핑되는 응답 모델 */
 export interface NotebookResource {
@@ -32,12 +32,9 @@ export interface NotebookResource {
     mountPath: string;
   };
   /**
-   * ⭐ iframe src 로 사용될 URL
-   *
-   * 실제 구현 시 Kubeflow Notebook Controller가 제공하는 게이트웨이 경로:
-   *   https://kubeflow.openkcloud.local/notebook/{namespace}/{name}/?folder=/home/kubeflow
-   *
-   * mock에서는 내부 시뮬레이션 페이지(/notebooks-preview/[id])로 fallback.
+   * ⭐ iframe src 로 사용될 URL — MNT-AINB 의 IDE 프록시 경로:
+   *   https://{포털 주소}/notebook/{namespace}/{name}/
+   * 프록시는 로그인 때 발급한 세션 쿠키(okc_session)로 인증한다.
    */
   connectUrl: string;
   /** 연결 모드 — 실제 Kubeflow가 설치되면 "live", 그렇지 않으면 "mock" */
@@ -46,22 +43,64 @@ export interface NotebookResource {
   jwtExpiresAt?: string;
 }
 
+/** 노트북 생성 (POST /api/ainb/notebooks) */
+export async function createNotebook(body: {
+  name: string;
+  namespace: string;
+  image: string;
+  cpu: string;
+  memoryGi: number;
+  acceleratorKind?: string;
+  acceleratorCount: number;
+  storageGb: number;
+}): Promise<{ id: string }> {
+  const res = await ainbFetch(`/notebooks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, 20000);
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+/** Pipeline YAML 업로드 (POST /api/ainb/pipelines/upload) */
+export async function uploadPipeline(body: {
+  name: string;
+  description?: string;
+  yaml: string;
+}): Promise<{ pipeline_id?: string }> {
+  const res = await ainbFetch(`/pipelines/upload`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+/** Profile 생성 (POST /api/ainb/profiles) */
+export async function createProfile(body: {
+  name: string;
+  ownerEmail: string;
+  cpu: number;
+  memoryGi: number;
+  acceleratorCount: number;
+  storageGi: number;
+}): Promise<{ name: string }> {
+  const res = await ainbFetch(`/profiles`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, 20000);
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
 /** 노트북 상세 조회 + Code Server 연결 URL 발급 */
 async function fetchNotebookConnect(id: string): Promise<NotebookResource> {
-  // ──────────────────────────────────────────────────────────────
-  // 🔧 실제 구현 시 이 fetch 한 줄만 살리고 mock 블록을 삭제하세요.
-  // ──────────────────────────────────────────────────────────────
-  // const res = await fetch(`/api/v1/notebooks/${id}/connect`, {
-  //   credentials: "include",  // OAuth2 Proxy 쿠키 포함
-  // });
-  // if (!res.ok) throw new Error(`Notebook connect failed: ${res.status}`);
-  // return res.json();
-
-  // ──────────────────────────────────────────────────────────────
-  // 📦 Mock 응답
-  // ──────────────────────────────────────────────────────────────
-  await new Promise((r) => setTimeout(r, 300));
-  return MOCK_NOTEBOOKS[id] ?? MOCK_NOTEBOOKS["nb-1"];
+  const res = await ainbFetch(`/notebooks/${id}/connect`);
+  if (!res.ok) throw new Error(`Notebook connect failed: ${res.status}`);
+  return res.json();
 }
 
 /** React Query hook */
@@ -69,6 +108,7 @@ export function useNotebookConnect(id: string) {
   return useQuery({
     queryKey: ["notebook-connect", id],
     queryFn: () => fetchNotebookConnect(id),
+    enabled: !!id,
     refetchOnWindowFocus: false,
   });
 }
@@ -77,81 +117,30 @@ export function useNotebookConnect(id: string) {
 export async function notebookAction(
   id: string,
   action: "start" | "stop" | "restart" | "delete",
+  opts?: { keepVolume?: boolean },
 ): Promise<void> {
-  // 실제 구현:
-  // await fetch(`/api/v1/notebooks/${id}/${action}`, { method: "POST" });
-  await new Promise((r) => setTimeout(r, 500));
+  const method = action === "delete" ? "DELETE" : "POST";
+  const path =
+    action === "delete"
+      ? `/notebooks/${id}?keepVolume=${opts?.keepVolume ? "true" : "false"}`
+      : `/notebooks/${id}/${action}`;
+  const res = await ainbFetch(path, { method });
+  if (!res.ok) throw new Error(`Notebook ${action} failed: ${res.status}`);
 }
-
-// ════════════════════════════════════════════════════════════════════
-// Mock fixtures
-// ════════════════════════════════════════════════════════════════════
-const MOCK_NOTEBOOKS: Record<string, NotebookResource> = {
-  "nb-1": {
-    namespace: "ai-research",
-    name: "research-llama-finetune",
-    status: "Running",
-    image: "kubeflow/codeserver-python:v1.10.0-cuda12.4",
-    resources: { cpu: "16", memory: "64Gi", accelerator: { kind: "rebellions.ai/atom", count: 2 } },
-    workspaceVolume: { pvcName: "research-llama-vol", sizeGb: 500, mountPath: "/home/kubeflow" },
-    connectUrl: "/notebooks-preview/nb-1",
-    connectMode: "mock",
-  },
-  "nb-2": {
-    namespace: "ai-research",
-    name: "solar-data-prep",
-    status: "Running",
-    image: "kubeflow/codeserver-python:v1.10.0",
-    resources: { cpu: "8", memory: "32Gi" },
-    workspaceVolume: { pvcName: "solar-data-vol", sizeGb: 200, mountPath: "/home/kubeflow" },
-    connectUrl: "/notebooks-preview/nb-2",
-    connectMode: "mock",
-  },
-  "nb-3": {
-    namespace: "llm-serving",
-    name: "vllm-benchmark",
-    status: "Running",
-    image: "openkcloud/kubeflow-vllm:0.6.5",
-    resources: { cpu: "8", memory: "64Gi", accelerator: { kind: "nvidia.com/gpu", count: 1 } },
-    workspaceVolume: { pvcName: "vllm-bench-vol", sizeGb: 100, mountPath: "/home/kubeflow" },
-    connectUrl: "/notebooks-preview/nb-3",
-    connectMode: "mock",
-  },
-  "nb-4": {
-    namespace: "edge-inference",
-    name: "rebellions-atom-finetune",
-    status: "Starting",
-    image: "openkcloud/kubeflow-rbln:1.4.0",
-    resources: { cpu: "4", memory: "16Gi", accelerator: { kind: "rebellions.ai/atom", count: 1 } },
-    workspaceVolume: { pvcName: "rbln-finetune-vol", sizeGb: 100, mountPath: "/home/kubeflow" },
-    connectUrl: "/notebooks-preview/nb-4",
-    connectMode: "mock",
-  },
-  "nb-6": {
-    namespace: "ai-research",
-    name: "pim-experiments",
-    status: "Running",
-    image: "openkcloud/kubeflow-pim:0.7",
-    resources: { cpu: "8", memory: "64Gi", accelerator: { kind: "samsung.com/pim", count: 1 } },
-    workspaceVolume: { pvcName: "pim-exp-vol", sizeGb: 200, mountPath: "/home/kubeflow" },
-    connectUrl: "/notebooks-preview/nb-6",
-    connectMode: "mock",
-  },
-};
 
 /**
  * ════════════════════════════════════════════════════════════════════
- * 실제 구현 가이드 — 백엔드 / Kubeflow / K8s
+ * 구현 참고 — 백엔드(MNT-AINB) / Kubeflow / K8s
  * ════════════════════════════════════════════════════════════════════
  *
- * 1️⃣ CMP 백엔드 (FastAPI 등)
- *     POST  /api/v1/notebooks                  # Notebook CRD 생성
- *     GET   /api/v1/notebooks                  # 목록
- *     GET   /api/v1/notebooks/{id}             # 상세
- *     GET   /api/v1/notebooks/{id}/connect     # connectUrl + Set-Cookie 발급
- *     POST  /api/v1/notebooks/{id}/start       # 시작 (annotation: kubeflow-resource-stopped=false)
- *     POST  /api/v1/notebooks/{id}/stop        # 정지 (annotation: kubeflow-resource-stopped=true)
- *     DELETE /api/v1/notebooks/{id}            # 삭제
+ * 1️⃣ MNT-AINB (FastAPI) — 게이트웨이 경로 /api/ainb
+ *     POST  /api/ainb/notebooks                  # Notebook CRD 생성
+ *     GET   /api/ainb/notebooks                  # 목록
+ *     GET   /api/ainb/notebooks/{id}             # 상세
+ *     GET   /api/ainb/notebooks/{id}/connect     # connectUrl 발급
+ *     POST  /api/ainb/notebooks/{id}/start       # 시작 (annotation: kubeflow-resource-stopped=false)
+ *     POST  /api/ainb/notebooks/{id}/stop        # 정지 (annotation: kubeflow-resource-stopped=true)
+ *     DELETE /api/ainb/notebooks/{id}            # 삭제
  *
  * 2️⃣ Kubeflow Notebook Controller 설치
  *     $ kubectl apply -k "github.com/kubeflow/kubeflow/components/notebook-controller/config/overlays/standalone?ref=v1.10.0"
@@ -161,7 +150,7 @@ const MOCK_NOTEBOOKS: Record<string, NotebookResource> = {
  *     kind: Notebook
  *     metadata:
  *       name: research-llama-finetune
- *       namespace: ai-research            # = Kubeflow Profile = OpenStack 프로젝트
+ *       namespace: ai-research            # = 워크스페이스(Kubeflow Profile) = 프로젝트 1:1
  *     spec:
  *       template:
  *         spec:
@@ -185,21 +174,10 @@ const MOCK_NOTEBOOKS: Record<string, NotebookResource> = {
  *               persistentVolumeClaim:
  *                 claimName: research-llama-vol
  *
- * 4️⃣ Istio VirtualService — iframe 라우팅
- *     - match:
- *       - uri:
- *           prefix: /notebook/ai-research/research-llama-finetune/
- *       route:
- *       - destination:
- *           host: research-llama-finetune.ai-research.svc.cluster.local
- *           port:
- *             number: 80
+ * 4️⃣ IDE iframe 라우팅 — 게이트웨이가 /notebook/* 을 MNT-AINB 프록시로 넘긴다
+ *     (프록시가 세션 쿠키 okc_session 을 검증한 뒤 노트북 서비스로 전달)
  *
- * 5️⃣ oauth2-proxy + JWT
- *     CMP가 발급한 JWT를 Kubeflow의 oauth2-proxy 쿠키로 변환 →
- *     iframe 요청 시 인증 자동 통과
- *
- * 6️⃣ Code Server 컨테이너에 RBLN/CUDA SDK 미리 설치된 이미지 사용
+ * 5️⃣ Code Server 컨테이너에 RBLN/CUDA SDK 미리 설치된 이미지 사용
  *     - openkcloud/codeserver-rbln:1.4.0
  *     - openkcloud/codeserver-cuda:12.4
  *     - openkcloud/codeserver-pim:0.7

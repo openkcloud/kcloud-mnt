@@ -28,11 +28,14 @@ import {
   CircleX,
   Check,
   Circle,
+  BrainCircuit,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
-import { useOrgs, useProvisionTicket, useReviewTicket, useTickets, useTicketSteps } from "@/lib/ticket-api";
+import {
+  useOrgs, useProvisionAiWorkspaceTicket, useProvisionTicket, useReviewTicket, useTickets, useTicketSteps,
+} from "@/lib/ticket-api";
 import { useIpCheck, useProjectNetworks, useProjectSecurityGroups } from "@/lib/iaas-api";
 import { PageHeader } from "@/components/page-header";
 import { Card } from "@/components/ui/card";
@@ -54,9 +57,14 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ResourceRequestWizard } from "@/components/resource-request-wizard";
+import {
+  WorkspaceLimitFields, limitsBody, limitsOf, limitsOk, limitsText, toLimitsInput, type WorkspaceLimitsInput,
+} from "@/components/workspace-requests";
 import { accKindClass, cn } from "@/lib/utils";
 import { nodes, vms, accelerators } from "@/mocks/fixtures";
-import type { ProvisionSpec, ProvisionStep, ProvStepStatus, ResourceRequest, RequestStatus } from "@/lib/types";
+import type {
+  ProvisionSpec, ProvisionStep, ProvStepStatus, ResourceRequest, RequestStatus, RequestType,
+} from "@/lib/types";
 
 // ── 상태 표시 ──
 const STATUS_LABEL: Record<RequestStatus, string> = {
@@ -139,16 +147,25 @@ function RequestIdCell({ id }: { id: string }) {
   );
 }
 
-function TypeBadge({ type }: { type: "vm" | "cluster" }) {
+function TypeBadge({ type }: { type: RequestType }) {
   return type === "vm" ? (
     <Badge variant="ghost" className="gap-1 font-mono">
       <Server className="size-3" /> VM
     </Badge>
-  ) : (
+  ) : type === "cluster" ? (
     <Badge variant="ghost" className="gap-1 font-mono">
       <Boxes className="size-3" /> K8s
     </Badge>
+  ) : (
+    <Badge variant="ghost" className="gap-1 whitespace-nowrap">
+      <BrainCircuit className="size-3" /> AI 워크스페이스
+    </Badge>
   );
+}
+
+// 목록 '자원 이름' 칸 — VM 이름 · 클러스터 이름 · 워크스페이스 이름
+function nameOf(r: ResourceRequest) {
+  return (r.type === "vm" ? r.vmName : r.type === "cluster" ? r.clusterName : r.workspaceName) || "—";
 }
 
 // 목록 '프로젝트 · 신청자' 칸 — 두 줄: 프로젝트 / 신청자 (조직)
@@ -161,8 +178,9 @@ function ProjectRequesterCell({ r }: { r: ResourceRequest }) {
   );
 }
 
-// 목록 스펙 칸 — VM: 플레이버 + 가속기 배지 / 클러스터: 워커 수 · 가속기
+// 목록 스펙 칸 — VM: 플레이버 + 가속기 배지 / 클러스터: 워커 수 · 가속기 / AI 워크스페이스: 한도
 function SpecCell({ r }: { r: ResourceRequest }) {
+  if (r.type === "ai-workspace") return <>{limitsText(limitsOf(r))}</>;
   if (r.type !== "vm") return <>{`Worker×${r.nodeCount ?? 0} · ${r.acceleratorKind ?? "—"}×${r.acceleratorCount ?? 0}`}</>;
   const accels = r.accelerators?.length ? r.accelerators
     : r.acceleratorKind ? [{ kind: r.acceleratorKind, count: r.acceleratorCount ?? 1 }] // 목업 티켓
@@ -223,6 +241,7 @@ function ipModeLabel(p: ProvisionSpec) {
 function RequestDetailBody({ r }: { r: ResourceRequest }) {
   const router = useRouter();
   const isVm = r.type === "vm";
+  const isWs = r.type === "ai-workspace";
   const p = r.provisionSpec;
   // 생성 완료된 VM — 누르면 IaaS > 가상서버 상세로(가상서버 상세의 네트워크·볼륨 행과 같은 방식)
   const serverId = isVm && r.status === "completed" ? r.result?.serverId : undefined;
@@ -238,11 +257,11 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
         )}
       >
         <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand-indigo-100 text-brand-indigo-700">
-          {isVm ? <Server className="size-5" /> : <Boxes className="size-5" />}
+          {isVm ? <Server className="size-5" /> : isWs ? <BrainCircuit className="size-5" /> : <Boxes className="size-5" />}
         </div>
         <div className="min-w-0 flex-1">
           <div className={cn("truncate text-base font-semibold", serverId && "underline-offset-2 group-hover:underline")}>
-            {isVm ? (r.vmName || "가상머신") : "K8s 클러스터"}
+            {isVm ? (r.vmName || "가상머신") : isWs ? (r.workspaceName || "AI 워크스페이스") : "K8s 클러스터"}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
             {r.orgName && <><Building2 className="size-3" /><span>{r.orgName}</span><span className="text-muted-foreground/40">·</span></>}
@@ -305,6 +324,17 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
             </Field>
             <Field label="희망 네트워크"><NetworkWish r={r} /></Field>
           </div>
+        </div>
+      ) : isWs ? (
+        <div className="space-y-2.5 rounded-xl border border-border p-3.5">
+          <div className="flex items-center gap-1.5 text-xs font-semibold">
+            <BrainCircuit className="size-3.5 text-brand-indigo-600" /> AI 워크스페이스
+          </div>
+          <Field label="워크스페이스 (네임스페이스)"><span className="font-mono">{r.result?.namespace ?? r.workspaceName ?? "—"}</span></Field>
+          <Field label="사용 목적">{r.purpose || <span className="text-muted-foreground">—</span>}</Field>
+          <Field label="신청 한도"><span className="font-mono">{limitsText(r)}</span></Field>
+          {/* 관리자가 생성 시작 때 조정한 한도 */}
+          {r.provisionSpec && <Field label="생성 한도"><span className="font-mono">{limitsText(limitsOf(r))}</span></Field>}
         </div>
       ) : (
         <div className="space-y-2.5 rounded-xl border border-border p-3.5">
@@ -687,10 +717,14 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
 }) {
   const qc = useQueryClient();
   const { data } = useTicketSteps(open ? req?.id : undefined);
+  const isWs = req?.type === "ai-workspace";
   const retry = useProvisionTicket();
+  const retryWs = useProvisionAiWorkspaceTicket();
+  const user = useAuth((s) => s.user);
+  const retrying = isWs ? retryWs : retry;
   const steps = data?.items ?? [];
   // 재시도 직후 새 기록을 받기 전에는 '생성 중'으로 본다(진행 기록을 비웠으므로 이전 실패 화면을 보여 주지 않는다)
-  const status = data?.status ?? (retry.isSuccess ? "provisioning" : req?.status);
+  const status = data?.status ?? (retrying.isSuccess ? "provisioning" : req?.status);
   const attempt = data?.attempt ?? 1;
   const done = status === "completed";
   const failed = status === "failed";
@@ -717,6 +751,19 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
 
   // 재시도 — 이전 승인 설정 그대로 새 회차로 처음부터(실패한 회차의 자원은 이미 정리됨)
   function handleRetry() {
+    // AI 워크스페이스 — 지난 회차에 확정한 한도를 그대로 보낸다(빼면 서버가 신청 값으로 시작한다)
+    if (req?.type === "ai-workspace") {
+      retryWs.mutate(
+        { id: req.id, processedBy: user?.username ?? "", expectedStatus: "failed", ...limitsOf(req) },
+        {
+          onSuccess: () => toast.success("재시도를 시작했습니다", { description: "새 회차로 처음부터 진행합니다" }),
+          onError: (e) => toast.error("재시도하지 못했습니다", {
+            description: <span className="whitespace-pre-line">{e.message}</span>,
+          }),
+        },
+      );
+      return;
+    }
     if (!req?.provisionSpec) return;
     retry.mutate(
       { id: req.id, expectedStatus: "failed", provisionSpec: toProvisionBody(req.provisionSpec) },
@@ -734,7 +781,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
       <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:max-w-[640px]">
         <SheetHeader className="border-b border-border p-5">
           <SheetTitle className="flex items-center gap-2 pr-6 text-base">
-            <Server className="size-4 text-brand-indigo-600" /> 프로비저닝 진행
+            {isWs ? <BrainCircuit className="size-4 text-brand-indigo-600" /> : <Server className="size-4 text-brand-indigo-600" />} 프로비저닝 진행
             <span className="ml-auto">
               {status === "provisioning" ? (
                 <Badge variant="default" className="gap-1.5"><span className="size-1.5 rounded-full bg-brand-indigo-500" />진행 중</Badge>
@@ -743,7 +790,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
           </SheetTitle>
           <div className="flex items-center gap-2">
             <SheetDescription className="font-mono">
-              {req && <>{req.vmName ?? req.id} · {req.projectName}</>}
+              {req && <>{req.vmName ?? req.workspaceName ?? req.id} · {req.projectName}</>}
             </SheetDescription>
             {attempt > 1 && (
               <Badge variant="secondary" className="text-[10px]">{attempt}차 시도{status === "provisioning" ? " 중" : ""}</Badge>
@@ -828,8 +875,8 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
               </div>
               <p className="mt-1 text-xs text-muted-foreground">{data?.errorMessage ?? "실패한 단계를 확인하세요."}</p>
               {canRetry && (
-                <Button size="sm" className="mt-3 h-7 gap-1.5" onClick={handleRetry} disabled={retry.isPending}>
-                  <RotateCcw className="size-3.5" /> {retry.isPending ? "요청 중…" : "재시도"}
+                <Button size="sm" className="mt-3 h-7 gap-1.5" onClick={handleRetry} disabled={retrying.isPending}>
+                  <RotateCcw className="size-3.5" /> {retrying.isPending ? "요청 중…" : "재시도"}
                 </Button>
               )}
             </div>
@@ -841,13 +888,19 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
                 <CheckCircle2 className="size-4" /> 프로비저닝 완료
               </div>
               <div className="mt-2 space-y-1 text-xs">
-                {data?.result?.fixedIp && <div className="flex justify-between"><span className="text-muted-foreground">고정 IP</span><span className="font-mono">{data.result.fixedIp}</span></div>}
-                {data?.result?.floatingIp && <div className="flex justify-between"><span className="text-muted-foreground">Floating IP</span><span className="font-mono">{data.result.floatingIp}</span></div>}
-                <div className="flex justify-between"><span className="text-muted-foreground">키페어</span><span className="font-mono">{req?.keypairName ?? "미지정"}</span></div>
+                {isWs ? (
+                  <div className="flex justify-between"><span className="text-muted-foreground">네임스페이스</span><span className="font-mono">{data?.result?.namespace ?? req?.workspaceName ?? "—"}</span></div>
+                ) : (
+                  <>
+                    {data?.result?.fixedIp && <div className="flex justify-between"><span className="text-muted-foreground">고정 IP</span><span className="font-mono">{data.result.fixedIp}</span></div>}
+                    {data?.result?.floatingIp && <div className="flex justify-between"><span className="text-muted-foreground">Floating IP</span><span className="font-mono">{data.result.floatingIp}</span></div>}
+                    <div className="flex justify-between"><span className="text-muted-foreground">키페어</span><span className="font-mono">{req?.keypairName ?? "미지정"}</span></div>
+                  </>
+                )}
                 {totalMs !== undefined && <div className="flex justify-between"><span className="text-muted-foreground">총 소요 시간</span><span className="font-mono">{fmtSec(totalMs)}</span></div>}
               </div>
-              <Link href="/iaas/instances" onClick={onClose} className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">
-                <Server className="size-3.5" /> 생성된 가상머신 보기
+              <Link href={isWs ? "/ai-development/profiles" : "/iaas/instances"} onClick={onClose} className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">
+                {isWs ? <><BrainCircuit className="size-3.5" /> AI 워크스페이스 보기</> : <><Server className="size-3.5" /> 생성된 가상머신 보기</>}
               </Link>
             </div>
           )}
@@ -874,12 +927,16 @@ function AdminView() {
   const { data: orgs = [] } = useOrgs();
   const reviewMutation = useReviewTicket();
   const provisionMutation = useProvisionTicket();
+  const provisionWsMutation = useProvisionAiWorkspaceTicket();
+  const user = useAuth((s) => s.user);
 
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
   const [rejecting, setRejecting] = React.useState(false);
   const [rejectReason, setRejectReason] = React.useState("");
   const [spec, setSpec] = React.useState<ProvisionSpec | null>(null);
+  // AI 워크스페이스 생성 시작 — 신청(또는 지난 회차) 한도로 채워 두고 조정할 수 있게 한다
+  const [wsLimits, setWsLimits] = React.useState<WorkspaceLimitsInput | null>(null);
   const [sheetReq, setSheetReq] = React.useState<ResourceRequest | null>(null);
   const [sheetOpen, setSheetOpen] = React.useState(false);
 
@@ -889,6 +946,7 @@ function AdminView() {
     setRejecting(mode === "reject");
     setRejectReason("");
     setSpec(null);
+    setWsLimits(r.type === "ai-workspace" ? toLimitsInput(limitsOf(r)) : null);
     setDetailOpen(true);
   }
   function openSheet(r: ResourceRequest) {
@@ -927,17 +985,30 @@ function AdminView() {
   }
 
   // 승인(VM) → 생성 중: 승인 설정으로 Temporal 워크플로 시작 후 진행 시트를 연다
+  // 승인(AI 워크스페이스) → 생성 중: 확정한 한도로 시작 (실패 → 재시도도 같은 경로)
   async function provision() {
-    if (!detail || !spec) return;
+    if (!detail) return;
     const r = detail;
+    const isWs = r.type === "ai-workspace";
+    if (isWs ? !wsLimits || !limitsOk(wsLimits) : !spec) return;
     try {
-      const started = await provisionMutation.mutateAsync({
-        id: r.id,
-        expectedStatus: r.status,
-        provisionSpec: toProvisionBody(spec),
-      });
+      const started = isWs
+        ? await provisionWsMutation.mutateAsync({
+            id: r.id,
+            processedBy: user?.username ?? "",
+            expectedStatus: r.status,
+            ...limitsBody(wsLimits!),
+          })
+        : await provisionMutation.mutateAsync({
+            id: r.id,
+            expectedStatus: r.status,
+            provisionSpec: toProvisionBody(spec!),
+          });
       setDetailOpen(false);
-      toast.success(r.status === "failed" ? "재시도를 시작했습니다" : "프로비저닝을 시작했습니다", { description: `신청 ID: ${r.id}` });
+      toast.success(
+        r.status === "failed" ? "재시도를 시작했습니다" : isWs ? "워크스페이스 생성을 시작했습니다" : "프로비저닝을 시작했습니다",
+        { description: `신청 ID: ${r.id}` },
+      );
       openSheet(started);
     } catch (e) {
       toast.error(r.status === "failed" ? "재시도하지 못했습니다" : "프로비저닝을 시작하지 못했습니다", {
@@ -947,10 +1018,13 @@ function AdminView() {
   }
 
   // 대기 → 승인·반려, 승인(VM) → 프로비저닝·반려. 승인 설정은 프로비저닝 단계에서 입력
+  // AI 워크스페이스: 승인 → 생성 시작(한도 조정)·반려, 실패 → 한도 확인 후 재시도·반려
   const isPending = detail?.status === "pending";
   const isApprovedVm = detail?.status === "approved" && detail.type === "vm";
   const isFailedVm = detail?.status === "failed" && detail.type === "vm";  // 실패 → 승인 설정 확인 후 재시도·반려
-  const canProvision = isApprovedVm || isFailedVm;
+  const canProvisionVm = isApprovedVm || isFailedVm;
+  const canProvisionWs = detail?.type === "ai-workspace" && (detail.status === "approved" || detail.status === "failed");
+  const canProvision = canProvisionVm || canProvisionWs;
   const canProcess = isPending || canProvision;
 
   return (
@@ -994,13 +1068,14 @@ function AdminView() {
             </SelectContent>
           </Select>
           <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="w-28">
+            <SelectTrigger className="w-36">
               <SelectValue placeholder="유형" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">전체 유형</SelectItem>
               <SelectItem value="vm">VM</SelectItem>
               <SelectItem value="cluster">K8s 클러스터</SelectItem>
+              <SelectItem value="ai-workspace">AI 워크스페이스</SelectItem>
             </SelectContent>
           </Select>
           <span className="ml-auto text-xs text-muted-foreground">{items.length}건</span>
@@ -1018,7 +1093,7 @@ function AdminView() {
                 <TableHead>신청 ID</TableHead>
                 <TableHead>유형</TableHead>
                 <TableHead>프로젝트 · 신청자</TableHead>
-                <TableHead>가상서버/클러스터</TableHead>
+                <TableHead>자원 이름</TableHead>
                 <TableHead>스펙</TableHead>
                 <TableHead>신청 일시</TableHead>
                 <TableHead><StatusHelpHead /></TableHead>
@@ -1028,14 +1103,15 @@ function AdminView() {
             <TableBody>
               {items.map((r) => {
                 const actionable = r.status === "pending";
-                const provisionable = r.type === "vm" && r.status === "approved";
-                const inProvision = r.type === "vm" && IN_PROVISION.includes(r.status);
+                const isWsRow = r.type === "ai-workspace";
+                const provisionable = (r.type === "vm" || isWsRow) && r.status === "approved";
+                const inProvision = (r.type === "vm" || isWsRow) && IN_PROVISION.includes(r.status);
                 return (
                   <TableRow key={r.id} className="cursor-pointer" onClick={() => openDetail(r)}>
                     <RequestIdCell id={r.id} />
                     <TableCell><TypeBadge type={r.type} /></TableCell>
                     <TableCell><ProjectRequesterCell r={r} /></TableCell>
-                    <TableCell className="font-mono text-xs">{(r.type === "vm" ? r.vmName : r.clusterName) || "—"}</TableCell>
+                    <TableCell className="font-mono text-xs">{nameOf(r)}</TableCell>
                     <TableCell className="font-mono text-xs"><SpecCell r={r} /></TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
                     <TableCell><StatusBadge status={r.status} /></TableCell>
@@ -1063,7 +1139,7 @@ function AdminView() {
                             className="h-7 gap-1 border-brand-indigo-200 text-brand-indigo-700 hover:bg-brand-indigo-50"
                             onClick={() => openDetail(r)}
                           >
-                            <Server className="size-3.5" /> 프로비저닝
+                            {isWsRow ? <><BrainCircuit className="size-3.5" /> 생성 시작</> : <><Server className="size-3.5" /> 프로비저닝</>}
                           </Button>
                           <Button
                             size="sm"
@@ -1103,7 +1179,8 @@ function AdminView() {
       {/* 프로비저닝 진행 사이드 시트 */}
       <ProvisioningSheet key={sheetReq?.id} req={sheetReq} open={sheetOpen} onClose={() => setSheetOpen(false)} canRetry />
 
-      {/* 신청 상세 — 대기: 승인·반려 / 승인(VM): 승인 설정 후 프로비저닝·반려 / 실패(VM): 승인 설정 후 재시도·반려 */}
+      {/* 신청 상세 — 대기: 승인·반려 / 승인(VM): 승인 설정 후 프로비저닝·반려 / 실패(VM): 승인 설정 후 재시도·반려
+          / 승인·실패(AI 워크스페이스): 한도 확인·조정 후 생성 시작(재시도)·반려 */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
@@ -1114,12 +1191,25 @@ function AdminView() {
               {isPending ? "신청 내용을 확인하고 승인하거나 반려하세요."
                 : isApprovedVm ? "승인 설정(네트워크·보안그룹)을 지정해 프로비저닝하거나 반려하세요."
                 : isFailedVm ? "승인 설정을 확인·수정해 재시도하거나 반려하세요. 실패한 회차가 만든 자원은 정리되었습니다."
+                : canProvisionWs && detail.status === "failed" ? "워크스페이스 한도를 확인·수정해 재시도하거나 반려하세요."
+                : canProvisionWs ? "워크스페이스 한도(vCPU·메모리·가속기·저장)를 확인·조정한 뒤 생성을 시작하거나 반려하세요."
                 : "신청 내용입니다."}
             </DialogDescription>
           </DialogHeader>
           {detail && <RequestDetailBody r={detail} />}
-          {canProvision && <PlacementCapacity r={detail} />}
-          {canProvision && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
+          {canProvisionVm && <PlacementCapacity r={detail} />}
+          {canProvisionVm && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
+          {canProvisionWs && !rejecting && wsLimits && (
+            <div className="space-y-2.5 rounded-xl border border-brand-indigo-200 bg-brand-indigo-50/30 p-3.5">
+              <div className="flex items-center gap-1.5 text-xs font-semibold">
+                <BrainCircuit className="size-3.5 text-brand-indigo-600" /> 워크스페이스 한도 (생성 시 적용)
+              </div>
+              <WorkspaceLimitFields value={wsLimits} onChange={setWsLimits} />
+              {!limitsOk(wsLimits) && (
+                <p className="text-xs text-rose-500">vCPU·메모리·저장은 1 이상, 가속기는 0 이상의 정수로 입력하세요.</p>
+              )}
+            </div>
+          )}
           {canProcess && rejecting && (
             <div className="space-y-2">
               <label className="text-sm font-medium">반려 사유 <span className="text-rose-500">(필수)</span></label>
@@ -1156,6 +1246,11 @@ function AdminView() {
                     <Button onClick={() => review("approve")} disabled={reviewMutation.isPending}>
                       <CheckCircle2 className="size-3.5" /> 승인
                     </Button>
+                  ) : canProvisionWs ? (
+                    <Button onClick={provision} disabled={!wsLimits || !limitsOk(wsLimits) || provisionWsMutation.isPending}>
+                      {detail.status === "failed" ? <RotateCcw className="size-3.5" /> : <BrainCircuit className="size-3.5" />}
+                      {provisionWsMutation.isPending ? "시작 중…" : detail.status === "failed" ? "재시도" : "생성 시작"}
+                    </Button>
                   ) : (
                     <Button onClick={provision} disabled={!spec || provisionMutation.isPending}>
                       {isFailedVm ? <RotateCcw className="size-3.5" /> : <Server className="size-3.5" />}
@@ -1166,7 +1261,7 @@ function AdminView() {
               )}
             </DialogFooter>
           )}
-          {detail?.type === "vm" && IN_PROVISION.includes(detail.status) && !isFailedVm && (
+          {(detail?.type === "vm" || detail?.type === "ai-workspace") && IN_PROVISION.includes(detail.status) && detail.status !== "failed" && (
             <DialogFooter>
               <Button variant="outline" onClick={() => { setDetailOpen(false); openSheet(detail); }}>
                 <Server className="size-3.5" /> 진행 상황 보기
@@ -1246,7 +1341,7 @@ function UserView({ username }: { username: string }) {
                 <TableHead>신청 ID</TableHead>
                 <TableHead>유형</TableHead>
                 <TableHead>프로젝트 · 신청자</TableHead>
-                <TableHead>가상서버/클러스터</TableHead>
+                <TableHead>자원 이름</TableHead>
                 <TableHead>스펙</TableHead>
                 <TableHead>신청 일시</TableHead>
                 <TableHead><StatusHelpHead /></TableHead>
@@ -1258,7 +1353,7 @@ function UserView({ username }: { username: string }) {
                   <RequestIdCell id={r.id} />
                   <TableCell><TypeBadge type={r.type} /></TableCell>
                   <TableCell><ProjectRequesterCell r={r} /></TableCell>
-                  <TableCell className="font-mono text-xs">{(r.type === "vm" ? r.vmName : r.clusterName) || "—"}</TableCell>
+                  <TableCell className="font-mono text-xs">{nameOf(r)}</TableCell>
                   <TableCell className="font-mono text-xs"><SpecCell r={r} /></TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
                   <TableCell><StatusBadge status={r.status} /></TableCell>
@@ -1330,8 +1425,8 @@ export default function RequestsPage() {
         title={isAdmin ? "신청 관리" : "자원 요청 관리"}
         description={
           isAdmin
-            ? "사용자 VM·K8s 클러스터 자원 신청을 검토하고 승인·반려합니다."
-            : "VM 또는 K8s 클러스터 자원을 신청하고 처리 현황을 확인합니다."
+            ? "사용자 VM·K8s 클러스터·AI 워크스페이스 자원 신청을 검토하고 승인·반려합니다."
+            : "VM·K8s 클러스터·AI 워크스페이스 자원을 신청하고 처리 현황을 확인합니다."
         }
       />
       {isAdmin ? <AdminView /> : <UserView username={user?.username ?? ""} />}

@@ -2,7 +2,7 @@
 # openKcloud 이미지 빌드·푸시 (master3 등 빌드 머신에서 실행)
 #
 # 사용:
-#   ./scripts/build-push.sh                 # core iaas paas obs app 전부
+#   ./scripts/build-push.sh                 # core iaas paas obs ainb app 전부
 #   ./scripts/build-push.sh core app        # 일부만
 #   PUSH=0 ./scripts/build-push.sh core     # 빌드만(푸시 안 함)
 #   TAG=mytag ./scripts/build-push.sh       # 태그 지정(기본: git short sha)
@@ -28,10 +28,10 @@ if [ -z "${ENGINE:-}" ]; then
 fi
 
 # 모듈 → 빌드 컨텍스트 디렉터리
-declare -A DIR=( [core]=MNT-CORE [iaas]=MNT-IAAS [paas]=MNT-PAAS [obs]=MNT-OBS [app]=MNT-APP )
+declare -A DIR=( [core]=MNT-CORE [iaas]=MNT-IAAS [paas]=MNT-PAAS [obs]=MNT-OBS [ainb]=MNT-AINB [app]=MNT-APP )
 
 MODULES=("$@")
-if [ "${#MODULES[@]}" -eq 0 ]; then MODULES=(core iaas paas obs app); fi
+if [ "${#MODULES[@]}" -eq 0 ]; then MODULES=(core iaas paas obs ainb app); fi
 
 # 선택적 로그인 (HARBOR_USER/HARBOR_PASS 주어지면)
 if [ -n "${HARBOR_USER:-}" ]; then
@@ -44,7 +44,7 @@ echo ">> 모듈: ${MODULES[*]}"
 
 for m in "${MODULES[@]}"; do
   d="${DIR[$m]:-}"
-  if [ -z "$d" ]; then echo "ERROR: 알 수 없는 모듈 '$m' (core|iaas|paas|obs|app)" >&2; exit 1; fi
+  if [ -z "$d" ]; then echo "ERROR: 알 수 없는 모듈 '$m' (core|iaas|paas|obs|ainb|app)" >&2; exit 1; fi
   img="$REGISTRY/mnt-$m:$TAG"
   echo "==> build  $img   (context: $d)"
   "$ENGINE" build --platform "$PLATFORM" -t "$img" "$d"
