@@ -3,6 +3,7 @@
   "realm": "openkcloud_realm",
   "displayName": "openKcloud",
   "displayNameHtml": "",
+  "loginTheme": "openkcloud",
   "notBefore": 0,
   "defaultSignatureAlgorithm": "RS256",
   "revokeRefreshToken": false,
