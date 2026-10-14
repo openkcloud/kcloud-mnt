@@ -16,15 +16,15 @@ INSERT INTO cmn_code_group (group_code, name, description) VALUES
     ('TKT_PROVISION_SUBSTEP_AINB', 'AI 워크스페이스 생성 상세 단계', 'AiWorkspaceProvision 워크플로 상세 단계(upper_code = 단계)')
 ON CONFLICT (group_code) DO NOTHING;
 
-INSERT INTO cmn_code (group_code, code, name, sort_order, upper_code) VALUES
-    ('TKT_PROVISION_STEP_AINB',    'check_request',    '신청 확인',              10, NULL),
-    ('TKT_PROVISION_STEP_AINB',    'create_workspace', '워크스페이스 생성',      20, NULL),
-    ('TKT_PROVISION_STEP_AINB',    'check_ready',      '사용 준비 확인',         30, NULL),
-    ('TKT_PROVISION_SUBSTEP_AINB', 'check_name',       '워크스페이스 이름',      10, 'check_request'),
-    ('TKT_PROVISION_SUBSTEP_AINB', 'check_quota',      '자원 한도',              20, 'check_request'),
-    ('TKT_PROVISION_SUBSTEP_AINB', 'create_profile',   'Profile·네임스페이스 생성', 30, 'create_workspace'),
-    ('TKT_PROVISION_SUBSTEP_AINB', 'apply_quota',      '자원 한도 적용',         40, 'create_workspace'),
-    ('TKT_PROVISION_SUBSTEP_AINB', 'check_namespace',  '네임스페이스 활성',      50, 'check_ready')
+INSERT INTO cmn_code (group_code, code, name, sort_order, upper_group_code, upper_code) VALUES
+    ('TKT_PROVISION_STEP_AINB',    'check_request',    '신청 확인',              10, NULL,                       NULL),
+    ('TKT_PROVISION_STEP_AINB',    'create_workspace', '워크스페이스 생성',      20, NULL,                       NULL),
+    ('TKT_PROVISION_STEP_AINB',    'check_ready',      '사용 준비 확인',         30, NULL,                       NULL),
+    ('TKT_PROVISION_SUBSTEP_AINB', 'check_name',       '워크스페이스 이름',      10, 'TKT_PROVISION_STEP_AINB', 'check_request'),
+    ('TKT_PROVISION_SUBSTEP_AINB', 'check_quota',      '자원 한도',              20, 'TKT_PROVISION_STEP_AINB', 'check_request'),
+    ('TKT_PROVISION_SUBSTEP_AINB', 'create_profile',   'Profile·네임스페이스 생성', 30, 'TKT_PROVISION_STEP_AINB', 'create_workspace'),
+    ('TKT_PROVISION_SUBSTEP_AINB', 'apply_quota',      '자원 한도 적용',         40, 'TKT_PROVISION_STEP_AINB', 'create_workspace'),
+    ('TKT_PROVISION_SUBSTEP_AINB', 'check_namespace',  '네임스페이스 활성',      50, 'TKT_PROVISION_STEP_AINB', 'check_ready')
 ON CONFLICT (group_code, code) DO NOTHING;
 
 COMMIT;
