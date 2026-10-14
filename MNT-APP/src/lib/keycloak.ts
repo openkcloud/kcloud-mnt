@@ -55,3 +55,20 @@ export function loginRedirect(next?: string): Promise<void> {
   const q = next ? `?next=${encodeURIComponent(next)}` : "";
   return getKeycloak().login({ redirectUri: `${window.location.origin}/auth/login/${q}` });
 }
+
+// 토큰을 지운 뒤에도 Keycloak 로그아웃에 쓰는 ID 토큰(메모리만) — 없으면 Keycloak 이 "로그아웃 하시겠습니까?" 확인 화면을 띄운다
+let idTokenHint: string | undefined;
+
+/** 메모리의 토큰을 지운다(세션 종료). Keycloak 로그아웃용 ID 토큰만 남긴다. */
+export function clearTokens() {
+  const k = getKeycloak();
+  idTokenHint = k.idToken ?? idTokenHint;
+  k.clearToken();
+}
+
+/** 이 브라우저의 Keycloak 로그인 세션·쿠키를 끝내고 redirectUri 로 — 확인 화면 없이 바로 돌아온다. */
+export function logoutRedirect(redirectUri: string): Promise<void> {
+  const k = getKeycloak();
+  k.idToken ??= idTokenHint;
+  return k.logout({ redirectUri });
+}
