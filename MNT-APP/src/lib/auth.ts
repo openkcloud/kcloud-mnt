@@ -9,7 +9,7 @@
  *  - 다른 곳 로그인·관리자 강제 종료는 MNT-CORE /auth/session 을 보이는 탭이 5초마다 확인. */
 import { create } from "zustand";
 import { CORE_BASE } from "@/lib/menu-api";
-import { getKeycloak, initKeycloak, loginRedirect } from "@/lib/keycloak";
+import { clearTokens, getKeycloak, initKeycloak, logoutRedirect } from "@/lib/keycloak";
 import { authFetch, readError, setAuthFailureHandler } from "@/lib/http";
 import { getNavByRole, type NavItem } from "@/lib/nav";
 import { ainbLogin, ainbLogout } from "@/lib/ainb-api";
@@ -145,7 +145,7 @@ async function endSession(reason: string, opts: { server?: boolean; broadcast?: 
       });
     } catch {}
   }
-  getKeycloak().clearToken();
+  clearTokens();
   ainbLogout(); // AI 노트북 세션 쿠키도 정리
   useAuth.setState({
     status: "ended", user: null,
@@ -164,14 +164,13 @@ setAuthFailureHandler((reason, message) => {
   void endSession(reason, { message });
 });
 
-/** 안내 화면의 로그인 버튼 — 계정 문제(denied)면 Keycloak 세션까지 끝내고 로그인 화면으로(다른 계정으로 로그인). */
+/** 안내 화면의 로그인 버튼 — 이 브라우저의 Keycloak 세션·쿠키까지 끝내고(Keycloak 로그아웃 경유) 로그인 화면으로.
+ *  로그인 화면으로 바로 보내면, Keycloak 세션이 남아 있을 때(서버 쪽 삭제 실패 등) 끝난 세션으로 조용히 다시 들어와 같은 안내가 반복된다.
+ *  계정 문제(denied)면 다른 계정으로 로그인하므로 원래 화면(next)으로 돌아가지 않는다. */
 export function loginAgain() {
   const next = window.location.pathname + window.location.search;
-  if (useAuth.getState().ended?.reason === "denied") {
-    void getKeycloak().logout({ redirectUri: `${window.location.origin}/auth/login/` });
-    return;
-  }
-  void loginRedirect(next.startsWith("/auth/") ? undefined : next);
+  const keep = useAuth.getState().ended?.reason !== "denied" && !next.startsWith("/auth/");
+  void logoutRedirect(`${window.location.origin}/auth/login/${keep ? `?next=${encodeURIComponent(next)}` : ""}`);
 }
 
 // ── 감시: 조작 시각·미사용·세션 상태·토큰 유지·다른 탭 ──────────────
