@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import httpx
+import yaml
 from fastapi import APIRouter, Body, HTTPException, Query
 
-from ..k8s_client import k8s_get, k8s_request
+from ..k8s_client import k8s_get, k8s_get_text, k8s_request
 
 router = APIRouter(tags=["k8s"])
 
@@ -259,7 +261,11 @@ def _wl_path(kind: str, ns: str, name: str | None = None) -> str:
 # ── 워크로드 ──
 @router.post("/clusters/{cluster_id}/workloads", status_code=201)
 def create_workload(cluster_id: str, body: dict = Body(...)):
-    """기본 Deployment 생성(가장 흔한 경우). 종류·이미지·레플리카·자원·가속기."""
+    """폼 기반 생성 — Deployment/StatefulSet(레플리카형). 이미지·자원·가속기.
+    (Job/CronJob/DaemonSet·커스텀은 /workloads/apply 로 YAML 적용)"""
+    kind = body.get("kind", "Deployment")
+    if kind not in ("Deployment", "StatefulSet"):
+        raise HTTPException(status_code=400, detail="폼 생성은 Deployment/StatefulSet 만. 그 외는 YAML 적용을 쓰세요.")
     ns = body["namespace"]
     name = body["name"]
     requests: dict = {}
@@ -272,24 +278,118 @@ def create_workload(cluster_id: str, body: dict = Body(...)):
     if acc_kind and acc_count > 0:
         limits[acc_kind] = str(acc_count)  # 가속기는 requests=limits 가 원칙
         requests[acc_kind] = str(acc_count)
-    manifest = {
-        "apiVersion": "apps/v1", "kind": "Deployment",
-        "metadata": {"name": name, "namespace": ns, "labels": {"app": name}},
-        "spec": {
-            "replicas": int(body.get("replicas") or 1),
-            "selector": {"matchLabels": {"app": name}},
-            "template": {
-                "metadata": {"labels": {"app": name}},
-                "spec": {"containers": [{
-                    "name": name,
-                    "image": body["image"],
-                    **({"resources": {"requests": requests, "limits": limits or requests}} if requests else {}),
-                }]},
-            },
+    spec: dict = {
+        "replicas": int(body.get("replicas") or 1),
+        "selector": {"matchLabels": {"app": name}},
+        "template": {
+            "metadata": {"labels": {"app": name}},
+            "spec": {"containers": [{
+                "name": name,
+                "image": body["image"],
+                **({"resources": {"requests": requests, "limits": limits or requests}} if requests else {}),
+            }]},
         },
     }
+    if kind == "StatefulSet":
+        spec["serviceName"] = name  # StatefulSet 필수 — 헤드리스 서비스명(DNS)
+    manifest = {
+        "apiVersion": "apps/v1", "kind": kind,
+        "metadata": {"name": name, "namespace": ns, "labels": {"app": name}},
+        "spec": spec,
+    }
     try:
-        return k8s_request(cluster_id, "POST", _wl_path("Deployment", ns), json=manifest)
+        return k8s_request(cluster_id, "POST", _wl_path(kind, ns), json=manifest)
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.post("/clusters/{cluster_id}/workloads/apply", status_code=201)
+def apply_workload(cluster_id: str, body: dict = Body(...)):
+    """YAML 로 워크로드 생성/적용(server-side apply) — Job/CronJob/DaemonSet 등 모든 종류."""
+    try:
+        obj = yaml.safe_load(body["yaml"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"YAML 파싱 실패: {e}")
+    if not isinstance(obj, dict) or "kind" not in obj or not obj.get("metadata", {}).get("name"):
+        raise HTTPException(status_code=400, detail="kind·metadata.name 이 있는 단일 리소스 YAML 이어야 합니다.")
+    kind = obj["kind"]
+    if kind not in _WORKLOAD_API:
+        raise HTTPException(status_code=400, detail=f"워크로드 종류만 허용: {kind} 불가")
+    ns = obj["metadata"].get("namespace") or body.get("namespace") or "default"
+    obj["metadata"]["namespace"] = ns
+    name = obj["metadata"]["name"]
+    path = f"{_wl_path(kind, ns, name)}?fieldManager=okc-portal&force=true"
+    try:
+        return k8s_request(cluster_id, "PATCH", path,
+                           content=yaml.safe_dump(obj).encode(), content_type="application/apply-patch+yaml")
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
+def workload_yaml(cluster_id: str, kind: str, namespace: str, name: str):
+    """워크로드 매니페스트(YAML) 조회 — managedFields·status 는 제거해 편집용으로 정리."""
+    try:
+        obj = k8s_get(cluster_id, _wl_path(kind, namespace, name))
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+    obj.get("metadata", {}).pop("managedFields", None)
+    obj.pop("status", None)
+    return {"yaml": yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)}
+
+
+@router.put("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
+def update_workload_yaml(cluster_id: str, kind: str, namespace: str, name: str, body: dict = Body(...)):
+    """YAML 직접 수정 저장 — server-side apply."""
+    try:
+        obj = yaml.safe_load(body["yaml"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"YAML 파싱 실패: {e}")
+    obj.setdefault("metadata", {})["namespace"] = namespace
+    path = f"{_wl_path(kind, namespace, name)}?fieldManager=okc-portal&force=true"
+    try:
+        return k8s_request(cluster_id, "PATCH", path,
+                           content=yaml.safe_dump(obj).encode(), content_type="application/apply-patch+yaml")
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/pods")
+def workload_pods(cluster_id: str, kind: str, namespace: str, name: str):
+    """워크로드에 속한 파드 목록 — selector(matchLabels)로 조회. Job 류는 job-name."""
+    try:
+        wl = k8s_get(cluster_id, _wl_path(kind, namespace, name))
+        sel = (wl.get("spec", {}).get("selector", {}) or {}).get("matchLabels") or {}
+        if not sel and kind in ("Job", "CronJob"):
+            sel = {"job-name": name}
+        ls = ",".join(f"{k}={v}" for k, v in sel.items())
+        pods = k8s_get(cluster_id, f"/api/v1/namespaces/{namespace}/pods?labelSelector={quote(ls)}")
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+    out = []
+    for p in pods.get("items", []):
+        meta, spec, st = p.get("metadata", {}), p.get("spec", {}), p.get("status", {})
+        cs = st.get("containerStatuses", []) or []
+        out.append({
+            "name": meta.get("name", ""),
+            "phase": st.get("phase", ""),
+            "ready": f"{sum(1 for c in cs if c.get('ready'))}/{len(cs)}" if cs else "0/0",
+            "restarts": sum(c.get("restartCount", 0) for c in cs),
+            "node": spec.get("nodeName", ""),
+            "podIP": st.get("podIP", ""),
+            "startedAt": st.get("startTime", ""),
+            "containers": [c.get("name", "") for c in (spec.get("containers", []) or [])],
+        })
+    return {"pods": out}
+
+
+@router.get("/clusters/{cluster_id}/pods/{namespace}/{name}/logs")
+def pod_logs(cluster_id: str, namespace: str, name: str,
+             container: str | None = Query(None), tail: int = Query(500)):
+    """파드 로그 — 평문. container 미지정 시 기본 컨테이너."""
+    q = f"?tailLines={tail}" + (f"&container={quote(container)}" if container else "")
+    try:
+        return {"logs": k8s_get_text(cluster_id, f"/api/v1/namespaces/{namespace}/pods/{name}/log{q}")}
     except Exception as e:  # noqa: BLE001
         raise _err(e)
 

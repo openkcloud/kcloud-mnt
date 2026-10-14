@@ -5,7 +5,7 @@
  * 레이아웃·폰트는 IaaS 목록 화면 규약(툴바 Card + 테이블 Card)과 동일.
  */
 import * as React from "react";
-import { Search, Loader2, Layers, Plus, Scale, RotateCw, Trash2 } from "lucide-react";
+import { Search, Loader2, Layers, Plus, Scale, RotateCw, Trash2, ScrollText, FileCode } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,12 +22,16 @@ import {
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ui/confirm";
 import { ClusterScopeBar, useClusterScope } from "@/components/paas/cluster-scope-bar";
 import {
   useWorkloads, useCreateWorkload, useScaleWorkload, useRestartWorkload, useDeleteWorkload,
-  useNamespaces, type WorkloadRow,
+  useApplyWorkload, useUpdateWorkloadYaml, fetchWorkloadYaml, useWorkloadPods, fetchPodLogs,
+  useNamespaces, type WorkloadRow, type PodRow,
 } from "@/lib/paas-api";
+
+const TEXTAREA_CLS = "w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
 const KINDS = ["Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"] as const;
 const SCALABLE = new Set(["Deployment", "StatefulSet"]);
@@ -47,6 +51,8 @@ export default function WorkloadsPage() {
   const [q, setQ] = React.useState("");
   const [createOpen, setCreateOpen] = React.useState(false);
   const [scaleTarget, setScaleTarget] = React.useState<WorkloadRow | null>(null);
+  const [podsTarget, setPodsTarget] = React.useState<WorkloadRow | null>(null);
+  const [yamlTarget, setYamlTarget] = React.useState<WorkloadRow | null>(null);
 
   const workloads = useWorkloads(clusterId, namespace === "all" ? undefined : namespace);
   const restart = useRestartWorkload(clusterId);
@@ -118,7 +124,7 @@ export default function WorkloadsPage() {
                 <TableHead>요청 자원</TableHead>
                 <TableHead>가속기</TableHead>
                 <TableHead>상태</TableHead>
-                <TableHead className="w-28" />
+                <TableHead className="w-40" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -126,6 +132,8 @@ export default function WorkloadsPage() {
                 <Row
                   key={`${w.kind}/${w.namespace}/${w.name}`}
                   w={w} busy={busy}
+                  onPods={() => setPodsTarget(w)}
+                  onYaml={() => setYamlTarget(w)}
                   onScale={() => setScaleTarget(w)}
                   onRestart={() => doRestart(w)}
                   onDelete={() => doDelete(w)}
@@ -145,14 +153,16 @@ export default function WorkloadsPage() {
 
       {createOpen && <CreateDialog clusterId={clusterId} defaultNs={namespace === "all" ? "default" : namespace} onClose={() => setCreateOpen(false)} />}
       {scaleTarget && <ScaleDialog clusterId={clusterId} w={scaleTarget} onClose={() => setScaleTarget(null)} />}
+      {podsTarget && <PodsDialog clusterId={clusterId} w={podsTarget} onClose={() => setPodsTarget(null)} />}
+      {yamlTarget && <YamlDialog clusterId={clusterId} w={yamlTarget} onClose={() => setYamlTarget(null)} />}
     </div>
   );
 }
 
 function Row({
-  w, busy, onScale, onRestart, onDelete,
+  w, busy, onPods, onYaml, onScale, onRestart, onDelete,
 }: {
-  w: WorkloadRow; busy: boolean; onScale: () => void; onRestart: () => void; onDelete: () => void;
+  w: WorkloadRow; busy: boolean; onPods: () => void; onYaml: () => void; onScale: () => void; onRestart: () => void; onDelete: () => void;
 }) {
   return (
     <TableRow>
@@ -186,6 +196,8 @@ function Row({
       </TableCell>
       <TableCell>
         <div className="flex items-center gap-0.5">
+          <Button variant="ghost" size="icon-sm" title="파드·로그" onClick={onPods}><ScrollText className="size-3.5" /></Button>
+          <Button variant="ghost" size="icon-sm" title="YAML 보기·수정" onClick={onYaml}><FileCode className="size-3.5" /></Button>
           {SCALABLE.has(w.kind) && (
             <Button variant="ghost" size="icon-sm" title="레플리카 조정" disabled={busy} onClick={onScale}><Scale className="size-3.5" /></Button>
           )}
@@ -230,17 +242,36 @@ function ScaleDialog({ clusterId, w, onClose }: { clusterId: string; w: Workload
   );
 }
 
+const YAML_SAMPLE = `apiVersion: batch/v1
+kind: Job
+metadata:
+  name: my-train-job
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: trainer
+          image: python:3.12
+          command: ["python", "-c", "print('train')"]
+`;
+
 function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; defaultNs: string; onClose: () => void }) {
   const create = useCreateWorkload(clusterId);
+  const apply = useApplyWorkload(clusterId);
   const namespaces = useNamespaces(clusterId);
   const [form, setForm] = React.useState({
+    kind: "Deployment" as "Deployment" | "StatefulSet",
     namespace: defaultNs, name: "", image: "", replicas: "1",
     cpu: "", memory: "", acceleratorKind: "none", acceleratorCount: "1",
   });
+  const [yaml, setYaml] = React.useState(YAML_SAMPLE);
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const pending = create.isPending || apply.isPending;
 
-  const submit = () => {
+  const submitForm = () => {
     create.mutate({
+      kind: form.kind,
       namespace: form.namespace, name: form.name, image: form.image,
       replicas: Number(form.replicas) || 1,
       cpu: form.cpu || undefined, memory: form.memory || undefined,
@@ -251,75 +282,223 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
       onError: (e) => toast.error("생성 실패", { description: String((e as Error).message) }),
     });
   };
+  const submitYaml = () => {
+    apply.mutate(yaml, {
+      onSuccess: () => { toast.success("워크로드 적용됨"); onClose(); },
+      onError: (e) => toast.error("적용 실패", { description: String((e as Error).message) }),
+    });
+  };
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle>워크로드 생성</DialogTitle>
-          <DialogDescription>Deployment 를 생성합니다. (다른 종류는 YAML 적용 예정)</DialogDescription>
+          <DialogDescription>폼(Deployment/StatefulSet) 또는 YAML(Job·CronJob 등 모든 종류).</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3 py-2">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>네임스페이스</Label>
-              <Select value={form.namespace} onValueChange={(v) => set("namespace", v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {(namespaces.data ?? [form.namespace]).map((ns) => (
-                    <SelectItem key={ns} value={ns} className="font-mono text-xs">{ns}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+        <Tabs defaultValue="form">
+          <TabsList>
+            <TabsTrigger value="form">폼</TabsTrigger>
+            <TabsTrigger value="yaml">YAML</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="form" className="space-y-3 pt-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>종류</Label>
+                <Select value={form.kind} onValueChange={(v) => set("kind", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Deployment">Deployment</SelectItem>
+                    <SelectItem value="StatefulSet">StatefulSet</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>네임스페이스</Label>
+                <Select value={form.namespace} onValueChange={(v) => set("namespace", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(namespaces.data ?? [form.namespace]).map((ns) => (
+                      <SelectItem key={ns} value={ns} className="font-mono text-xs">{ns}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label>이름</Label>
               <Input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="my-app" />
             </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>이미지</Label>
-            <Input value={form.image} onChange={(e) => set("image", e.target.value)} placeholder="nginx:1.27" className="font-mono text-xs" />
-          </div>
-          <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
-              <Label>레플리카</Label>
-              <Input type="number" min={0} value={form.replicas} onChange={(e) => set("replicas", e.target.value)} />
+              <Label>이미지</Label>
+              <Input value={form.image} onChange={(e) => set("image", e.target.value)} placeholder="nginx:1.27" className="font-mono text-xs" />
             </div>
-            <div className="space-y-1.5">
-              <Label>CPU 요청</Label>
-              <Input value={form.cpu} onChange={(e) => set("cpu", e.target.value)} placeholder="500m" className="font-mono text-xs" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>메모리 요청</Label>
-              <Input value={form.memory} onChange={(e) => set("memory", e.target.value)} placeholder="512Mi" className="font-mono text-xs" />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>가속기</Label>
-              <Select value={form.acceleratorKind} onValueChange={(v) => set("acceleratorKind", v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">없음</SelectItem>
-                  <SelectItem value="nvidia.com/gpu">nvidia.com/gpu</SelectItem>
-                  <SelectItem value="furiosa.ai/rngd">furiosa.ai/rngd</SelectItem>
-                  <SelectItem value="rebellions.ai/atom">rebellions.ai/atom</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {form.acceleratorKind !== "none" && (
+            <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5">
-                <Label>가속기 개수</Label>
-                <Input type="number" min={1} value={form.acceleratorCount} onChange={(e) => set("acceleratorCount", e.target.value)} />
+                <Label>레플리카</Label>
+                <Input type="number" min={0} value={form.replicas} onChange={(e) => set("replicas", e.target.value)} />
               </div>
+              <div className="space-y-1.5">
+                <Label>CPU 요청</Label>
+                <Input value={form.cpu} onChange={(e) => set("cpu", e.target.value)} placeholder="500m" className="font-mono text-xs" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>메모리 요청</Label>
+                <Input value={form.memory} onChange={(e) => set("memory", e.target.value)} placeholder="512Mi" className="font-mono text-xs" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>가속기</Label>
+                <Select value={form.acceleratorKind} onValueChange={(v) => set("acceleratorKind", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">없음</SelectItem>
+                    <SelectItem value="nvidia.com/gpu">nvidia.com/gpu</SelectItem>
+                    <SelectItem value="furiosa.ai/rngd">furiosa.ai/rngd</SelectItem>
+                    <SelectItem value="rebellions.ai/atom">rebellions.ai/atom</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {form.acceleratorKind !== "none" && (
+                <div className="space-y-1.5">
+                  <Label>가속기 개수</Label>
+                  <Input type="number" min={1} value={form.acceleratorCount} onChange={(e) => set("acceleratorCount", e.target.value)} />
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>취소</Button>
+              <Button disabled={pending || !form.name || !form.image} onClick={submitForm}>
+                {create.isPending && <Loader2 className="size-3.5 animate-spin" />} 생성
+              </Button>
+            </DialogFooter>
+          </TabsContent>
+
+          <TabsContent value="yaml" className="space-y-2 pt-3">
+            <Label>매니페스트 (Deployment·StatefulSet·DaemonSet·Job·CronJob)</Label>
+            <textarea value={yaml} onChange={(e) => setYaml(e.target.value)} rows={16} className={TEXTAREA_CLS} spellCheck={false} />
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>취소</Button>
+              <Button disabled={pending || !yaml.trim()} onClick={submitYaml}>
+                {apply.isPending && <Loader2 className="size-3.5 animate-spin" />} 적용
+              </Button>
+            </DialogFooter>
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── 파드 드릴다운 + 로그 ──
+function PodsDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadRow; onClose: () => void }) {
+  const pods = useWorkloadPods(clusterId, w.kind, w.namespace, w.name);
+  const [logPod, setLogPod] = React.useState<PodRow | null>(null);
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Layers className="size-4 text-brand-indigo-600" /> {w.name} · 파드</DialogTitle>
+          <DialogDescription className="font-mono text-xs">{w.kind} · {w.namespace}</DialogDescription>
+        </DialogHeader>
+        {pods.isLoading ? <Skeleton className="h-40" /> : pods.isError ? (
+          <div className="py-8 text-center text-sm text-rose-500">파드 조회 실패</div>
+        ) : (
+          <Card className="overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>파드</TableHead><TableHead>상태</TableHead><TableHead>Ready</TableHead>
+                  <TableHead>재시작</TableHead><TableHead>노드</TableHead><TableHead className="w-16" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(pods.data ?? []).map((p) => (
+                  <TableRow key={p.name}>
+                    <TableCell className="max-w-[260px] truncate font-mono text-xs font-medium">{p.name}</TableCell>
+                    <TableCell><Badge variant={stVariant(p.phase === "Running" ? "Running" : p.phase === "Pending" ? "Pending" : p.phase === "Failed" ? "Failed" : "x")} className="text-[10px]">{p.phase}</Badge></TableCell>
+                    <TableCell className="font-mono text-xs">{p.ready}</TableCell>
+                    <TableCell className="font-mono text-xs">{p.restarts}</TableCell>
+                    <TableCell className="font-mono text-[11px] text-muted-foreground">{p.node || "—"}</TableCell>
+                    <TableCell><Button variant="ghost" size="icon-sm" title="로그" onClick={() => setLogPod(p)}><ScrollText className="size-3.5" /></Button></TableCell>
+                  </TableRow>
+                ))}
+                {(pods.data ?? []).length === 0 && (
+                  <TableRow><TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">파드가 없습니다.</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Card>
+        )}
+        {logPod && <LogsDialog clusterId={clusterId} namespace={w.namespace} pod={logPod} onClose={() => setLogPod(null)} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function LogsDialog({ clusterId, namespace, pod, onClose }: { clusterId: string; namespace: string; pod: PodRow; onClose: () => void }) {
+  const [container, setContainer] = React.useState(pod.containers[0] ?? "");
+  const [logs, setLogs] = React.useState<string>("불러오는 중…");
+  React.useEffect(() => {
+    let alive = true;
+    fetchPodLogs(clusterId, namespace, pod.name, container || undefined)
+      .then((d) => { if (alive) setLogs(d.logs || "(로그 없음)"); })
+      .catch((e) => { if (alive) setLogs(`로그 조회 실패: ${e.message}`); });
+    return () => { alive = false; };
+  }, [clusterId, namespace, pod.name, container]);
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 font-mono text-sm">{pod.name}</DialogTitle>
+          <DialogDescription className="flex items-center gap-2">
+            {pod.containers.length > 1 && (
+              <Select value={container} onValueChange={setContainer}>
+                <SelectTrigger className="h-7 w-48"><SelectValue /></SelectTrigger>
+                <SelectContent>{pod.containers.map((c) => <SelectItem key={c} value={c} className="font-mono text-xs">{c}</SelectItem>)}</SelectContent>
+              </Select>
             )}
-          </div>
-        </div>
+            <span className="text-[11px] text-muted-foreground">최근 500줄</span>
+          </DialogDescription>
+        </DialogHeader>
+        <pre className="max-h-[60vh] overflow-auto rounded bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre-wrap">{logs}</pre>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── YAML 보기·수정 ──
+function YamlDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadRow; onClose: () => void }) {
+  const update = useUpdateWorkloadYaml(clusterId);
+  const [text, setText] = React.useState<string>("");
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let alive = true;
+    fetchWorkloadYaml(clusterId, w.kind, w.namespace, w.name)
+      .then((d) => { if (alive) { setText(d.yaml); setLoading(false); } })
+      .catch((e) => { if (alive) { setText(`# 조회 실패: ${e.message}`); setLoading(false); } });
+    return () => { alive = false; };
+  }, [clusterId, w]);
+  const save = () => update.mutate(
+    { kind: w.kind, namespace: w.namespace, name: w.name, yaml: text },
+    { onSuccess: () => { toast.success(`${w.name} 저장됨`); onClose(); }, onError: (e) => toast.error("저장 실패", { description: String((e as Error).message) }) },
+  );
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><FileCode className="size-4 text-brand-indigo-600" /> {w.name} · YAML</DialogTitle>
+          <DialogDescription className="font-mono text-xs">{w.kind} · {w.namespace} — 수정 후 저장 시 server-side apply</DialogDescription>
+        </DialogHeader>
+        {loading ? <Skeleton className="h-80" /> : (
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={22} className={TEXTAREA_CLS} spellCheck={false} />
+        )}
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button disabled={create.isPending || !form.name || !form.image} onClick={submit}>
-            {create.isPending && <Loader2 className="size-3.5 animate-spin" />} 생성
+          <Button variant="outline" onClick={onClose}>닫기</Button>
+          <Button disabled={update.isPending || loading} onClick={save}>
+            {update.isPending && <Loader2 className="size-3.5 animate-spin" />} 저장
           </Button>
         </DialogFooter>
       </DialogContent>
