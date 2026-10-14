@@ -1,7 +1,7 @@
 "use client";
 import * as React from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
   ChevronLeft,
   Square,
@@ -25,8 +25,11 @@ import {
   TabsTrigger,
   TabsContent,
 } from "@/components/ui/tabs";
-import { Sparkline, makeSeries } from "@/components/viz/sparkline";
+import { Sparkline } from "@/components/viz/sparkline";
 import { useNotebookConnect, notebookAction } from "@/lib/notebook-api";
+import { useQuery } from "@tanstack/react-query";
+import { ainbFetch, ainbSessionOk } from "@/lib/ainb-api";
+import { useProjectContext } from "@/lib/project-context";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -44,18 +47,46 @@ import { cn } from "@/lib/utils";
  *
  * 실제 Kubeflow 설치 후에는 iframe src 만 변경됩니다.
  * 사이드 패널·헤더·모니터는 그대로 유지 — gap 최소화.
+ *
+ * 노트북 이름은 실행 중에 생기므로 정적 export 의 동적 경로 대신 쿼리 파라미터로 받는다 (/notebooks/ide/?id=)
  */
-export default function NotebookIdePage() {
-  const params = useParams<{ id: string }>();
-  const { data: nb, isLoading } = useNotebookConnect(params.id);
-  const [running] = React.useState(true);
+export default function Page() {
+  return <React.Suspense fallback={<Skeleton className="h-screen" />}><NotebookIdePage /></React.Suspense>;
+}
+
+function NotebookIdePage() {
+  const id = useSearchParams().get("id") ?? "";
+  const [sessionReady, setSessionReady] = React.useState(false);
+
+  // IDE 프록시는 로그인 때 받은 세션 쿠키(okc_session)를 요구한다 — 없으면 다시 로그인하도록 안내
+  React.useEffect(() => {
+    ainbSessionOk()
+      .then((ok) => {
+        if (!ok) toast.error("AI 노트북 세션이 없습니다", {
+          description: "로그아웃 후 다시 로그인하면 개발환경에 접속할 수 있습니다.",
+        });
+      })
+      .finally(() => setSessionReady(true));
+  }, []);
+
+  const { data: nb, isLoading } = useNotebookConnect(id);
+  const { canSee, loading: ctxLoading } = useProjectContext();
 
   async function action(act: "stop" | "restart") {
-    await notebookAction(params.id, act);
+    await notebookAction(id, act);
     toast.success(`노트북 ${act === "stop" ? "정지" : "재시작"} 요청 완료`);
   }
 
-  if (isLoading || !nb) return <Skeleton className="h-screen" />;
+  if (isLoading || !nb || !sessionReady || ctxLoading) return <Skeleton className="h-screen" />;
+  // 내 워크스페이스(관리자는 전체)의 노트북만 연다
+  if (!canSee(nb.namespace)) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-slate-950 text-sm text-slate-300">
+        이 노트북에 접근할 수 없습니다 —{" "}
+        <Link href="/ai-development/notebooks" className="ml-1 underline">노트북 목록</Link>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-950 text-slate-100">
@@ -115,7 +146,7 @@ export default function NotebookIdePage() {
       <div className="flex min-h-0 flex-1">
         <NotebookSidePanel nb={nb} />
         <CodeServerSlot nb={nb} />
-        <AcceleratorMonitor nb={nb} running={running} />
+        <AcceleratorMonitor nb={nb} />
       </div>
 
       {/* ───── Status Bar ───── */}
@@ -173,6 +204,97 @@ function ConnectionBadge({
 
 // ────────────────────────────────────────────────────────
 // Left: Notebook side panel (CMP 고유 — 그대로 유지)
+/** 볼륨 카드 — 총 용량(PVC) + 실제 사용량(du 실측, 30초 갱신) */
+function VolumeUsageCard({
+  nbId, live, pvcName, sizeGb, mountPath,
+}: {
+  nbId: string; live: boolean; pvcName: string; sizeGb: number; mountPath: string;
+}) {
+  const { data } = useQuery({
+    queryKey: ["ide-nb-volume", nbId],
+    queryFn: async () => {
+      const res = await ainbFetch(`/notebooks/${nbId}/volume`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return (await res.json()) as {
+        sizeGb: number; usedHuman: string | null; usedPercent: number | null;
+      };
+    },
+    enabled: live,
+    refetchInterval: 30000,
+  });
+  const totalGb = data?.sizeGb || sizeGb;
+  const pct = data?.usedPercent ?? null;
+  return (
+    <div className="flex items-start gap-2 rounded border border-slate-800 bg-slate-950 p-2">
+      <HardDrive className="size-3.5 text-brand-mint-500" />
+      <div className="flex-1 space-y-1 text-[10px]">
+        <div className="font-mono text-white">{pvcName}</div>
+        <div className="text-slate-400">
+          {totalGb > 0 ? `${totalGb} GB` : "용량 정보 없음"} · {mountPath}
+        </div>
+        {data?.usedHuman != null && (
+          <>
+            <div className="text-slate-300">
+              사용 중 <span className="font-mono text-white">{data.usedHuman}</span>
+              {pct != null && (
+                <span className={cn("ml-1", pct >= 90 ? "text-rose-400" : "text-slate-400")}>
+                  ({pct}%)
+                </span>
+              )}
+            </div>
+            {pct != null && (
+              <div className="h-1 overflow-hidden rounded bg-slate-800">
+                <div
+                  className={cn("h-full rounded",
+                    pct >= 90 ? "bg-rose-500" : pct >= 70 ? "bg-amber-400" : "bg-brand-mint-500")}
+                  style={{ width: `${Math.min(100, pct)}%` }}
+                />
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 실측 파일 목록 — live 모드에서만 조회, 데이터 없으면 안내 문구 (mock 목록 없음) */
+function WorkspaceFileList({ nbId, live }: { nbId: string; live: boolean }) {
+  const { data } = useQuery({
+    queryKey: ["ide-nb-files", nbId],
+    queryFn: async () => {
+      const res = await ainbFetch(`/notebooks/${nbId}/files`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      const json = (await res.json()) as {
+        items: { name: string; modified?: string }[];
+      };
+      return json.items.filter((f) => !f.name.startsWith("."));
+    },
+    enabled: live,
+    refetchInterval: 15000,
+  });
+  const files = live ? (data ?? []) : [];
+  return (
+    <div className="space-y-1">
+      <div className="text-[9px] uppercase text-slate-500">워크스페이스 파일</div>
+      {files.length === 0 && (
+        <div className="px-1.5 py-1 text-[10px] text-slate-500">
+          {live ? "파일 정보를 불러오는 중…" : "연결 후 표시됩니다"}
+        </div>
+      )}
+      {files.slice(0, 8).map((f) => (
+        <div
+          key={f.name}
+          className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] hover:bg-slate-800"
+        >
+          <Folder className="size-3 text-amber-400" />
+          <span className="truncate font-mono">{f.name}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ────────────────────────────────────────────────────────
 function NotebookSidePanel({
   nb,
@@ -222,29 +344,14 @@ function NotebookSidePanel({
         </TabsContent>
 
         <TabsContent value="pvc" className="space-y-2 px-1 pt-2">
-          <div className="flex items-start gap-2 rounded border border-slate-800 bg-slate-950 p-2">
-            <HardDrive className="size-3.5 text-brand-mint-500" />
-            <div className="flex-1 space-y-0.5 text-[10px]">
-              <div className="font-mono text-white">
-                {nb.workspaceVolume.pvcName}
-              </div>
-              <div className="text-slate-400">
-                {nb.workspaceVolume.sizeGb} GB · {nb.workspaceVolume.mountPath}
-              </div>
-            </div>
-          </div>
-          <div className="space-y-1">
-            <div className="text-[9px] uppercase text-slate-500">최근 변경 파일</div>
-            {["src/train.py", "config.yaml", "logs/train.log"].map((f) => (
-              <div
-                key={f}
-                className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] hover:bg-slate-800"
-              >
-                <Folder className="size-3 text-amber-400" />
-                <span className="truncate font-mono">{f}</span>
-              </div>
-            ))}
-          </div>
+          <VolumeUsageCard
+            nbId={nb.name}
+            live={nb.connectMode === "live"}
+            pvcName={nb.workspaceVolume.pvcName}
+            sizeGb={nb.workspaceVolume.sizeGb}
+            mountPath={nb.workspaceVolume.mountPath}
+          />
+          <WorkspaceFileList nbId={nb.name} live={nb.connectMode === "live"} />
         </TabsContent>
 
         <TabsContent value="info" className="space-y-2 px-1 pt-2 text-[10px]">
@@ -296,9 +403,10 @@ function CodeServerSlot({
             {showLive ? "iframe" : "preview"}
           </Badge>
         </div>
-        {nb.connectMode === "live" && (
+        {/* 데모 전환 스위치는 개발용 — 실접속 상태에서는 노출하지 않는다 */}
+        {nb.connectMode !== "live" && (
           <div className="flex items-center gap-1.5">
-            <span>Force preview</span>
+            <span>미리보기 모드</span>
             <Switch checked={forceMock} onCheckedChange={setForceMock} />
           </div>
         )}
@@ -426,47 +534,103 @@ model.print_trainable_parameters()
 // ────────────────────────────────────────────────────────
 // Right: Accelerator Monitor (CMP 고유 — 그대로 유지)
 // ────────────────────────────────────────────────────────
+interface NbGpu {
+  node: string;
+  podPhase: string;
+  allocated: { kind: string; count: number } | null;
+  nodeGpu: {
+    gpu: string; utilPct: number; memUsedMb: number;
+    memTotalMb: number; tempC: number; powerW: number;
+  } | null;
+}
+
+/** 최근 값들을 모아 스파크라인용 시리즈로 (실측 샘플링) */
+function useGpuSamples(id: string) {
+  const [hist, setHist] = React.useState<NbGpu["nodeGpu"][]>([]);
+  const { data } = useQuery({
+    queryKey: ["ide-gpu", id],
+    queryFn: async () => {
+      const res = await ainbFetch(`/notebooks/${id}/gpu`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json() as Promise<NbGpu>;
+    },
+    enabled: !!id,
+    refetchInterval: 3000,
+  });
+  // 새 실측이 오면 이력에 쌓는다 — 직전 값을 기억해 두고 바뀔 때만 (effect 대신 렌더 중 갱신)
+  const [seen, setSeen] = React.useState<NbGpu | undefined>();
+  if (data !== seen) {
+    setSeen(data);
+    if (data?.nodeGpu) setHist((p) => [...p.slice(-29), data.nodeGpu]);
+  }
+  return { data, hist };
+}
+
 function AcceleratorMonitor({
   nb,
-  running,
 }: {
   nb: NonNullable<ReturnType<typeof useNotebookConnect>["data"]>;
-  running: boolean;
 }) {
+  const { data: gpuData, hist } = useGpuSamples(nb.name);
   const hasAcc = !!nb.resources.accelerator;
+  const g = gpuData?.nodeGpu;
+  // 샘플이 쌓이기 전에는 그래프를 그리지 않는다 — "실측" 배지 아래 가짜 곡선 금지
+  const series = (pick: (x: NonNullable<NbGpu["nodeGpu"]>) => number) =>
+    hist.filter(Boolean).map((h) => pick(h!));
+
   return (
     <aside className="hidden w-64 flex-col border-l border-slate-800 bg-slate-900 lg:flex">
-      <div className="border-b border-slate-800 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-        가속기 모니터
+      <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          가속기 모니터
+        </span>
+        {g && (
+          <span className="rounded bg-brand-mint-500/20 px-1.5 text-[9px] font-bold text-brand-mint-300">
+            실측
+          </span>
+        )}
       </div>
       <div className="space-y-3 p-3">
-        {hasAcc ? (
+        {hasAcc && g ? (
           <>
+            <div className="rounded border border-slate-800 bg-slate-950 px-2 py-1.5">
+              <div className="truncate text-[10px] font-semibold text-slate-200">{g.gpu}</div>
+              <div className="font-mono text-[9px] text-slate-500">
+                node/{gpuData?.node} · 할당 {gpuData?.allocated?.count ?? 0}장
+              </div>
+            </div>
             <MonitorMetric
-              label={`${nb.resources.accelerator!.kind.split("/")[1]?.toUpperCase()} 활용률`}
-              value={running ? "94%" : "12%"}
+              label="GPU 활용률"
+              value={`${g.utilPct}%`}
               color="#10b981"
-              data={makeSeries(1, 30, running ? 90 : 15, running ? 8 : 5)}
+              data={series((h) => h.utilPct)}
             />
             <MonitorMetric
               label="VRAM"
-              value={running ? "28.4 / 32 GB" : "4.2 / 32 GB"}
+              value={`${(g.memUsedMb / 1024).toFixed(1)} / ${(g.memTotalMb / 1024).toFixed(0)} GB`}
               color="#3b82f6"
-              data={makeSeries(2, 30, running ? 88 : 13, 4)}
+              data={series((h) => Math.round((h.memUsedMb / h.memTotalMb) * 100))}
             />
             <MonitorMetric
               label="온도"
-              value={running ? "72°C" : "48°C"}
+              value={`${g.tempC}°C`}
               color="#f59e0b"
-              data={makeSeries(3, 30, running ? 72 : 48, 3)}
+              data={series((h) => h.tempC)}
             />
             <MonitorMetric
               label="전력"
-              value={running ? "148 W" : "65 W"}
+              value={`${Math.round(g.powerW)} W`}
               color="#a855f7"
-              data={makeSeries(4, 30, running ? 148 : 65, 6)}
+              data={series((h) => Math.round(h.powerW))}
             />
+            <p className="text-[9px] leading-snug text-slate-500">
+              노드 전체 GPU 상태입니다. 다른 작업이 같은 GPU를 쓰면 함께 반영됩니다.
+            </p>
           </>
+        ) : hasAcc ? (
+          <div className="rounded border border-slate-800 bg-slate-950 p-3 text-center text-[10px] text-slate-400">
+            GPU 상태를 불러오는 중…
+          </div>
         ) : (
           <div className="rounded border border-slate-800 bg-slate-950 p-3 text-center text-xs text-slate-500">
             가속기 없음
@@ -477,13 +641,10 @@ function AcceleratorMonitor({
           <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
             메트릭 소스
           </div>
-          <Kv label="Source" value="Prometheus" mono small />
-          <Kv label="Endpoint" value="/api/v1/query" mono small />
-          <Kv label="Scrape" value="15s" mono small />
-        </div>
-
-        <div className="rounded border border-brand-mint-700/30 bg-brand-mint-900/20 p-2 text-[10px] text-brand-mint-200">
-          💡 데이터 소스: Prometheus + DCGM·RBLN exporter. 실제 구현 시 metric API 한 줄만 교체.
+          <Kv label="Source" value={g ? "nvidia-smi (DaemonSet)" : "-"} mono small />
+          <Kv label="Endpoint" value="/api/ainb/notebooks/{id}/gpu" mono small />
+          <Kv label="주기" value="3s" mono small />
+          <Kv label="Pod 상태" value={gpuData?.podPhase ?? "-"} mono small />
         </div>
       </div>
     </aside>
