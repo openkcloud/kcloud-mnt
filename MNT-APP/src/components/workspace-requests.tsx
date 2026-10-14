@@ -22,6 +22,7 @@ import { useAuth } from "@/lib/auth";
 import { useProfiles } from "@/lib/ainb-api";
 import { useCreateAiWorkspaceTicket, useTicketProjects, useTickets } from "@/lib/ticket-api";
 import type { RequestStatus, ResourceRequest } from "@/lib/types";
+import { formatDateTime } from "@/lib/utils";
 
 /* ── 한도 (vCPU·메모리·가속기·저장) ─────────────────────────── */
 export interface WorkspaceLimits { cpu?: number; memoryGi?: number; acceleratorCount?: number; storageGi?: number }
@@ -260,7 +261,7 @@ export function WorkspaceRequestsPanel({ isAdmin }: { isAdmin: boolean }) {
               {shown.map((r) => (
                 <TableRow key={r.id}>
                   <TableCell className="whitespace-nowrap font-mono text-[11px] text-muted-foreground">
-                    {r.requestedAt.replace("T", " ").slice(0, 16)}
+                    {formatDateTime(r.requestedAt)}
                   </TableCell>
                   <TableCell>
                     <div className="font-mono text-xs font-semibold">{r.projectName}</div>

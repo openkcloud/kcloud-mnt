@@ -5,6 +5,17 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const DATE_TIME_KST = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+
+/** 서버 시각(ISO, 시간대 포함) → 한국 시각 "YYYY-MM-DD HH:mm". DB·파드 시간대(테스트배드는 UTC)와 상관없이 같게 보인다. */
+export function formatDateTime(iso?: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : DATE_TIME_KST.format(d);
+}
+
 export function formatNumber(value: number, fractionDigits = 0) {
   return new Intl.NumberFormat("ko-KR", {
     maximumFractionDigits: fractionDigits,
