@@ -6,7 +6,7 @@ realm `openkcloud_realm` 의 로그인 테마로 씁니다(realm 파일 `charts/
 | 환경 | 넣는 방법 |
 |---|---|
 | 개발(Mac Mini) | `charts/infra/keycloak-dev/docker-compose.yaml` 이 이 폴더를 컨테이너에 연결 |
-| 테스트배드 | 이 폴더의 `Dockerfile` 로 만든 이미지(공식 26.7.4 + 테마)를 Harbor 에 올려 차트 이미지로 사용(`docs/포털_배포_가이드.md` 6.1) |
+| 테스트배드 | 이 폴더의 `Dockerfile` 로 만든 이미지(공식 26.7.4 + 테마) `harbor.io:7443/mnt/infra/quay.io/keycloak/openkcloud-theme` 를 차트 이미지로 사용(`docs/포털_배포_가이드.md` 6.1). 테마를 바꾸면 새 태그로 빌드 |
 
 ## 구성
 
@@ -26,6 +26,7 @@ openkcloud/login/
 - '로그인 상태 유지'는 처음 열 때 체크(2026-10-14 결정 — 체크하지 않으면 브라우저를 껐다 켤 때 로그인이 풀림), 공용 PC 는 해제할 수 있다.
 - **Keycloak 버전을 올릴 때**: `template.ftl`·`login.ftl` 은 base 복사본이라 새 버전 base 와 비교해 바뀐 부분을 옮긴다
   (`docker create quay.io/keycloak/keycloak:<버전>` → `/opt/keycloak/lib/lib/main/org.keycloak.keycloak-themes-<버전>.jar` 의 `theme/base/login/`).
+  `Dockerfile` 의 `FROM` 은 Harbor 에 옮겨 둔 공식 이미지라, 새 버전 공식 이미지를 Harbor `mnt/infra/quay.io/keycloak/keycloak` 에 먼저 옮긴다.
 
 ## 이 PC 에서 미리 보기
 
