@@ -1,6 +1,6 @@
 "use client";
 /**
- * 자원신청 티켓(VM) — MNT-CORE 연동(포털 DB). 사용자는 username 으로 식별.
+ * 자원신청 티켓(VM) — MNT-CORE 연동(포털 DB). 신청자·처리자는 서버가 토큰으로 정한다(요청에 담지 않음).
  * 티켓 관련 호출은 MSW 목업으로 폴백하지 않는다 — 실패하면 오류를 보여준다(실제 티켓과 목업 데이터가 섞이지 않게).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,7 +14,7 @@ export function useTicketProjects(username: string | undefined) {
     queryKey: ["tickets", "projects", username],
     enabled: !!username,
     queryFn: async (): Promise<TicketProject[]> =>
-      (await coreFetch<{ items: TicketProject[] }>(`/tickets/projects?username=${encodeURIComponent(username!)}`)).items,
+      (await coreFetch<{ items: TicketProject[] }>(`/tickets/projects`)).items,
     retry: 0,
   });
 }
@@ -58,7 +58,6 @@ export function useOrgs() {
 export interface ReviewTicketInput {
   id: string;
   action: "approve" | "reject";
-  processedBy: string;     // 처리자 username (admin 역할)
   reason?: string;         // 반려 사유 (반려 시 필수)
   expectedStatus: string;  // 화면이 보고 있던 상태 — 그사이 바뀌었으면 서버가 409
 }
@@ -75,7 +74,6 @@ export function useReviewTicket() {
 }
 
 export interface CreateTicketInput {
-  requestedBy: string;
   projectId: string;
   vmName: string;
   networkType: string;
@@ -98,7 +96,6 @@ export function useCreateTicket() {
 
 export interface ProvisionTicketInput {
   id: string;
-  processedBy: string;     // 처리자 username (admin 역할)
   expectedStatus: string;  // 화면이 보고 있던 상태 — 그사이 바뀌었으면 서버가 409
   provisionSpec: Pick<ProvisionSpec, "networkId" | "floatingNetworkId" | "fixedIp" | "securityGroups">;
 }

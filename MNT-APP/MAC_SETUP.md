@@ -72,10 +72,15 @@ npm run dev
 ```
 
 ### 로그인 계정
-| 역할 | ID / PW |
+Keycloak(OIDC PKCE) 로그인 — `http://localhost:3000` 으로 열면 Keycloak 로그인 화면으로 넘어간다.
+- 접속 PC hosts 에 `172.30.1.200 keycloak.dev.okestro` 등록, MNT-CORE(8000)·MNT-IAAS(8001) 실행
+- `localhost` 로만 연다(다른 PC 에서 IP 로 열면 PKCE 가 막힌다). 3001 로 띄우면 CORE·IAAS `CORS_ORIGINS` 에 추가
+- 비밀번호는 개발 Keycloak 관리자에게. Netlify 목업 배포(`npm run build`)는 Keycloak 에 닿지 않아 로그인할 수 없다
+
+| 역할 | 개발 계정 |
 |---|---|
-| 관리자 | `admin` / `admin` |
-| 유저 | `user` / `user` |
+| 관리자 | `admin` |
+| 유저 | `gy.yang` |
 
 ### 프로덕션 빌드
 ```sh

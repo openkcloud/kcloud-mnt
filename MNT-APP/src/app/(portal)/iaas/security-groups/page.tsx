@@ -129,12 +129,14 @@ export default function SecurityGroupsPage() {
                     <Button variant="ghost" size="sm" onClick={() => setRulesFor(s.id)}>
                       <Settings className="size-3.5" /> 규칙
                     </Button>
-                    <Button
-                      variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending}
-                      onClick={() => remove(s)}
-                    >
-                      <Trash2 className="size-3.5 text-rose-600" />
-                    </Button>
+                    {isAdmin && ( // 보안그룹 변경은 관리자(사용자는 조회만)
+                      <Button
+                        variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending}
+                        onClick={() => remove(s)}
+                      >
+                        <Trash2 className="size-3.5 text-rose-600" />
+                      </Button>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>
@@ -150,7 +152,7 @@ export default function SecurityGroupsPage() {
         </Table>
       </Card>
 
-      <SgRulesDialog sgId={rulesFor} onClose={() => setRulesFor(undefined)} />
+      <SgRulesDialog sgId={rulesFor} onClose={() => setRulesFor(undefined)} readOnly={!isAdmin} />
       <CreateSgDialog open={createOpen} onClose={() => setCreateOpen(false)} projects={projData?.items ?? []} />
     </div>
   );
