@@ -23,6 +23,7 @@ const PAGE_META: Record<string, { title: string; description: string; userDescri
   "/paas/services": { title: "서비스·인그레스", description: "선택한 서비스 클러스터의 Service·Ingress 를 확인합니다." },
   "/paas/storage": { title: "스토리지", description: "선택한 서비스 클러스터의 PVC·PV·StorageClass 를 확인합니다." },
   "/paas/config": { title: "설정 관리", description: "선택한 서비스 클러스터의 ConfigMap·Secret 을 확인합니다." },
+  "/paas/templates": { title: "클러스터 템플릿", description: "클러스터 생성 설계도(Magnum ClusterTemplate)를 관리합니다. 관리자 전용." },
 };
 
 export default function Layout({ children }: { children: React.ReactNode }) {

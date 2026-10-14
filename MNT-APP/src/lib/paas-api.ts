@@ -217,6 +217,75 @@ export function useK8sConfigs(clusterId: string, namespace?: string) {
   });
 }
 
+// ── 클러스터 템플릿(Magnum ClusterTemplate) — 관리자 ──
+export interface ClusterTemplate {
+  id: string;
+  name: string;
+  coe: string;
+  image_id: string | null;
+  flavor_id: string | null;
+  master_flavor_id: string | null;
+  keypair_id: string | null;
+  external_network_id: string | null;
+  fixed_network: string | null;
+  fixed_subnet: string | null;
+  dns_nameserver: string | null;
+  network_driver: string | null;
+  volume_driver: string | null;
+  docker_storage_driver: string | null;
+  docker_volume_size: number | null;
+  cluster_distro: string | null;
+  server_type: string | null;
+  public: boolean;
+  hidden: boolean;
+  tls_disabled: boolean;
+  floating_ip_enabled: boolean;
+  master_lb_enabled: boolean;
+  registry_enabled: boolean;
+  labels: Record<string, string> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export function useClusterTemplates() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["paas-templates"],
+    queryFn: async () => (await fetchJson<{ items: ClusterTemplate[] }>(`${PAAS_BASE}/api/paas/clustertemplates`)).items,
+    retry: 0, refetchInterval: pollMs || false,
+  });
+}
+export function useClusterTemplate(id: string | null) {
+  return useQuery({
+    queryKey: ["paas-template", id],
+    enabled: !!id,
+    queryFn: () => fetchJson<ClusterTemplate>(`${PAAS_BASE}/api/paas/clustertemplates/${id}`),
+    retry: 0,
+  });
+}
+export type ClusterTemplateInput = Partial<Omit<ClusterTemplate, "id" | "createdAt" | "updatedAt">>;
+export function useCreateTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ClusterTemplateInput) => sendJson("POST", `/api/paas/clustertemplates`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-templates"] }),
+  });
+}
+export function useUpdateTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: ClusterTemplateInput }) =>
+      sendJson("PATCH", `/api/paas/clustertemplates/${id}`, body),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["paas-templates"] }); qc.invalidateQueries({ queryKey: ["paas-template"] }); },
+  });
+}
+export function useDeleteTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => sendJson<void>("DELETE", `/api/paas/clustertemplates/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-templates"] }),
+  });
+}
+
 // ── 쓰기(네임스페이스 리소스 CRUD) ──
 const base = (clusterId: string) => `/api/paas/clusters/${clusterId}`;
 

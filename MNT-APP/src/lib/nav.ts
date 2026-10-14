@@ -101,6 +101,7 @@ const SECTION_CLOUD: NavSection = {
         { label: "서비스·인그레스", href: "/paas/services", icon: Globe },
         { label: "스토리지", href: "/paas/storage", icon: Database },
         { label: "설정 관리", href: "/paas/config", icon: Boxes },
+        { label: "클러스터 템플릿", href: "/paas/templates", icon: Boxes, roles: ["admin"] as Role[] },
       ],
     },
   ],
