@@ -23,7 +23,7 @@ commonLabels: {}
 
 image:
   # The Keycloak image repository
-  repository: quay.io/keycloak/keycloak
+  repository: harbor.io:7443/mnt/infra/quay.io/keycloak/keycloak
   # Overrides the Keycloak image tag whose default is the chart appVersion
   tag: "26.7.4"
   # Overrides the Keycloak image tag with a specific digest
@@ -32,7 +32,8 @@ image:
   pullPolicy: IfNotPresent
 
 # Image pull secrets for the Pod
-imagePullSecrets: []
+imagePullSecrets:
+  - name: harbor-pull
 # - name: myRegistrKeySecretName
 
 # Mapping between IPs and hostnames that will be injected as entries in the Pod's hosts files
@@ -539,7 +540,7 @@ dbchecker:
   enabled: true
   image:
     # Docker image used to check Database readiness at startup
-    repository: docker.io/busybox
+    repository: harbor.io:7443/mnt/infra/docker.io/busybox
     # Image tag for the dbchecker image
     tag: 1.37
     # Image pull policy for the dbchecker image
