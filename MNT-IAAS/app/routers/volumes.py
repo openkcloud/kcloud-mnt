@@ -5,9 +5,11 @@
   - override: base = cinder_template + /v3/{admin_pid} + path.
 관리자 전체 조회는 all_tenants=1. 볼륨 유형=Ceph 풀/티어, 용량=scheduler-stats(get_pools).
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from ..auth import Caller, caller, ensure_project, require_admin, scoped
 from ..config import settings
 from ..openstack_client import get_conn, get_conn_for_project, os_request
 
@@ -67,15 +69,29 @@ def _to_volume(v: dict) -> dict:
     }
 
 
+def volume_project(volume_id: str) -> str:
+    """볼륨이 속한 프로젝트 ID(권한 확인용)."""
+    try:
+        return _cinder_get(f"/volumes/{volume_id}")["volume"].get("os-vol-tenant-attr:tenant_id") or ""
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"볼륨 조회 실패: {type(e).__name__}: {e}")
+
+
+async def volume_access(volume_id: str, c: Caller = Depends(caller)) -> Caller:
+    """경로의 볼륨이 소속 프로젝트 것인지(관리자는 통과)."""
+    if not c.is_admin:
+        ensure_project(c, await run_in_threadpool(volume_project, volume_id))
+    return c
+
+
 @router.get("/volumes")
-def list_volumes():
-    """전체 프로젝트 볼륨 목록(관리자)."""
+def list_volumes(c: Caller = Depends(caller)):
+    """볼륨 목록 — 관리자는 전체 프로젝트, 사용자는 소속 프로젝트."""
     try:
         vols = _cinder_get("/volumes/detail?all_tenants=1")["volumes"]
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"볼륨 조회 실패: {type(e).__name__}: {e}")
-    items = [_to_volume(v) for v in vols]
-    return {"items": items, "count": len(items)}
+    return scoped(c, [_to_volume(v) for v in vols])
 
 
 @router.get("/volume-types")
@@ -110,7 +126,7 @@ def storage_capacity():
     return {"items": out}
 
 
-@router.get("/volumes/{volume_id}")
+@router.get("/volumes/{volume_id}", dependencies=[Depends(volume_access)])
 def get_volume(volume_id: str):
     """볼륨 상세 + 스냅샷."""
     try:
@@ -137,7 +153,7 @@ class CreateVolumeBody(BaseModel):
     snapshotId: str | None = None   # 스냅샷에서 복제
 
 
-@router.post("/volumes", status_code=201)
+@router.post("/volumes", status_code=201, dependencies=[Depends(require_admin)])
 def create_volume(body: CreateVolumeBody):
     if body.size <= 0:
         raise HTTPException(400, "크기(GB)는 1 이상이어야 합니다")
@@ -161,7 +177,7 @@ def create_volume(body: CreateVolumeBody):
     return _to_volume(created)
 
 
-@router.delete("/volumes/{volume_id}", status_code=204)
+@router.delete("/volumes/{volume_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_volume(volume_id: str, cascade: bool = False):
     """볼륨 삭제. cascade=true면 딸린 스냅샷도 함께 삭제. in-use면 Cinder 거부."""
     path = f"/volumes/{volume_id}" + ("?cascade=true" if cascade else "")
@@ -176,7 +192,7 @@ class ExtendBody(BaseModel):
     newSize: int
 
 
-@router.post("/volumes/{volume_id}/extend")
+@router.post("/volumes/{volume_id}/extend", dependencies=[Depends(require_admin)])
 def extend_volume(volume_id: str, body: ExtendBody):
     """볼륨 크기 확장(축소 불가)."""
     try:
@@ -192,7 +208,7 @@ class SnapshotBody(BaseModel):
     force: bool = True   # in-use 볼륨도 스냅샷(기본 허용)
 
 
-@router.post("/snapshots", status_code=201)
+@router.post("/snapshots", status_code=201, dependencies=[Depends(require_admin)])
 def create_snapshot(body: SnapshotBody):
     snap = {"volume_id": body.volumeId, "name": body.name.strip() or None, "force": body.force}
     try:
@@ -202,7 +218,7 @@ def create_snapshot(body: SnapshotBody):
     return {"id": s["id"], "name": s.get("name"), "size": s.get("size"), "status": s.get("status")}
 
 
-@router.delete("/snapshots/{snapshot_id}", status_code=204)
+@router.delete("/snapshots/{snapshot_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_snapshot(snapshot_id: str):
     try:
         _cinder_req("DELETE", f"/snapshots/{snapshot_id}")

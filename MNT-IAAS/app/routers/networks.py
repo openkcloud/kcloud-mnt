@@ -10,9 +10,11 @@
 """
 import ipaddress
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from ..auth import Caller, caller, ensure_project, project_member, require_admin, scoped
 from ..config import settings
 from ..openstack_client import get_conn, os_request
 from .volumes import _cinder_err
@@ -69,9 +71,40 @@ def _to_network(n: dict, subnet_count: int, port_count: int, cidr: str = "") -> 
     }
 
 
+def network_info(network_id: str) -> tuple[str, str]:
+    """네트워크의 (프로젝트 ID, 종류 tenant|shared|external) — 권한 확인용."""
+    try:
+        n = _neutron_get(f"/networks/{network_id}")["network"]
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"네트워크 조회 실패: {type(e).__name__}: {e}")
+    return n.get("project_id") or n.get("tenant_id") or "", _net_type(n)
+
+
+async def network_access(network_id: str, c: Caller = Depends(caller)) -> Caller:
+    """경로의 네트워크가 소속 프로젝트 것인지(관리자는 통과). 공유·외부망 상세는 다른 프로젝트 포트가 보이므로 관리자만."""
+    if not c.is_admin:
+        ensure_project(c, (await run_in_threadpool(network_info, network_id))[0])
+    return c
+
+
+def _sg_project(sg_id: str) -> str:
+    try:
+        sg = _neutron_get(f"/security-groups/{sg_id}")["security_group"]
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"보안 그룹 조회 실패: {type(e).__name__}: {e}")
+    return sg.get("project_id") or sg.get("tenant_id") or ""
+
+
+async def sg_access(sg_id: str, c: Caller = Depends(caller)) -> Caller:
+    """경로의 보안 그룹이 소속 프로젝트 것인지(관리자는 통과)."""
+    if not c.is_admin:
+        ensure_project(c, await run_in_threadpool(_sg_project, sg_id))
+    return c
+
+
 @router.get("/networks")
-def list_networks():
-    """네트워크 목록 + 각 네트워크의 서브넷·포트 수."""
+def list_networks(c: Caller = Depends(caller)):
+    """네트워크 목록 + 각 네트워크의 서브넷·포트 수. 사용자는 소속 프로젝트 망 + 공유·외부망(VM 연결 후보)."""
     try:
         nets = _neutron_get("/networks")["networks"]
         subnets = _neutron_get("/subnets", {"fields": ["id", "network_id", "cidr"]})["subnets"]
@@ -89,7 +122,7 @@ def list_networks():
         _to_network(n, sc.get(n["id"], 0), pc.get(n["id"], 0), first_cidr.get(n["id"], ""))
         for n in nets
     ]
-    return {"items": items, "count": len(items)}
+    return scoped(c, items, also=lambda x: x["type"] != "tenant")
 
 
 class CreateNetworkBody(BaseModel):
@@ -103,7 +136,7 @@ class CreateNetworkBody(BaseModel):
     shared: bool = False
 
 
-@router.post("/networks", status_code=201)
+@router.post("/networks", status_code=201, dependencies=[Depends(require_admin)])
 def create_network(body: CreateNetworkBody):
     """테넌트 네트워크 + 서브넷을 함께 생성(관리자). 서브넷 실패 시 네트워크 롤백."""
     name = body.name.strip()
@@ -152,7 +185,7 @@ class AddSubnetBody(BaseModel):
     dnsNameservers: list[str] = []
 
 
-@router.post("/networks/{network_id}/subnets", status_code=201)
+@router.post("/networks/{network_id}/subnets", status_code=201, dependencies=[Depends(require_admin)])
 def add_subnet(network_id: str, body: AddSubnetBody):
     """기존 네트워크에 서브넷 추가(관리자). project_id 는 네트워크에서 상속."""
     if not body.cidr.strip():
@@ -178,7 +211,7 @@ def add_subnet(network_id: str, body: AddSubnetBody):
     return get_network(network_id)
 
 
-@router.delete("/networks/{network_id}", status_code=204)
+@router.delete("/networks/{network_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_network(network_id: str):
     """네트워크 삭제(관리자). 포트가 남아있으면 Neutron 이 거부 → 에러 그대로 전달."""
     try:
@@ -201,7 +234,7 @@ def _to_sg_rule(r: dict) -> dict:
     }
 
 
-@router.get("/security-groups/{sg_id}")
+@router.get("/security-groups/{sg_id}", dependencies=[Depends(sg_access)])
 def get_security_group(sg_id: str):
     """보안 그룹 + 규칙 상세."""
     try:
@@ -224,7 +257,7 @@ class AddSgRuleBody(BaseModel):
     remoteCidr: str | None = None       # 예: 0.0.0.0/0
 
 
-@router.post("/security-groups/{sg_id}/rules", status_code=201)
+@router.post("/security-groups/{sg_id}/rules", status_code=201, dependencies=[Depends(require_admin)])
 def add_sg_rule(sg_id: str, body: AddSgRuleBody):
     """보안 그룹 규칙 추가."""
     rule: dict = {"security_group_id": sg_id, "direction": body.direction, "ethertype": body.ethertype}
@@ -243,7 +276,7 @@ def add_sg_rule(sg_id: str, body: AddSgRuleBody):
     return get_security_group(sg_id)
 
 
-@router.delete("/security-group-rules/{rule_id}", status_code=204)
+@router.delete("/security-group-rules/{rule_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_sg_rule(rule_id: str):
     """보안 그룹 규칙 삭제."""
     try:
@@ -253,7 +286,7 @@ def delete_sg_rule(rule_id: str):
     return None
 
 
-@router.get("/networks/{network_id}")
+@router.get("/networks/{network_id}", dependencies=[Depends(network_access)])
 def get_network(network_id: str):
     """네트워크 상세 — 서브넷·포트(네트워크 기준) + 라우터·보안그룹·FIP(프로젝트 기준)."""
     try:
@@ -355,7 +388,7 @@ def _external_network_id() -> str:
     return nets[0]["id"]
 
 
-@router.get("/projects/{project_id}/fip-targets")
+@router.get("/projects/{project_id}/fip-targets", dependencies=[Depends(project_member)])
 def list_fip_targets(project_id: str):
     """공인 IP를 연결할 수 있는 대상 포트 — 프로젝트의 compute 포트(고정 IP 보유)."""
     try:
@@ -388,7 +421,7 @@ class AllocateFipBody(BaseModel):
     floatingNetworkId: str | None = None  # 미지정 시 외부망 자동
 
 
-@router.post("/floatingips", status_code=201)
+@router.post("/floatingips", status_code=201, dependencies=[Depends(require_admin)])
 def allocate_fip(body: AllocateFipBody):
     """외부 풀에서 공인 IP를 프로젝트로 확보(allocate)."""
     net_id = body.floatingNetworkId or _external_network_id()
@@ -399,7 +432,7 @@ def allocate_fip(body: AllocateFipBody):
         raise HTTPException(502, f"공인 IP 확보 실패: {type(e).__name__}: {e}")
 
 
-@router.delete("/floatingips/{fip_id}", status_code=204)
+@router.delete("/floatingips/{fip_id}", status_code=204, dependencies=[Depends(require_admin)])
 def release_fip(fip_id: str):
     """공인 IP를 외부 풀로 반납(release)."""
     try:
@@ -413,7 +446,7 @@ class AssociateFipBody(BaseModel):
     portId: str | None = None  # 포트 지정=연결(associate), null=연결해제(disassociate)
 
 
-@router.put("/floatingips/{fip_id}")
+@router.put("/floatingips/{fip_id}", dependencies=[Depends(require_admin)])
 def update_fip(fip_id: str, body: AssociateFipBody):
     """공인 IP를 VM 포트에 연결(portId 지정) 또는 연결 해제(portId=null)."""
     payload = {"floatingip": {"port_id": body.portId}}
@@ -427,8 +460,8 @@ def update_fip(fip_id: str, body: AssociateFipBody):
 # ────── 보안 그룹 목록/생성/삭제 (규칙 편집은 위 security-groups/{id} 참고) ──────
 
 @router.get("/security-groups")
-def list_security_groups():
-    """보안 그룹 목록 — 프로젝트·규칙 수 포함."""
+def list_security_groups(c: Caller = Depends(caller)):
+    """보안 그룹 목록 — 프로젝트·규칙 수 포함. 사용자는 소속 프로젝트(조회만)."""
     try:
         sgs = _neutron_get("/security-groups")["security_groups"]
     except Exception as e:  # noqa: BLE001
@@ -442,7 +475,7 @@ def list_security_groups():
         }
         for sg in sgs
     ]
-    return {"items": items, "count": len(items)}
+    return scoped(c, items)
 
 
 class CreateSgBody(BaseModel):
@@ -451,7 +484,7 @@ class CreateSgBody(BaseModel):
     description: str = ""
 
 
-@router.post("/security-groups", status_code=201)
+@router.post("/security-groups", status_code=201, dependencies=[Depends(require_admin)])
 def create_security_group(body: CreateSgBody):
     """보안 그룹 생성."""
     if not body.name.strip():
@@ -466,7 +499,7 @@ def create_security_group(body: CreateSgBody):
     return get_security_group(sg["id"])
 
 
-@router.delete("/security-groups/{sg_id}", status_code=204)
+@router.delete("/security-groups/{sg_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_security_group(sg_id: str):
     """보안 그룹 삭제(사용 중이면 Neutron 이 거부)."""
     try:
@@ -495,7 +528,7 @@ def _to_router(r: dict, net_name: dict, iface_count: int) -> dict:
     }
 
 
-@router.get("/routers")
+@router.get("/routers", dependencies=[Depends(require_admin)])
 def list_routers():
     """라우터 목록 + 인터페이스 수·외부망."""
     try:
@@ -511,7 +544,7 @@ def list_routers():
     return {"items": items, "count": len(items)}
 
 
-@router.get("/routers/{router_id}")
+@router.get("/routers/{router_id}", dependencies=[Depends(require_admin)])
 def get_router(router_id: str):
     """라우터 상세 — 인터페이스(서브넷)·정적 라우트·외부 게이트웨이."""
     try:
@@ -553,7 +586,7 @@ class CreateRouterBody(BaseModel):
     externalNetworkId: str | None = None
 
 
-@router.post("/routers", status_code=201)
+@router.post("/routers", status_code=201, dependencies=[Depends(require_admin)])
 def create_router(body: CreateRouterBody):
     """라우터 생성(+선택적 외부 게이트웨이)."""
     if not body.name.strip():
@@ -568,7 +601,7 @@ def create_router(body: CreateRouterBody):
     return get_router(r["id"])
 
 
-@router.delete("/routers/{router_id}", status_code=204)
+@router.delete("/routers/{router_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_router(router_id: str):
     """라우터 삭제(인터페이스·게이트웨이 남아있으면 Neutron 거부)."""
     try:
@@ -582,7 +615,7 @@ class RouterInterfaceBody(BaseModel):
     subnetId: str
 
 
-@router.put("/routers/{router_id}/add-interface")
+@router.put("/routers/{router_id}/add-interface", dependencies=[Depends(require_admin)])
 def add_router_interface(router_id: str, body: RouterInterfaceBody):
     """라우터에 서브넷 인터페이스 연결."""
     try:
@@ -592,7 +625,7 @@ def add_router_interface(router_id: str, body: RouterInterfaceBody):
     return get_router(router_id)
 
 
-@router.put("/routers/{router_id}/remove-interface")
+@router.put("/routers/{router_id}/remove-interface", dependencies=[Depends(require_admin)])
 def remove_router_interface(router_id: str, body: RouterInterfaceBody):
     """라우터에서 서브넷 인터페이스 해제."""
     try:
@@ -602,7 +635,7 @@ def remove_router_interface(router_id: str, body: RouterInterfaceBody):
     return get_router(router_id)
 
 
-@router.get("/projects/{project_id}/subnets")
+@router.get("/projects/{project_id}/subnets", dependencies=[Depends(project_member)])
 def list_project_subnets(project_id: str):
     """프로젝트의 서브넷 목록 — 라우터 인터페이스 연결 대상 선택용."""
     try:
@@ -623,7 +656,7 @@ def list_project_subnets(project_id: str):
 
 # ────── 자원신청 승인용 — 티켓 프로젝트 기준 라이브 조회 ──────
 
-@router.get("/projects/{project_id}/networks")
+@router.get("/projects/{project_id}/networks", dependencies=[Depends(project_member)])
 def list_project_networks(project_id: str):
     """승인 시 고를 네트워크 — 프로젝트 소유 + 공유 + 외부(external). kind: project|shared|external.
     공유는 전체 공유(shared) + 이 프로젝트에만 RBAC 로 공유된 것(관리자 조회 시 shared=false 로 보이므로 따로 확인).
@@ -649,7 +682,7 @@ def list_project_networks(project_id: str):
     return {"items": items, "count": len(items)}
 
 
-@router.get("/projects/{project_id}/security-groups")
+@router.get("/projects/{project_id}/security-groups", dependencies=[Depends(project_member)])
 def list_project_security_groups(project_id: str):
     """승인 시 고를 보안그룹 — 프로젝트 소유분."""
     try:
@@ -661,7 +694,7 @@ def list_project_security_groups(project_id: str):
     return {"items": items, "count": len(items)}
 
 
-@router.get("/networks/{network_id}/ip-check")
+@router.get("/networks/{network_id}/ip-check", dependencies=[Depends(require_admin)])
 def ip_check(network_id: str, ip: str):
     """Static IP 사용 가능 여부 — 서브넷 범위·네트워크/브로드캐스트·게이트웨이·사용 중 포트."""
     try:
@@ -691,7 +724,7 @@ _ROUTER_IFACE_OWNERS = ("network:router_interface", "network:router_interface_di
                         "network:ha_router_replicated_interface")
 
 
-@router.get("/networks/{network_id}/fip-reachable")
+@router.get("/networks/{network_id}/fip-reachable", dependencies=[Depends(require_admin)])
 def fip_reachable(network_id: str, floatingNetworkId: str):
     """이 네트워크의 VM 에 floatingNetworkId 풀의 Floating IP 를 붙일 수 있는지.
     Neutron 은 VM 포트 IP 의 서브넷이 'FIP 풀에 게이트웨이를 둔 라우터'에 연결돼 있어야 연결을 허용한다.

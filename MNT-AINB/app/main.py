@@ -4218,18 +4218,20 @@ async def notebook_ws_proxy(ns: str, name: str, path: str, websocket: WebSocket)
 
 # ── Auth endpoints ─────────────────────────────────────────────────
 @app.post("/api/v1/auth/login")
-def auth_login(body: LoginBody, request: Request):
-    """포털 계정으로 확인(MNT-CORE) → IDE 프록시용 세션 쿠키 발급."""
+def auth_login(request: Request):
+    """Keycloak 액세스 토큰(Authorization: Bearer)으로 MNT-CORE /auth/me 확인 → IDE 프록시용 세션 쿠키 발급.
+    (Keycloak 전환으로 패스워드 로그인 제거 — 신원·역할은 MNT-CORE 가 토큰으로 판정한다.)"""
+    authz = request.headers.get("authorization", "")
+    if not authz.lower().startswith("bearer "):
+        raise HTTPException(401, "로그인 토큰(Authorization: Bearer)이 필요합니다")
     try:
-        r = httpx.post(f"{CORE_API_BASE}/api/core/auth/login", timeout=10,
-                       json={"username": body.username, "password": body.password})
+        r = httpx.get(f"{CORE_API_BASE}/api/core/auth/me", timeout=10,
+                      headers={"Authorization": authz})
     except httpx.HTTPError as e:
-        raise HTTPException(502, f"포털 로그인 확인(MNT-CORE) 실패: {e}")
+        raise HTTPException(502, f"포털 사용자 확인(MNT-CORE) 실패: {e}")
     if r.status_code != 200:
-        detail = (r.json().get("detail") if r.headers.get("content-type", "").startswith("application/json")
-                  else None) or "아이디 또는 비밀번호가 올바르지 않습니다"
-        raise HTTPException(401 if r.status_code < 500 else 502, detail)
-    user = r.json()
+        raise HTTPException(401 if r.status_code < 500 else 502, "유효하지 않은 로그인 정보")
+    user = r.json()  # {id, username, name, email, org, role, projectIds}
     token = _issue_token(user["username"].lower(), user["role"])
     try:
         ip = (request.headers.get("cf-connecting-ip")
@@ -4238,7 +4240,7 @@ def auth_login(body: LoginBody, request: Request):
         if _ACCESS_LOG:
             with open(_ACCESS_LOG, "a") as f:
                 f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  {ip}  LOGIN"
-                        f"  user={body.username.lower()}\n")
+                        f"  user={user['username'].lower()}\n")
     except Exception:
         pass
     resp = Response(content=json.dumps({"username": user["username"], "role": user["role"]}),

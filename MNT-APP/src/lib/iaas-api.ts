@@ -7,43 +7,46 @@
  *   - ""(빈값)      → same-origin (게이트웨이가 /api/iaas 라우팅하는 운영 구성)
  *   - "http://..."  → 고정 주소
  *
- * 실패 시 MSW 목업(/api/iaas/*)으로 폴백 — 백엔드 없이도 목업 동작 유지.
+ * 실패 시 MSW 목업(/api/iaas/*)으로 폴백 — 백엔드 없이도 목업 동작 유지. 단 401·403(로그인·권한)은 폴백하지 않는다.
+ * 모든 호출에 토큰(authFetch)을 붙인다.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { IaasNetwork, ProvNetwork, SecurityGroup, Tenant } from "@/lib/types";
 import { usePollingInterval } from "@/lib/polling";
+import { ApiError, authFetch, readError } from "@/lib/http";
 
 const RAW = process.env.NEXT_PUBLIC_IAAS_API;
 export const IAAS_BASE = RAW === undefined ? "http://localhost:8001" : RAW;
 
 /** VM 웹 콘솔(noVNC) URL 발급 — 버튼 클릭 시 호출(호출마다 토큰 URL 새로). */
 export async function getServerConsoleUrl(serverId: string): Promise<string> {
-  const res = await fetch(`${IAAS_BASE}/api/iaas/servers/${serverId}/console`, {
+  const res = await authFetch(`${IAAS_BASE}/api/iaas/servers/${serverId}/console`, {
     headers: { "Content-Type": "application/json" },
   });
-  if (!res.ok) throw new Error(`콘솔 URL 발급 실패 (${res.status})`);
+  if (!res.ok) throw await readError(res, `콘솔 URL 발급 실패 (${res.status})`);
   const d = (await res.json()) as { url?: string };
   if (!d.url) throw new Error("콘솔 URL이 비어있습니다");
   return d.url;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const res = await authFetch(url, { headers: { "Content-Type": "application/json" } });
+  if (!res.ok) throw await readError(res);
   return (await res.json()) as T;
 }
 
+/** 로그인·권한 오류는 목업으로 가리지 않는다. */
+function isAuthError(e: unknown): boolean {
+  return e instanceof ApiError && (e.status === 401 || e.status === 403);
+}
+
 async function sendJson<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await authFetch(url, {
     method,
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try { const j = await res.json(); if (j.detail) msg = j.detail; } catch {}
-    throw new Error(msg);
-  }
+  if (!res.ok) throw await readError(res);
   if (res.status === 204) return undefined as T; // No Content (삭제)
   return (await res.json()) as T;
 }
@@ -111,7 +114,8 @@ export function useProjects() {
       try {
         const d = await fetchJson<{ items: Tenant[] }>(`${IAAS_BASE}/api/iaas/projects`);
         return { items: d.items, live: true };
-      } catch {
+      } catch (e) {
+        if (isAuthError(e)) throw e;
         const d = await fetchJson<{ items: Tenant[] }>(`/api/iaas/projects`);
         return { items: d.items, live: false };
       }
@@ -168,7 +172,8 @@ export function useNetworks() {
       try {
         const d = await fetchJson<{ items: IaasNetwork[] }>(`${IAAS_BASE}/api/iaas/networks`);
         return { items: d.items, live: true };
-      } catch {
+      } catch (e) {
+        if (isAuthError(e)) throw e;
         const d = await fetchJson<{ items: IaasNetwork[] }>(`/api/iaas/networks`);
         return { items: d.items, live: false };
       }

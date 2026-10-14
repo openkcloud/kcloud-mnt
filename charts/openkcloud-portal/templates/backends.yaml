@@ -35,6 +35,8 @@ spec:
     metadata:
       labels:
         app: {{ $full }}
+      annotations:
+        checksum/secret: {{ include (print $root.Template.BasePath "/secrets.yaml") $root | sha256sum }}  # 시크릿이 바뀌면 다시 시작
     spec:
       {{- with $g.imagePullSecrets }}
       imagePullSecrets:

@@ -3,9 +3,10 @@
 플레이버는 '전역(admin)' 자원 — 프로젝트 소속 아님(프로젝트 컬럼 없음).
 환경독립: override=template.format(service=...)+버전, catalog=service_type.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..auth import require_admin
 from ..config import settings
 from ..openstack_client import get_conn
 
@@ -107,7 +108,7 @@ class CreateFlavorBody(BaseModel):
     deviceProfile: str | None = None  # 가속기 device-profile 이름(선택)
 
 
-@router.post("/flavors", status_code=201)
+@router.post("/flavors", status_code=201, dependencies=[Depends(require_admin)])
 def create_flavor(body: CreateFlavorBody):
     if not body.name.strip():
         raise HTTPException(400, "플레이버 이름이 필요합니다")
@@ -127,7 +128,7 @@ def create_flavor(body: CreateFlavorBody):
     return _to_flavor(f, body.deviceProfile)
 
 
-@router.delete("/flavors/{flavor_id}", status_code=204)
+@router.delete("/flavors/{flavor_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_flavor(flavor_id: str):
     try:
         _nova("DELETE", f"/flavors/{flavor_id}")
