@@ -25,7 +25,7 @@ image:
   # The Keycloak image repository
   repository: harbor.io:7443/mnt/infra/quay.io/keycloak/openkcloud-theme   # 공식 26.7.4 + 로그인 테마(charts/infra/keycloak-theme)
   # Overrides the Keycloak image tag whose default is the chart appVersion
-  tag: "26.7.4-0a450af"   # 테마를 바꾸면 새 태그로 바꾸고 그 태그로 빌드(docs/포털_배포_가이드.md 6.1)
+  tag: "26.7.4-b960a6b"   # 테마를 바꾸면 새 태그로 바꾸고 그 태그로 빌드(docs/포털_배포_가이드.md 6.1)
   # Overrides the Keycloak image tag with a specific digest
   digest: ""
   # The Keycloak image pull policy
