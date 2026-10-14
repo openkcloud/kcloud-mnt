@@ -37,6 +37,7 @@ spec:
         app: {{ $full }}
       annotations:
         checksum/secret: {{ include (print $root.Template.BasePath "/secrets.yaml") $root | sha256sum }}  # 시크릿이 바뀌면 다시 시작
+        checksum/config: {{ toYaml $b.env | sha256sum }}  # env(ConfigMap)가 바뀌면 다시 시작 — 환경변수는 시작할 때만 읽는다
     spec:
       {{- with $g.imagePullSecrets }}
       imagePullSecrets:
