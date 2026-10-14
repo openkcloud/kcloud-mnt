@@ -11,14 +11,22 @@ import {
 } from "@/components/ui/select";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useClusters, usePaasCluster, useNamespaces } from "@/lib/paas-api";
+import { useAuth } from "@/lib/auth";
+import { useMyProjectIds } from "@/lib/member-api";
 
 export function useClusterScope() {
   const clusterId = usePaasCluster((s) => s.clusterId);
   const setClusterId = usePaasCluster((s) => s.setClusterId);
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
+  const myUsername = useAuth((s) => s.user?.username);
+  const { data: myProjectIds } = useMyProjectIds(isAdmin ? undefined : myUsername);
   const clusters = useClusters();
+  // 선택 가능한 클러스터 = 준비됨(COMPLETE) + 내 프로젝트 멤버십(관리자는 전체)
   const ready = React.useMemo(
-    () => (clusters.data ?? []).filter((c) => c.status.endsWith("_COMPLETE") && !!c.apiAddress),
-    [clusters.data],
+    () => (clusters.data ?? []).filter(
+      (c) => c.status.endsWith("_COMPLETE") && !!c.apiAddress && (isAdmin || myProjectIds?.has(c.projectId)),
+    ),
+    [clusters.data, isAdmin, myProjectIds],
   );
   // 선택이 없거나(최초) 더는 존재하지 않으면 첫 클러스터 자동 선택
   React.useEffect(() => {
