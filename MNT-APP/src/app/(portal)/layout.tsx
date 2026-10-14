@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useAuth, canAccess, ensureAuth } from "@/lib/auth";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AppHeader } from "@/components/app-header";
-import { AuthLoading, SessionEnded } from "@/components/session-ended";
+import { AuthLoading, SessionBlur, SessionEnded } from "@/components/session-ended";
 
 export default function PortalLayout({
   children,
@@ -32,20 +32,23 @@ export default function PortalLayout({
     }
   }, [status, user, allowed, router]);
 
-  if (status === "ended") return <SessionEnded />;
-  if (status !== "authenticated" || !allowed) return <AuthLoading />;
+  const ended = status === "ended";
+  if (ended && !user) return <SessionEnded />; // 보던 화면이 없으면(새로고침 직후 등) 빈 배경 위에 안내
+  if (!ended && (status !== "authenticated" || !allowed)) return <AuthLoading />;
 
   return (
-    <div className="flex h-screen w-full overflow-hidden">
-      <AppSidebar />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <AppHeader />
-        <main className="flex-1 overflow-y-auto bg-background">
-          <div className="mx-auto max-w-[1600px] px-6 py-6 lg:px-8">
-            {children}
-          </div>
-        </main>
+    <SessionBlur ended={ended}>
+      <div className="flex h-screen w-full overflow-hidden">
+        <AppSidebar />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <AppHeader />
+          <main className="flex-1 overflow-y-auto bg-background">
+            <div className="mx-auto max-w-[1600px] px-6 py-6 lg:px-8">
+              {children}
+            </div>
+          </main>
+        </div>
       </div>
-    </div>
+    </SessionBlur>
   );
 }
