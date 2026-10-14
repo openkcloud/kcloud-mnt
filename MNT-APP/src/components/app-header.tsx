@@ -45,7 +45,7 @@ export function AppHeader() {
   const logout = useAuth((s) => s.logout);
   const crumbs = findCrumbs(pathname, user?.role);
 
-  // 로그아웃 — 서버가 포털·Keycloak 세션을 끝내고, 이 탭은 그 자리에서 안내 화면(레이아웃)으로 바뀐다
+  // 로그아웃 — 서버가 포털·Keycloak 세션을 끝내고, 이 탭은 안내 없이 로그인 화면으로 간다(auth.ts)
   function handleLogout() {
     void logout();
   }

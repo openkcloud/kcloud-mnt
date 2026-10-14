@@ -5,7 +5,8 @@
  *  - 로그인 유지는 Keycloak 세션(Remember me) — 탭을 닫거나 브라우저를 껐다 켜도 유지.
  *  - 미사용: 클릭·입력 등 사용자 조작이 Keycloak 미사용 시간(갱신 토큰 수명)을 넘게 없으면 로그아웃(idle).
  *    자동 갱신 화면이 계속 돌아도 조작이 없으면 끝난다. 조작 시각은 탭끼리 공유(localStorage).
- *  - 끝난 세션은 원인별 안내 + 로그인 버튼. 같은 브라우저 다른 탭에도 알린다(BroadcastChannel).
+ *  - 끝난 세션은 원인별 안내 모달(보던 화면은 흐리게) + 로그인 버튼. 같은 브라우저 다른 탭에도 알린다(BroadcastChannel).
+ *    직접 로그아웃만 안내 없이 정리 후 로그인 화면으로(2026-10-14 결정).
  *  - 다른 곳 로그인·관리자 강제 종료는 MNT-CORE /auth/session 을 보이는 탭이 5초마다 확인. */
 import { create } from "zustand";
 import { CORE_BASE } from "@/lib/menu-api";
@@ -79,7 +80,8 @@ export const useAuth = create<AuthState>()(() => ({
   status: "loading",
   user: null,
   ended: null,
-  logout: () => endSession("logout", { server: true, broadcast: true }),
+  // 직접 로그아웃 — 안내 없이 정리 후 로그인 화면(/auth/login → Keycloak 로그인). 다른 탭은 "다른 탭에서 로그아웃" 안내
+  logout: () => endSession("logout", { server: true, broadcast: true, redirect: `${window.location.origin}/auth/login/` }),
 }));
 
 // ── 시작 ──────────────────────────────────────────────────────────
@@ -133,12 +135,17 @@ export function ensureAuth(): Promise<void> {
 
 let channel: BroadcastChannel | null = null;
 
-async function endSession(reason: string, opts: { server?: boolean; broadcast?: boolean; message?: string } = {}) {
+/** redirect: 안내 모달 없이 Keycloak 로그아웃(세션·쿠키 삭제)을 거쳐 그 주소로 — 사용자가 직접 로그아웃할 때. */
+async function endSession(
+  reason: string,
+  opts: { server?: boolean; broadcast?: boolean; message?: string; redirect?: string } = {},
+) {
   if (useAuth.getState().status !== "authenticated") return;
+  if (opts.redirect) useAuth.setState({ status: "loading" }); // 이동 전까지 로딩 표시 — 그 사이 다른 종료 처리도 막힌다
   if (opts.broadcast) channel?.postMessage({ type: "ended", reason }); // stopWatchers 가 채널을 닫기 전에 알린다
   stopWatchers();
   if (opts.server) {
-    // 포털 세션 종료 기록 + Keycloak 세션 삭제(서버) — 그래서 Keycloak 화면으로 넘어가지 않고 이 자리에 안내한다
+    // 포털 세션 종료 기록 + Keycloak 세션 삭제(서버)
     try {
       await authFetch(`${CORE_BASE}/api/core/auth/logout`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }),
@@ -146,9 +153,14 @@ async function endSession(reason: string, opts: { server?: boolean; broadcast?: 
     } catch {}
   }
   clearTokens();
-  ainbLogout(); // AI 노트북 세션 쿠키도 정리
+  ainbLogout(); // AI 노트북 세션 쿠키도 정리 — redirect 로그아웃 경로에서도 먼저 지운다
+  if (opts.redirect) {
+    void logoutRedirect(opts.redirect);
+    return;
+  }
+  // user 는 남긴다 — 안내 모달 뒤에 보던 화면을 흐리게 두려고(다음 로그인은 페이지를 새로 연다)
   useAuth.setState({
-    status: "ended", user: null,
+    status: "ended",
     ended: { reason, message: END_MESSAGES[reason] ?? opts.message ?? END_MESSAGES.expired },
   });
 }
@@ -158,7 +170,7 @@ setAuthFailureHandler((reason, message) => {
   if (reason === "denied") {
     if (useAuth.getState().status !== "authenticated") return;
     stopWatchers();
-    useAuth.setState({ status: "ended", user: null, ended: { reason, message } });
+    useAuth.setState({ status: "ended", ended: { reason, message } });
     return;
   }
   void endSession(reason, { message });
