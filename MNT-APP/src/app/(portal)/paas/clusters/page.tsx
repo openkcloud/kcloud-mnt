@@ -72,10 +72,15 @@ export default function ClustersPage() {
     [clusters.data, isAdmin, myProjectIds],
   );
 
+  // 드롭다운 옵션은 '프로젝트 목록(실이름)'에서 — UUID 가 라벨로 새지 않도록.
+  // 이름을 못 찾은 projectId 는 옵션에서 제외(전체 프로젝트로 여전히 조회 가능).
   const projOptions = React.useMemo(() => {
-    const ids = Array.from(new Set(visible.map((c) => c.projectId).filter(Boolean)));
-    return ids.map((id) => ({ id, name: projName(id) })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [visible, projName]);
+    const ids = new Set(visible.map((c) => c.projectId).filter(Boolean));
+    return (projects.data?.items ?? [])
+      .filter((p) => ids.has(p.id))
+      .map((p) => ({ id: p.id, name: p.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [visible, projects.data]);
 
   if (clusters.isLoading) return <Skeleton className="h-96" />;
 
