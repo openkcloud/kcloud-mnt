@@ -34,8 +34,8 @@ def _nova(method: str, path: str, *, json=None):
     return _os_req("nova", "compute", "/v2.1", method, path, json=json)
 
 
-def _cyborg(method: str, path: str):
-    return _os_req("cyborg", "accelerator", "/v2", method, path)
+def _cyborg(method: str, path: str, *, json=None):
+    return _os_req("cyborg", "accelerator", "/v2", method, path, json=json)
 
 
 # device-profile group 의 resource class → 화면 가속기 종류
@@ -93,12 +93,83 @@ def list_flavors():
 
 @router.get("/device-profiles")
 def list_device_profiles():
-    """Cyborg device-profiles — 플레이버 생성 시 가속기 선택용."""
+    """Cyborg device-profiles — 플레이버 생성 시 선택용 + 디바이스 프로파일 관리 화면용."""
     try:
         dps = _cyborg("GET", "/device_profiles").json().get("device_profiles", [])
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"device-profile 조회 실패: {e}")
-    return {"items": [{"name": d["name"], "uuid": d.get("uuid")} for d in dps]}
+    return {"items": [{
+        "name": d["name"],
+        "uuid": d.get("uuid"),
+        "description": d.get("description"),
+        "accelerators": _dp_accelerators(d.get("groups")),  # [{kind, count}]
+        "groups": d.get("groups") or [],                    # 원본(화면 상세용)
+    } for d in dps]}
+
+
+class DpResource(BaseModel):
+    resourceClass: str          # 예: PGPU(GPU), CUSTOM_AICHIP(NPU)
+    count: int
+
+
+class DpTrait(BaseModel):
+    name: str                   # 예: CUSTOM_AICHIP_FURIOSA
+    policy: str = "required"    # required | forbidden
+
+
+class DpGroup(BaseModel):
+    resources: list[DpResource]
+    traits: list[DpTrait] = []
+
+
+class CreateDeviceProfileBody(BaseModel):
+    name: str
+    description: str | None = None
+    groups: list[DpGroup]
+
+
+@router.post("/device-profiles", status_code=201, dependencies=[Depends(require_admin)])
+def create_device_profile(body: CreateDeviceProfileBody):
+    if not body.name.strip():
+        raise HTTPException(400, "프로파일 이름이 필요합니다")
+    if not body.groups:
+        raise HTTPException(400, "그룹이 하나 이상 필요합니다")
+    groups: list[dict] = []
+    for g in body.groups:
+        if not g.resources:
+            raise HTTPException(400, "그룹마다 리소스가 하나 이상 필요합니다")
+        grp: dict[str, str] = {}
+        for r in g.resources:
+            if not r.resourceClass.strip() or r.count < 1:
+                raise HTTPException(400, "리소스 클래스와 1 이상의 개수가 필요합니다")
+            grp[f"resources:{r.resourceClass.strip()}"] = str(r.count)
+        for t in g.traits:
+            if not t.name.strip():
+                continue
+            if t.policy not in ("required", "forbidden"):
+                raise HTTPException(400, "트레잇 정책은 required 또는 forbidden 이어야 합니다")
+            grp[f"trait:{t.name.strip()}"] = t.policy
+        groups.append(grp)
+    payload = {"name": body.name.strip(), "groups": groups}
+    if body.description:
+        payload["description"] = body.description.strip()
+    try:
+        # Cyborg POST /device_profiles 는 리스트 바디를 받는다
+        r = _cyborg("POST", "/device_profiles", json=[payload]).json()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"device-profile 생성 실패: {e}")
+    created = r.get("device_profiles", r) if isinstance(r, dict) else r
+    first = created[0] if isinstance(created, list) and created else created
+    return {"name": body.name.strip(), "uuid": (first or {}).get("uuid") if isinstance(first, dict) else None}
+
+
+@router.delete("/device-profiles/{uuid}", status_code=204, dependencies=[Depends(require_admin)])
+def delete_device_profile(uuid: str):
+    try:
+        _cyborg("DELETE", f"/device_profiles/{uuid}")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"device-profile 삭제 실패: {e}")
+    return None
 
 
 class CreateFlavorBody(BaseModel):

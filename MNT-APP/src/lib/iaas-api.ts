@@ -637,7 +637,13 @@ export interface FlavorSummary {
   accelerators?: { kind: string; count: number }[]; // device-profile 의 가속기 종류(GPU/NPU)·개수
   deviceProfileMissing?: boolean; // 가리키는 device-profile 이 Cyborg 에 없음 — 신청 불가
 }
-export interface DeviceProfile { name: string; uuid: string }
+export interface DeviceProfile {
+  name: string;
+  uuid: string;
+  description?: string | null;
+  accelerators?: { kind: string; count: number }[];
+  groups?: Record<string, string>[]; // 원본 그룹(resources:*, trait:*)
+}
 
 export function useFlavors() {
   const pollMs = usePollingInterval((s) => s.intervalMs);
@@ -655,6 +661,33 @@ export function useDeviceProfiles() {
     queryFn: async (): Promise<DeviceProfile[]> =>
       (await fetchJson<{ items: DeviceProfile[] }>(`${IAAS_BASE}/api/iaas/device-profiles`)).items,
     staleTime: 5 * 60 * 1000, retry: 0,
+  });
+}
+// 디바이스 프로파일 생성/삭제 (관리자) — Cyborg 는 불변이라 수정은 없다
+export interface CreateDeviceProfileInput {
+  name: string;
+  description?: string;
+  groups: { resources: { resourceClass: string; count: number }[]; traits: { name: string; policy: "required" | "forbidden" }[] }[];
+}
+export function useCreateDeviceProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateDeviceProfileInput) =>
+      postJson<DeviceProfile>(`${IAAS_BASE}/api/iaas/device-profiles`, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-device-profiles"] });
+      qc.invalidateQueries({ queryKey: ["iaas-flavors"] }); // deviceProfileMissing 재평가
+    },
+  });
+}
+export function useDeleteDeviceProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (uuid: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/device-profiles/${uuid}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-device-profiles"] });
+      qc.invalidateQueries({ queryKey: ["iaas-flavors"] });
+    },
   });
 }
 export interface CreateFlavorInput {
