@@ -5,7 +5,8 @@
  * 레이아웃·폰트는 IaaS 목록 화면 규약(툴바 Card + 테이블 Card)과 동일.
  */
 import * as React from "react";
-import { Search, Loader2, Layers, Plus, Scale, RotateCw, Trash2, ScrollText, FileCode } from "lucide-react";
+import { Search, Loader2, Layers, Plus, Scale, RotateCw, Trash2, ScrollText, FileCode, Maximize2, Minimize2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -558,6 +559,7 @@ function PodsDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
 function LogsDialog({ clusterId, namespace, pod, onClose }: { clusterId: string; namespace: string; pod: PodRow; onClose: () => void }) {
   const [container, setContainer] = React.useState(pod.containers[0] ?? "");
   const [logs, setLogs] = React.useState<string>("불러오는 중…");
+  const [big, setBig] = React.useState(false); // 확대 토글
   React.useEffect(() => {
     let alive = true;
     fetchPodLogs(clusterId, namespace, pod.name, container || undefined)
@@ -567,7 +569,7 @@ function LogsDialog({ clusterId, namespace, pod, onClose }: { clusterId: string;
   }, [clusterId, namespace, pod.name, container]);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[88vh] w-[92vw] max-w-5xl overflow-hidden">
+      <DialogContent className={cn("overflow-hidden", big ? "h-[94vh] w-[98vw] max-w-none" : "max-h-[88vh] w-[92vw] max-w-5xl")}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 font-mono text-sm">{pod.name}</DialogTitle>
           <DialogDescription className="flex items-center gap-2">
@@ -577,11 +579,18 @@ function LogsDialog({ clusterId, namespace, pod, onClose }: { clusterId: string;
                 <SelectContent>{pod.containers.map((c) => <SelectItem key={c} value={c} className="font-mono text-xs">{c}</SelectItem>)}</SelectContent>
               </Select>
             )}
-            <span className="text-[11px] text-muted-foreground">최근 500줄 · 긴 줄은 가로 스크롤</span>
+            <span className="text-[11px] text-muted-foreground">최근 500줄 · 긴 줄은 가로 스크롤 · 아래 모서리를 끌어 높이 조절</span>
           </DialogDescription>
+          {/* 확대/축소 토글 — 기본 닫기(X)는 우상단, 그 왼쪽에 둔다 */}
+          <Button variant="ghost" size="icon-sm" className="absolute right-11 top-3.5" title={big ? "축소" : "확대"} onClick={() => setBig((v) => !v)}>
+            {big ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+          </Button>
         </DialogHeader>
-        {/* 로그는 줄바꿈하지 않고(whitespace-pre) 긴 줄은 가로 스크롤 — 원문 그대로 읽기 */}
-        <pre className="max-h-[68vh] overflow-auto rounded bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre">{logs}</pre>
+        {/* 줄바꿈 없이(whitespace-pre) 긴 줄은 가로 스크롤, 세로는 드래그로 크기 조절(resize-y) */}
+        <pre className={cn(
+          "resize-y overflow-auto rounded bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre",
+          big ? "h-[82vh] max-h-[82vh]" : "h-[64vh] max-h-[68vh]",
+        )}>{logs}</pre>
       </DialogContent>
     </Dialog>
   );
