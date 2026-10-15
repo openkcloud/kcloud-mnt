@@ -135,14 +135,15 @@ function RequestIdCell({ id }: { id: string }) {
   return (
     <TableCell
       title="클릭해서 신청 ID 복사"
-      className="cursor-copy whitespace-nowrap font-mono text-xs font-semibold hover:text-primary"
+      className="group cursor-pointer whitespace-nowrap font-mono text-xs font-semibold hover:text-primary"
       onClick={(e) => {
         e.stopPropagation();
         navigator.clipboard.writeText(id);
         toast.success("신청 ID 복사됨", { description: id });
       }}
     >
-      {id}
+      {/* 칸 전체가 복사 영역 — 마우스를 올리면 ID 에 배경(테마 색 border: 라이트 #e2e8f0) */}
+      <span className="-mx-1.5 rounded-md px-1.5 py-1 transition-colors group-hover:bg-border">{id}</span>
     </TableCell>
   );
 }
@@ -168,12 +169,12 @@ function nameOf(r: ResourceRequest) {
   return (r.type === "vm" ? r.vmName : r.type === "cluster" ? r.clusterName : r.workspaceName) || "—";
 }
 
-// 목록 '프로젝트 · 신청자' 칸 — 두 줄: 프로젝트 / 신청자 (조직)
+// 목록 '프로젝트 · 신청자' 칸 — 두 줄: 프로젝트 / 신청자 (신청자 본인 조직)
 function ProjectRequesterCell({ r }: { r: ResourceRequest }) {
   return (
     <div className="space-y-0.5">
       <div className="font-mono text-xs">{r.projectName}</div>
-      <div className="text-[11px] text-muted-foreground">{r.requestedByName}{r.orgName ? ` (${r.orgName})` : ""}</div>
+      <div className="text-[11px] text-muted-foreground">{r.requestedByName}{r.requesterOrgName ? ` (${r.requesterOrgName})` : ""}</div>
     </div>
   );
 }
@@ -495,7 +496,6 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
       {/* IP 방식 */}
       {net && (isExternal ? (
         <div className="space-y-1.5">
-          <div className="text-xs font-medium">Static IP</div>
           <div className="flex items-center gap-2">
             {[{ v: false, l: "자동 할당" }, { v: true, l: "직접 입력" }].map((o) => (
               <Button key={o.l} type="button" size="sm" variant={ipManual === o.v ? "default" : "outline"} className="h-7" onClick={() => setIpManual(o.v)}>
@@ -910,6 +910,41 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
   );
 }
 
+// 신청 유형 필터 — 관리자·사용자 뷰 공용
+function TypeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="w-36">
+        <SelectValue placeholder="유형" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">전체 유형</SelectItem>
+        <SelectItem value="vm">VM</SelectItem>
+        <SelectItem value="cluster">K8s 클러스터</SelectItem>
+        <SelectItem value="ai-workspace">AI 워크스페이스</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+// 목록 검색 — 신청자·프로젝트·ID (관리자·사용자 뷰 공용)
+function matchesQuery(r: ResourceRequest, q: string) {
+  return !q || r.requestedByName.includes(q) || r.projectName.includes(q) || r.id.includes(q);
+}
+function SearchBox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="relative">
+      <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+      <Input
+        placeholder="신청자·프로젝트·ID 검색…"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-60 pl-9"
+      />
+    </div>
+  );
+}
+
 // ─────────── 관리자 뷰 ───────────
 function AdminView() {
   const [wizardOpen, setWizardOpen] = React.useState(false); // 관리자도 신청(조직이 할당된 모든 프로젝트)
@@ -955,9 +990,7 @@ function AdminView() {
     setSheetOpen(true);
   }
 
-  const items = (data?.items ?? []).filter(
-    (r) => !q || r.requestedByName.includes(q) || r.projectName.includes(q) || r.id.includes(q),
-  );
+  const items = (data?.items ?? []).filter((r) => matchesQuery(r, q));
 
   const pending = items.filter((r) => r.status === "pending").length;
   const inProgress = items.filter((r) => ["approved", "provisioning", "completed"].includes(r.status)).length;
@@ -1041,15 +1074,7 @@ function AdminView() {
       {/* 필터 */}
       <Card className="p-4">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input
-              placeholder="신청자·프로젝트·ID 검색…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              className="w-60 pl-9"
-            />
-          </div>
+          <SearchBox value={q} onChange={setQ} />
           <Select value={orgFilter} onValueChange={setOrgFilter}>
             <SelectTrigger className="w-36">
               <SelectValue placeholder="조직" />
@@ -1068,17 +1093,7 @@ function AdminView() {
               {(Object.keys(STATUS_LABEL) as RequestStatus[]).map((s) => <SelectItem key={s} value={s}>{STATUS_LABEL[s]}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="w-36">
-              <SelectValue placeholder="유형" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">전체 유형</SelectItem>
-              <SelectItem value="vm">VM</SelectItem>
-              <SelectItem value="cluster">K8s 클러스터</SelectItem>
-              <SelectItem value="ai-workspace">AI 워크스페이스</SelectItem>
-            </SelectContent>
-          </Select>
+          <TypeSelect value={typeFilter} onChange={setTypeFilter} />
           <span className="text-xs text-muted-foreground">{items.length}건</span>
           <div className="ml-auto">
             <Button size="sm" onClick={() => setWizardOpen(true)}>
@@ -1286,15 +1301,18 @@ function AdminView() {
 function UserView({ username }: { username: string }) {
   const [wizardOpen, setWizardOpen] = React.useState(false);
   const [statusFilter, setStatusFilter] = React.useState("all");
+  const [typeFilter, setTypeFilter] = React.useState("all");
+  const [q, setQ] = React.useState("");
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
 
   // 내 신청 = MNT-CORE 실제 티켓 (목업 폴백 없음). 신청자는 서버가 토큰으로 정한다
   const filters: Record<string, string> = {};
   if (statusFilter !== "all") filters.status = statusFilter;
+  if (typeFilter !== "all") filters.type = typeFilter;
   const { data, isLoading, error } = useTickets(filters, !!username);
 
-  const items = data?.items ?? [];
+  const items = (data?.items ?? []).filter((r) => matchesQuery(r, q));
   const pending = items.filter((r) => r.status === "pending").length;
   const inProgress = items.filter((r) => r.status === "approved" || r.status === "provisioning").length;
   const done = items.filter((r) => r.status === "completed").length;
@@ -1320,6 +1338,7 @@ function UserView({ username }: { username: string }) {
       {/* 필터 + 신청 버튼 */}
       <Card className="p-4">
         <div className="flex flex-wrap items-center gap-3">
+          <SearchBox value={q} onChange={setQ} />
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="w-36">
               <SelectValue placeholder="상태" />
@@ -1329,6 +1348,7 @@ function UserView({ username }: { username: string }) {
               {(Object.keys(STATUS_LABEL) as RequestStatus[]).map((s) => <SelectItem key={s} value={s}>{STATUS_LABEL[s]}</SelectItem>)}
             </SelectContent>
           </Select>
+          <TypeSelect value={typeFilter} onChange={setTypeFilter} />
           <span className="text-xs text-muted-foreground">{items.length}건</span>
           <div className="ml-auto">
             <Button size="sm" onClick={() => setWizardOpen(true)}>
@@ -1430,7 +1450,7 @@ export default function RequestsPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title={isAdmin ? "신청 관리" : "자원 요청 관리"}
+        title={isAdmin ? "자원 신청 관리" : "자원 요청 관리"}
         description={
           isAdmin
             ? "사용자 VM·K8s 클러스터·AI 워크스페이스 자원 신청을 검토하고 승인·반려합니다."

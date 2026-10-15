@@ -131,7 +131,7 @@ COMMENT ON TABLE mnu_menu IS 'LNB 메뉴 원장(계층형). 역할별 노출·�
 -- 목업의 역할별 차이를 그대로 표현한다:
 --   · 노출 여부   = 행 존재 여부 (사용자/관리자 메뉴 구성이 다름)
 --   · 역할별 순서 = sort_order   (섹션 순서가 역할마다 다름: 사용자는 자원 우선, 관리자는 옵저버빌리티 우선)
---   · 역할별 라벨 = label_override (/ticket/requests: 사용자 "자원 요청 관리" / 관리자 "신청 관리")
+--   · 역할별 라벨 = label_override (/ticket/requests: 사용자 "자원 요청 관리" / 관리자 "자원 신청 관리")
 CREATE TABLE mnu_role_menu (
     role_id        BIGINT NOT NULL REFERENCES iam_role(id) ON DELETE CASCADE,
     menu_id        BIGINT NOT NULL REFERENCES mnu_menu(id) ON DELETE CASCADE,

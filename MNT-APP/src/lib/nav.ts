@@ -75,7 +75,7 @@ const SECTION_CLOUD: NavSection = {
   label: "클라우드 자원",
   items: [
     { label: "자원 요청 관리", href: "/ticket/requests", icon: ClipboardList, roles: ["user"] as Role[] },
-    { label: "신청 관리", href: "/ticket/requests", icon: ClipboardCheck, roles: ["admin"] as Role[] },
+    { label: "자원 신청 관리", href: "/ticket/requests", icon: ClipboardCheck, roles: ["admin"] as Role[] },
     {
       label: "IaaS (OpenStack)",
       href: "/iaas",

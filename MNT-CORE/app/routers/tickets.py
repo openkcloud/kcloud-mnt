@@ -98,13 +98,14 @@ _SELECT = """
     SELECT r.id, r.type, r.status, r.project_id, r.request_spec, r.provision_spec, r.result,
            r.approved_at, r.provisioning_at, r.approved_reject_at, r.approved_reject_reason,
            r.provisioning_reject_at, r.provisioning_reject_reason, r.error_message, r.created_at,
-           u.username, u.name AS requester_name, o.id AS org_id, o.name AS org_name,
+           u.username, u.name AS requester_name, ro.name AS requester_org_name, o.id AS org_id, o.name AS org_name,
            ap.username AS approved_by, ap.name AS approved_by_name,
            pv.username AS provisioning_by, pv.name AS provisioning_by_name,
            ar.username AS approved_reject_by, ar.name AS approved_reject_by_name,
            pr.username AS provisioning_reject_by, pr.name AS provisioning_reject_by_name
       FROM tkt_request r
       JOIN iam_user u ON u.id = r.requested_by
+      LEFT JOIN iam_org ro ON ro.id = u.org_id  -- 신청자 본인 조직(관리자는 다른 조직 프로젝트에도 신청)
       JOIN iam_project p ON p.project_id = r.project_id
       JOIN iam_org o ON o.id = p.org_id
       LEFT JOIN iam_user ap ON ap.id = r.approved_by
@@ -127,6 +128,7 @@ def _to_item(r) -> dict:
         "status": r["status"],
         "requestedBy": r["username"],
         "requestedByName": r["requester_name"],
+        "requesterOrgName": r["requester_org_name"],  # 신청자 조직 — orgId·orgName 은 프로젝트 조직
         "requestedAt": r["created_at"].isoformat(),
         "orgId": str(r["org_id"]),
         "orgName": r["org_name"],

@@ -227,13 +227,13 @@ export function WorkspaceRequestsPanel({ isAdmin }: { isAdmin: boolean }) {
             </CardTitle>
             <CardDescription>
               {isAdmin
-                ? "처리할 신청입니다. 신청 관리에서 승인한 뒤 '생성 시작'을 누르면 워크스페이스가 만들어집니다(한도 조정 가능)."
+                ? "처리할 신청입니다. 자원 신청 관리에서 승인한 뒤 '생성 시작'을 누르면 워크스페이스가 만들어집니다(한도 조정 가능)."
                 : "승인 후 생성이 끝나면 워크스페이스가 아래 목록과 위 프로젝트 선택에 나타납니다."}
             </CardDescription>
           </div>
           <Button size="sm" variant="outline" asChild>
             <Link href="/ticket/requests">
-              {isAdmin ? "신청 관리에서 처리" : "자원 요청 관리에서 보기"} <ArrowUpRight className="size-3.5" />
+              {isAdmin ? "자원 신청 관리에서 처리" : "자원 요청 관리에서 보기"} <ArrowUpRight className="size-3.5" />
             </Link>
           </Button>
         </div>

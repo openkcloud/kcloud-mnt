@@ -656,9 +656,16 @@ def list_project_subnets(project_id: str):
 
 # ────── 자원신청 승인용 — 티켓 프로젝트 기준 라이브 조회 ──────
 
+# Magnum(CAPI 드라이버)이 클러스터마다 만드는 네트워크·보안그룹은 승인 목록에서 뺀다 — VM 을 붙일 자원이 아니다.
+# 이름 규칙 = cluster-api-provider-openstack(네임스페이스 magnum-<프로젝트 ID>):
+#   네트워크 k8s-clusterapi-cluster-magnum-…, 보안그룹 k8s-cluster-magnum-…-secgroup-{controlplane|worker}
+_MAGNUM_NET_PREFIX = "k8s-clusterapi-cluster-magnum-"
+_MAGNUM_SG_PREFIX = "k8s-cluster-magnum-"
+
+
 @router.get("/projects/{project_id}/networks", dependencies=[Depends(project_member)])
 def list_project_networks(project_id: str):
-    """승인 시 고를 네트워크 — 프로젝트 소유 + 공유 + 외부(external). kind: project|shared|external.
+    """승인 시 고를 네트워크 — 프로젝트 소유 + 공유 + 외부(external), Magnum 클러스터 네트워크 제외. kind: project|shared|external.
     공유는 전체 공유(shared) + 이 프로젝트에만 RBAC 로 공유된 것(관리자 조회 시 shared=false 로 보이므로 따로 확인).
     cidr 는 서브넷 CIDR(여러 개면 ', ' 로 연결)."""
     try:
@@ -670,6 +677,8 @@ def list_project_networks(project_id: str):
     shared_to_project = {p["object_id"] for p in rbac if p.get("target_tenant") in (project_id, "*")}
     items = []
     for n in nets:
+        if (n.get("name") or "").startswith(_MAGNUM_NET_PREFIX):
+            continue
         kind = "project" if _net_type(n) == "tenant" else _net_type(n)
         owner = n.get("project_id") or n.get("tenant_id") or ""
         if kind == "project" and owner != project_id:
@@ -684,13 +693,14 @@ def list_project_networks(project_id: str):
 
 @router.get("/projects/{project_id}/security-groups", dependencies=[Depends(project_member)])
 def list_project_security_groups(project_id: str):
-    """승인 시 고를 보안그룹 — 프로젝트 소유분."""
+    """승인 시 고를 보안그룹 — 프로젝트 소유분(Magnum 클러스터 보안그룹 제외)."""
     try:
         sgs = _neutron_get("/security-groups", {"project_id": project_id})["security_groups"]
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"보안 그룹 조회 실패: {type(e).__name__}: {e}")
     items = [{"id": sg["id"], "name": sg.get("name") or sg["id"], "projectId": project_id,
-              "description": sg.get("description") or ""} for sg in sgs]
+              "description": sg.get("description") or ""} for sg in sgs
+             if not (sg.get("name") or "").startswith(_MAGNUM_SG_PREFIX)]
     return {"items": items, "count": len(items)}
 
 
