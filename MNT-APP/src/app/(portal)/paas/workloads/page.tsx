@@ -25,10 +25,11 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ui/confirm";
 import { ClusterScopeBar, useClusterScope } from "@/components/paas/cluster-scope-bar";
+import { WorkloadDiff } from "@/components/paas/workload-diff";
 import {
   useWorkloads, useCreateWorkload, useScaleWorkload, useRestartWorkload, useDeleteWorkload,
-  useApplyWorkload, useUpdateWorkloadYaml, fetchWorkloadYaml, useWorkloadPods, fetchPodLogs,
-  useNamespaces, type WorkloadRow, type PodRow,
+  useApplyWorkload, useUpdateWorkloadYaml, fetchWorkloadYaml, previewWorkloadApply, useWorkloadPods, fetchPodLogs,
+  useNamespaces, type WorkloadRow, type PodRow, type WorkloadPreview,
 } from "@/lib/paas-api";
 
 const TEXTAREA_CLS = "w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -242,10 +243,67 @@ function ScaleDialog({ clusterId, w, onClose }: { clusterId: string; w: Workload
   );
 }
 
-const YAML_SAMPLE = `apiVersion: batch/v1
+// 종류별 시작 매니페스트 — YAML 탭에서 템플릿을 고르면 편집창에 채워진다({NS} 는 선택 네임스페이스로 치환)
+const WORKLOAD_TEMPLATES: Record<string, string> = {
+  Deployment: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  namespace: {NS}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: my-app }
+  template:
+    metadata:
+      labels: { app: my-app }
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+`,
+  StatefulSet: `apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: my-sts
+  namespace: {NS}
+spec:
+  serviceName: my-sts
+  replicas: 1
+  selector:
+    matchLabels: { app: my-sts }
+  template:
+    metadata:
+      labels: { app: my-sts }
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27
+`,
+  DaemonSet: `apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: my-ds
+  namespace: {NS}
+spec:
+  selector:
+    matchLabels: { app: my-ds }
+  template:
+    metadata:
+      labels: { app: my-ds }
+    spec:
+      containers:
+        - name: agent
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep infinity"]
+`,
+  Job: `apiVersion: batch/v1
 kind: Job
 metadata:
   name: my-train-job
+  namespace: {NS}
 spec:
   template:
     spec:
@@ -254,7 +312,25 @@ spec:
         - name: trainer
           image: python:3.12
           command: ["python", "-c", "print('train')"]
-`;
+`,
+  CronJob: `apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: my-cron
+  namespace: {NS}
+spec:
+  schedule: "0 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: task
+              image: busybox:1.36
+              command: ["sh", "-c", "date"]
+`,
+};
 
 function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; defaultNs: string; onClose: () => void }) {
   const create = useCreateWorkload(clusterId);
@@ -265,9 +341,15 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
     namespace: defaultNs, name: "", image: "", replicas: "1",
     cpu: "", memory: "", acceleratorKind: "none", acceleratorCount: "1",
   });
-  const [yaml, setYaml] = React.useState(YAML_SAMPLE);
+  const tpl = (k: string) => WORKLOAD_TEMPLATES[k].replace("{NS}", defaultNs);
+  const [yamlKind, setYamlKind] = React.useState("Deployment");
+  const [yaml, setYaml] = React.useState(() => tpl("Deployment"));
+  const [preview, setPreview] = React.useState<WorkloadPreview | null>(null);
+  const [previewing, setPreviewing] = React.useState(false);
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
   const pending = create.isPending || apply.isPending;
+
+  const pickTemplate = (k: string) => { setYamlKind(k); setYaml(tpl(k)); };
 
   const submitForm = () => {
     create.mutate({
@@ -282,7 +364,19 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
       onError: (e) => toast.error("생성 실패", { description: String((e as Error).message) }),
     });
   };
-  const submitYaml = () => {
+  // "적용" → 바로 실행하지 않고 dryRun 미리보기를 받아 비교 뷰로 전환
+  const requestPreview = async () => {
+    setPreviewing(true);
+    try {
+      setPreview(await previewWorkloadApply(clusterId, yaml));
+    } catch (e) {
+      toast.error("미리보기 실패", { description: String((e as Error).message) });
+    } finally {
+      setPreviewing(false);
+    }
+  };
+  // 비교 뷰의 "실행" → 실제 apply
+  const runApply = () => {
     apply.mutate(yaml, {
       onSuccess: () => { toast.success("워크로드 적용됨"); onClose(); },
       onError: (e) => toast.error("적용 실패", { description: String((e as Error).message) }),
@@ -291,7 +385,7 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>워크로드 생성</DialogTitle>
           <DialogDescription>폼(Deployment/StatefulSet) 또는 YAML(Job·CronJob 등 모든 종류).</DialogDescription>
@@ -377,14 +471,37 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
           </TabsContent>
 
           <TabsContent value="yaml" className="space-y-2 pt-3">
-            <Label>매니페스트 (Deployment·StatefulSet·DaemonSet·Job·CronJob)</Label>
-            <textarea value={yaml} onChange={(e) => setYaml(e.target.value)} rows={16} className={TEXTAREA_CLS} spellCheck={false} />
-            <DialogFooter>
-              <Button variant="outline" onClick={onClose}>취소</Button>
-              <Button disabled={pending || !yaml.trim()} onClick={submitYaml}>
-                {apply.isPending && <Loader2 className="size-3.5 animate-spin" />} 적용
-              </Button>
-            </DialogFooter>
+            {preview ? (
+              <>
+                <Label>변경 미리보기 (실행 전)</Label>
+                <WorkloadDiff before={preview.before} after={preview.after} action={preview.action} />
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setPreview(null)}>뒤로</Button>
+                  <Button disabled={pending} onClick={runApply}>
+                    {apply.isPending && <Loader2 className="size-3.5 animate-spin" />} 실행
+                  </Button>
+                </DialogFooter>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <Label className="shrink-0">템플릿</Label>
+                  <Select value={yamlKind} onValueChange={pickTemplate}>
+                    <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {KINDS.map((k) => <SelectItem key={k} value={k}>{k}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <textarea value={yaml} onChange={(e) => setYaml(e.target.value)} rows={16} className={TEXTAREA_CLS} spellCheck={false} />
+                <DialogFooter>
+                  <Button variant="outline" onClick={onClose}>취소</Button>
+                  <Button disabled={pending || previewing || !yaml.trim()} onClick={requestPreview}>
+                    {previewing && <Loader2 className="size-3.5 animate-spin" />} 적용
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
           </TabsContent>
         </Tabs>
       </DialogContent>
@@ -474,6 +591,8 @@ function YamlDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
   const update = useUpdateWorkloadYaml(clusterId);
   const [text, setText] = React.useState<string>("");
   const [loading, setLoading] = React.useState(true);
+  const [preview, setPreview] = React.useState<WorkloadPreview | null>(null);
+  const [previewing, setPreviewing] = React.useState(false);
   React.useEffect(() => {
     let alive = true;
     fetchWorkloadYaml(clusterId, w.kind, w.namespace, w.name)
@@ -481,26 +600,51 @@ function YamlDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
       .catch((e) => { if (alive) { setText(`# 조회 실패: ${e.message}`); setLoading(false); } });
     return () => { alive = false; };
   }, [clusterId, w]);
-  const save = () => update.mutate(
+  // "저장" → dryRun 미리보기를 받아 비교 뷰로 전환
+  const requestPreview = async () => {
+    setPreviewing(true);
+    try {
+      setPreview(await previewWorkloadApply(clusterId, text));
+    } catch (e) {
+      toast.error("미리보기 실패", { description: String((e as Error).message) });
+    } finally {
+      setPreviewing(false);
+    }
+  };
+  const runSave = () => update.mutate(
     { kind: w.kind, namespace: w.namespace, name: w.name, yaml: text },
     { onSuccess: () => { toast.success(`${w.name} 저장됨`); onClose(); }, onError: (e) => toast.error("저장 실패", { description: String((e as Error).message) }) },
   );
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden">
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><FileCode className="size-4 text-brand-indigo-600" /> {w.name} · YAML</DialogTitle>
-          <DialogDescription className="font-mono text-xs">{w.kind} · {w.namespace} — 수정 후 저장 시 server-side apply</DialogDescription>
+          <DialogDescription className="font-mono text-xs">{w.kind} · {w.namespace} — {preview ? "변경 미리보기 (실행 전)" : "수정 후 저장 시 server-side apply"}</DialogDescription>
         </DialogHeader>
-        {loading ? <Skeleton className="h-80" /> : (
-          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={22} className={TEXTAREA_CLS} spellCheck={false} />
+        {preview ? (
+          <>
+            <WorkloadDiff before={preview.before} after={preview.after} action={preview.action} />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPreview(null)}>뒤로</Button>
+              <Button disabled={update.isPending} onClick={runSave}>
+                {update.isPending && <Loader2 className="size-3.5 animate-spin" />} 실행
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            {loading ? <Skeleton className="h-80" /> : (
+              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={22} className={TEXTAREA_CLS} spellCheck={false} />
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>닫기</Button>
+              <Button disabled={previewing || loading} onClick={requestPreview}>
+                {previewing && <Loader2 className="size-3.5 animate-spin" />} 저장
+              </Button>
+            </DialogFooter>
+          </>
         )}
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>닫기</Button>
-          <Button disabled={update.isPending || loading} onClick={save}>
-            {update.isPending && <Loader2 className="size-3.5 animate-spin" />} 저장
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

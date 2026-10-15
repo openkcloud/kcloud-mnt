@@ -258,6 +258,29 @@ def _wl_path(kind: str, ns: str, name: str | None = None) -> str:
     return f"{base}/{name}" if name else base
 
 
+def _parse_workload(body: dict) -> tuple[dict, str, str, str]:
+    """apply·preview 공용 — YAML 파싱·검증 후 (obj, kind, ns, name). 네임스페이스는 obj 에 보정해 넣는다."""
+    try:
+        obj = yaml.safe_load(body["yaml"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"YAML 파싱 실패: {e}")
+    if not isinstance(obj, dict) or "kind" not in obj or not obj.get("metadata", {}).get("name"):
+        raise HTTPException(status_code=400, detail="kind·metadata.name 이 있는 단일 리소스 YAML 이어야 합니다.")
+    kind = obj["kind"]
+    if kind not in _WORKLOAD_API:
+        raise HTTPException(status_code=400, detail=f"워크로드 종류만 허용: {kind} 불가")
+    ns = obj["metadata"].get("namespace") or body.get("namespace") or "default"
+    obj["metadata"]["namespace"] = ns
+    return obj, kind, ns, obj["metadata"]["name"]
+
+
+def _clean_manifest(obj: dict) -> str:
+    """편집·비교용 YAML — managedFields·status 제거."""
+    obj.get("metadata", {}).pop("managedFields", None)
+    obj.pop("status", None)
+    return yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
+
+
 # ── 워크로드 ──
 @router.post("/clusters/{cluster_id}/workloads", status_code=201)
 def create_workload(cluster_id: str, body: dict = Body(...)):
@@ -306,24 +329,40 @@ def create_workload(cluster_id: str, body: dict = Body(...)):
 @router.post("/clusters/{cluster_id}/workloads/apply", status_code=201)
 def apply_workload(cluster_id: str, body: dict = Body(...)):
     """YAML 로 워크로드 생성/적용(server-side apply) — Job/CronJob/DaemonSet 등 모든 종류."""
-    try:
-        obj = yaml.safe_load(body["yaml"])
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"YAML 파싱 실패: {e}")
-    if not isinstance(obj, dict) or "kind" not in obj or not obj.get("metadata", {}).get("name"):
-        raise HTTPException(status_code=400, detail="kind·metadata.name 이 있는 단일 리소스 YAML 이어야 합니다.")
-    kind = obj["kind"]
-    if kind not in _WORKLOAD_API:
-        raise HTTPException(status_code=400, detail=f"워크로드 종류만 허용: {kind} 불가")
-    ns = obj["metadata"].get("namespace") or body.get("namespace") or "default"
-    obj["metadata"]["namespace"] = ns
-    name = obj["metadata"]["name"]
+    obj, kind, ns, name = _parse_workload(body)
     path = f"{_wl_path(kind, ns, name)}?fieldManager=okc-portal&force=true"
     try:
         return k8s_request(cluster_id, "PATCH", path,
                            content=yaml.safe_dump(obj).encode(), content_type="application/apply-patch+yaml")
     except Exception as e:  # noqa: BLE001
         raise _err(e)
+
+
+@router.post("/clusters/{cluster_id}/workloads/apply/preview")
+def preview_workload_apply(cluster_id: str, body: dict = Body(...)):
+    """적용 전 미리보기 — before(현재 객체)·after(dryRun 적용 결과)·action(create|update).
+
+    after 는 서버가 기본값·정규화까지 채운 실제 적용 결과(dryRun=All, 클러스터 비영속)."""
+    obj, kind, ns, name = _parse_workload(body)
+    # before — 현재 객체(없으면 신규 생성)
+    try:
+        before = _clean_manifest(k8s_get(cluster_id, _wl_path(kind, ns, name)))
+        action = "update"
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            before, action = "", "create"
+        else:
+            raise _err(e)
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+    # after — dryRun=All 적용 결과(클러스터에 생성·변경하지 않음)
+    path = f"{_wl_path(kind, ns, name)}?fieldManager=okc-portal&force=true&dryRun=All"
+    try:
+        result = k8s_request(cluster_id, "PATCH", path,
+                             content=yaml.safe_dump(obj).encode(), content_type="application/apply-patch+yaml")
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+    return {"before": before, "after": _clean_manifest(result), "action": action}
 
 
 @router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
