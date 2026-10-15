@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
 import { MSWProvider } from "@/components/msw-provider";
 import { ConfirmProvider } from "@/components/ui/confirm";
+import { VersionWatcher } from "@/components/version-watcher";
 
 function makeQueryClient() {
   return new QueryClient({
@@ -34,6 +35,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       enableSystem={false}
       disableTransitionOnChange
     >
+      <VersionWatcher />
       <QueryClientProvider client={queryClient}>
         <MSWProvider>
           <TooltipProvider delayDuration={300}>
