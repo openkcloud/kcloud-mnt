@@ -637,7 +637,13 @@ export interface FlavorSummary {
   accelerators?: { kind: string; count: number }[]; // device-profile 의 가속기 종류(GPU/NPU)·개수
   deviceProfileMissing?: boolean; // 가리키는 device-profile 이 Cyborg 에 없음 — 신청 불가
 }
-export interface DeviceProfile { name: string; uuid: string }
+export interface DeviceProfile {
+  name: string;
+  uuid: string;
+  description?: string | null;
+  accelerators?: { kind: string; count: number }[];
+  groups?: Record<string, string>[]; // 원본 그룹(resources:*, trait:*)
+}
 
 export function useFlavors() {
   const pollMs = usePollingInterval((s) => s.intervalMs);
@@ -655,6 +661,60 @@ export function useDeviceProfiles() {
     queryFn: async (): Promise<DeviceProfile[]> =>
       (await fetchJson<{ items: DeviceProfile[] }>(`${IAAS_BASE}/api/iaas/device-profiles`)).items,
     staleTime: 5 * 60 * 1000, retry: 0,
+  });
+}
+// 디바이스 프로파일 생성/삭제 (관리자) — Cyborg 는 불변이라 수정은 없다.
+// 가속기 1종류 = 장치 조건. 수량은 Cyborg group 복제 수(각 group 개수는 1 고정).
+export interface CreateDeviceProfileInput {
+  name: string;
+  description?: string;
+  accelerators: { resourceClass: string; quantity: number; traits: { name: string; policy: "required" | "forbidden" }[] }[];
+}
+export function useCreateDeviceProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateDeviceProfileInput) =>
+      postJson<DeviceProfile>(`${IAAS_BASE}/api/iaas/device-profiles`, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-device-profiles"] });
+      qc.invalidateQueries({ queryKey: ["iaas-flavors"] }); // deviceProfileMissing 재평가
+    },
+  });
+}
+export function useDeleteDeviceProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    // force=true 면 참조 플레이버가 있어도 강제 삭제(기본은 백엔드가 409 로 막음)
+    mutationFn: ({ uuid, force }: { uuid: string; force?: boolean }) =>
+      sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/device-profiles/${uuid}${force ? "?force=true" : ""}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iaas-device-profiles"] });
+      qc.invalidateQueries({ queryKey: ["iaas-flavors"] });
+    },
+  });
+}
+
+// 가속기 장치 현황(Cyborg 5-2) — 물리 장치 인벤토리 + 사용 상태(조회 전용)
+export interface AcceleratorDevice {
+  id: number | string | null;
+  uuid: string;
+  hostname: string | null;
+  type: string | null;
+  model: string | null;
+  vendor: string | null;
+  resourceClasses: string[];
+  traits: string[];
+  usage: "used" | "available" | "unknown";
+  instances: { id: string; name: string | null }[];
+}
+export function useAcceleratorDevices() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["iaas-accel-devices"],
+    queryFn: async (): Promise<AcceleratorDevice[]> =>
+      (await fetchJson<{ items: AcceleratorDevice[] }>(`${IAAS_BASE}/api/iaas/accelerator-devices`)).items,
+    staleTime: 10 * 1000, retry: 0,
+    refetchInterval: pollMs || false,
   });
 }
 export interface CreateFlavorInput {
