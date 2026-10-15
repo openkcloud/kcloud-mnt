@@ -103,6 +103,8 @@ FROM (VALUES
     ('cloud.iaas',     'iaas.volumes',    '볼륨·스토리지',    '/iaas/volumes',           'HardDrive',    70),
     ('cloud.iaas',     'iaas.images',     '이미지',           '/iaas/images',            'Disc',         80),
     ('cloud.iaas',     'iaas.flavors',    '플레이버',         '/iaas/flavors',           'Cpu',          90),
+    ('cloud.iaas',     'iaas.deviceprofiles', '디바이스 프로파일', '/iaas/device-profiles',   'Cpu',      95),
+    ('cloud.iaas',     'iaas.acceldevices',   '가속기 장치 현황',  '/iaas/accelerator-devices', 'Cpu',   100),
     -- PaaS 하위
     ('cloud.paas',     'paas.clusters',   '클러스터',         '/paas/clusters',          'Boxes',        10),
     ('cloud.paas',     'paas.workloads',  '워크로드',         '/paas/workloads',         'Boxes',        20),
@@ -151,6 +153,7 @@ FROM (VALUES
     ('user', 'iaas.secgroups',    NULL, NULL),
     ('user', 'iaas.keypairs',     NULL, NULL),
     ('user', 'iaas.volumes',      NULL, NULL),
+    ('user', 'iaas.acceldevices', NULL, NULL),   -- 가속기 장치 현황은 조회라 사용자도 노출(디바이스 프로파일은 관리자 전용)
     ('user', 'cloud.paas',        NULL, NULL),
     ('user', 'paas.clusters',     NULL, NULL),
     ('user', 'paas.workloads',    NULL, NULL),
@@ -201,6 +204,8 @@ FROM (VALUES
     ('admin', 'iaas.volumes',      NULL, NULL),
     ('admin', 'iaas.images',       NULL, NULL),
     ('admin', 'iaas.flavors',      NULL, NULL),
+    ('admin', 'iaas.deviceprofiles', NULL, NULL),
+    ('admin', 'iaas.acceldevices',   NULL, NULL),
     ('admin', 'cloud.paas',        NULL, NULL),
     ('admin', 'paas.clusters',     NULL, NULL),
     ('admin', 'paas.workloads',    NULL, NULL),
