@@ -567,7 +567,7 @@ function LogsDialog({ clusterId, namespace, pod, onClose }: { clusterId: string;
   }, [clusterId, namespace, pod.name, container]);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden">
+      <DialogContent className="max-h-[88vh] w-[92vw] max-w-5xl overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 font-mono text-sm">{pod.name}</DialogTitle>
           <DialogDescription className="flex items-center gap-2">
@@ -577,10 +577,11 @@ function LogsDialog({ clusterId, namespace, pod, onClose }: { clusterId: string;
                 <SelectContent>{pod.containers.map((c) => <SelectItem key={c} value={c} className="font-mono text-xs">{c}</SelectItem>)}</SelectContent>
               </Select>
             )}
-            <span className="text-[11px] text-muted-foreground">최근 500줄</span>
+            <span className="text-[11px] text-muted-foreground">최근 500줄 · 긴 줄은 가로 스크롤</span>
           </DialogDescription>
         </DialogHeader>
-        <pre className="max-h-[60vh] overflow-auto rounded bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre-wrap">{logs}</pre>
+        {/* 로그는 줄바꿈하지 않고(whitespace-pre) 긴 줄은 가로 스크롤 — 원문 그대로 읽기 */}
+        <pre className="max-h-[68vh] overflow-auto rounded bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre">{logs}</pre>
       </DialogContent>
     </Dialog>
   );
