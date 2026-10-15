@@ -58,6 +58,22 @@ def _project_path(project_id: str) -> str:
     return "/projects/" + quote(project_id, safe="")
 
 
+def _check_requestable(db: Session, project_id: str, user: CurrentUser) -> None:
+    """신청할 수 있는 프로젝트인지 — 조직이 할당된(iam_project) 프로젝트의 owner·member. 관리자는 조직이 할당된 모든 프로젝트."""
+    if user.is_admin:
+        if not db.execute(text("SELECT 1 FROM iam_project WHERE project_id = :p"), {"p": project_id}).first():
+            raise HTTPException(403, "신청할 수 없는 프로젝트입니다 (조직이 할당되지 않은 프로젝트)")
+        return
+    role = db.execute(
+        text("""SELECT pm.role FROM iam_project_member pm
+                  JOIN iam_project p ON p.project_id = pm.project_id
+                 WHERE pm.project_id = :p AND pm.user_id = :u"""),
+        {"p": project_id, "u": user.id},
+    ).scalar()
+    if role not in _REQUEST_ROLES:
+        raise HTTPException(403, "신청할 수 없는 프로젝트입니다 (조직이 할당된 프로젝트의 owner·member 만 신청 가능)")
+
+
 _SERVER_NAME_TAKEN = "이미 같은 이름의 가상머신이 있습니다."
 _TICKET_NAME_TAKEN = "같은 이름으로 신청된 티켓이 있습니다."
 
@@ -138,17 +154,23 @@ def _to_item(r) -> dict:
 
 @router.get("/tickets/projects")
 def requestable_projects(user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
-    """신청할 수 있는 프로젝트 — 내가 owner·member 이고 조직이 할당된(iam_project) 프로젝트.
+    """신청할 수 있는 프로젝트 — 내가 owner·member 이고 조직이 할당된(iam_project) 프로젝트(관리자는 조직이 할당된 전부).
     이름은 OpenStack 라이브 조회(없거나 비활성인 프로젝트는 제외)."""
-    rows = db.execute(
-        text("""SELECT pm.project_id, pm.role, o.id AS org_id, o.name AS org_name
-                  FROM iam_project_member pm
-                  JOIN iam_user u ON u.id = pm.user_id
-                  JOIN iam_project p ON p.project_id = pm.project_id
-                  JOIN iam_org o ON o.id = p.org_id
-                 WHERE u.username = :un AND pm.role = ANY(:roles)"""),
-        {"un": user.username, "roles": _REQUEST_ROLES},
-    ).mappings().all()
+    if user.is_admin:
+        rows = db.execute(
+            text("""SELECT p.project_id, 'admin' AS role, o.id AS org_id, o.name AS org_name
+                      FROM iam_project p JOIN iam_org o ON o.id = p.org_id"""),
+        ).mappings().all()
+    else:
+        rows = db.execute(
+            text("""SELECT pm.project_id, pm.role, o.id AS org_id, o.name AS org_name
+                      FROM iam_project_member pm
+                      JOIN iam_user u ON u.id = pm.user_id
+                      JOIN iam_project p ON p.project_id = pm.project_id
+                      JOIN iam_org o ON o.id = p.org_id
+                     WHERE u.username = :un AND pm.role = ANY(:roles)"""),
+            {"un": user.username, "roles": _REQUEST_ROLES},
+        ).mappings().all()
     if not rows:
         return {"items": []}
     db.rollback()  # 조회 트랜잭션을 닫고 MNT-IAAS 를 호출한다(호출 동안 커넥션을 잡지 않게)
@@ -205,16 +227,9 @@ class CreateTicketBody(BaseModel):
 @router.post("/tickets", status_code=201)
 def create_ticket(body: CreateTicketBody, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     """VM 자원신청(신청자 = 토큰 사용자). 저장 직전에 서버에서 다시 확인한다 — 멤버·역할, 이름 규칙·중복(DB+Nova),
-    플레이버(public)·이미지(프로젝트에서 사용 가능) 존재, 부팅 볼륨 범위, 키페어 소유."""
+    플레이버(public·가속기 device-profile 있음)·이미지(프로젝트에서 사용 가능) 존재, 부팅 볼륨 범위, 키페어 소유."""
     user_id = user.id
-    role = db.execute(
-        text("""SELECT pm.role FROM iam_project_member pm
-                  JOIN iam_project p ON p.project_id = pm.project_id
-                 WHERE pm.project_id = :p AND pm.user_id = :u"""),
-        {"p": body.projectId, "u": user_id},
-    ).scalar()
-    if role not in _REQUEST_ROLES:
-        raise HTTPException(403, "신청할 수 없는 프로젝트입니다 (조직이 할당된 프로젝트의 owner·member 만 신청 가능)")
+    _check_requestable(db, body.projectId, user)
     db.rollback()  # 확인용 조회 트랜잭션을 닫는다 — 아래 MNT-IAAS 호출 동안 커넥션을 잡지 않게
 
     if body.networkType not in ("internal", "external"):
@@ -229,6 +244,8 @@ def create_ticket(body: CreateTicketBody, user: CurrentUser = Depends(current_us
     flavor = next((f for f in _iaas("/flavors", user.token)["items"] if f["id"] == body.flavorId and f["isPublic"]), None)
     if not flavor:
         raise HTTPException(400, "선택한 스펙(플레이버)을 찾을 수 없습니다")
+    if flavor.get("deviceProfileMissing"):  # 가속기 device-profile 이 Cyborg 에 없으면 VM 을 만들 수 없다
+        raise HTTPException(400, "연결된 디바이스 프로파일이 존재하지 않습니다")
     image = next((i for i in _iaas(_project_path(body.projectId) + "/images", user.token)["items"]
                   if i["id"] == body.imageId), None)
     if not image:
@@ -328,7 +345,7 @@ def _workspace_name(project_name: str, project_id: str) -> str:
 
 
 class CreateAiWorkspaceBody(BaseModel):
-    requestedBy: str             # 신청자 username
+    requestedBy: str | None = None  # 옛 화면 호환용 — 쓰지 않음(신청자 = 토큰 사용자)
     projectId: str               # OpenStack 프로젝트 UUID — 이 프로젝트의 AI 워크스페이스
     purpose: str = ""
     cpu: int = 4
@@ -338,22 +355,12 @@ class CreateAiWorkspaceBody(BaseModel):
 
 
 @router.post("/tickets/ai-workspace", status_code=201)
-def create_ai_workspace_ticket(body: CreateAiWorkspaceBody, db: Session = Depends(get_db)):
-    """AI 워크스페이스 신청 — 멤버·역할, 프로젝트(라이브), 프로젝트당 1개(처리 중인 신청·기존 워크스페이스),
+def create_ai_workspace_ticket(body: CreateAiWorkspaceBody, user: CurrentUser = Depends(current_user),
+                               db: Session = Depends(get_db)):
+    """AI 워크스페이스 신청(신청자 = 토큰 사용자) — 멤버·역할, 프로젝트(라이브), 프로젝트당 1개(처리 중인 신청·기존 워크스페이스),
     워크스페이스 이름 사용 가능(MNT-AINB) 확인."""
-    user_id = db.execute(
-        text("SELECT id FROM iam_user WHERE username = :u AND status = 'active'"), {"u": body.requestedBy},
-    ).scalar()
-    if user_id is None:
-        raise HTTPException(404, "사용자를 찾을 수 없습니다")
-    role = db.execute(
-        text("""SELECT pm.role FROM iam_project_member pm
-                  JOIN iam_project p ON p.project_id = pm.project_id
-                 WHERE pm.project_id = :p AND pm.user_id = :u"""),
-        {"p": body.projectId, "u": user_id},
-    ).scalar()
-    if role not in _REQUEST_ROLES:
-        raise HTTPException(403, "신청할 수 없는 프로젝트입니다 (조직이 할당된 프로젝트의 owner·member 만 신청 가능)")
+    user_id = user.id
+    _check_requestable(db, body.projectId, user)
     db.rollback()  # 확인용 조회 트랜잭션을 닫는다 — 아래 MNT-IAAS·AINB 호출 동안 커넥션을 잡지 않게
 
     for label, v in (("vCPU", body.cpu), ("메모리", body.memoryGi), ("저장공간", body.storageGi)):
@@ -361,7 +368,7 @@ def create_ai_workspace_ticket(body: CreateAiWorkspaceBody, db: Session = Depend
             raise HTTPException(400, f"{label}는 1 이상이어야 합니다")
     if body.acceleratorCount < 0:
         raise HTTPException(400, "가속기는 0 이상이어야 합니다")
-    project = next((p for p in _iaas("/projects")["items"]
+    project = next((p for p in _iaas("/projects", user.token)["items"]
                     if p["id"] == body.projectId and p.get("enabled", True)), None)
     if not project:
         raise HTTPException(400, "OpenStack 프로젝트를 찾을 수 없습니다")

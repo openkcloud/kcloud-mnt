@@ -81,7 +81,10 @@ export default function FlavorsPage() {
                 <TableCell className="text-center font-mono tabular-nums">{f.vcpus}</TableCell>
                 <TableCell className="text-center font-mono tabular-nums">{(f.ramMb / 1024).toFixed(f.ramMb % 1024 ? 1 : 0)}GB</TableCell>
                 <TableCell className="text-center font-mono tabular-nums">{f.diskGb}GB</TableCell>
-                <TableCell>{f.accelerator ? <Badge variant="default" className="font-mono text-[10px]">{f.accelerator}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
+                <TableCell>
+                  {f.accelerator ? <Badge variant={f.deviceProfileMissing ? "warning" : "default"} className="font-mono text-[10px]">{f.accelerator}</Badge> : <span className="text-muted-foreground">—</span>}
+                  {f.deviceProfileMissing && <div className="mt-1 text-[11px] text-amber-700">연결된 디바이스 프로파일이 존재하지 않습니다.</div>}
+                </TableCell>
                 <TableCell>{f.isPublic ? <Badge variant="success" className="text-[10px]">public</Badge> : <Badge variant="outline" className="text-[10px]">private</Badge>}</TableCell>
                 <TableCell>
                   <Button variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending} onClick={() => remove(f)}>
