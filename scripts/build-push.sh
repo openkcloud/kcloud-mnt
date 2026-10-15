@@ -4,9 +4,10 @@
 # 사용:
 #   ./scripts/build-push.sh                 # core iaas paas obs ainb app 전부
 #   ./scripts/build-push.sh core app        # 일부만
-#   PUSH=0 ./scripts/build-push.sh core     # 빌드만(푸시 안 함)
+#   PUSH=0 ./scripts/build-push.sh core     # 빌드만(푸시 안 함, 로컬 이미지 남김)
 #   TAG=mytag ./scripts/build-push.sh       # 태그 지정(기본: git short sha)
 #   HARBOR_USER=admin HARBOR_PASS=... ./scripts/build-push.sh   # 먼저 로그인까지
+#   * 푸시가 끝난 이미지는 로컬에서 지운다(rmi) — 빌드 캐시는 남아 다음 빌드 속도는 그대로
 #
 # 환경변수(기본값):
 #   REGISTRY=harbor.io:7443/mnt   TAG=<git short sha>   PUSH=1
@@ -51,6 +52,8 @@ for m in "${MODULES[@]}"; do
   if [ "$PUSH" = "1" ]; then
     echo "==> push   $img"
     "$ENGINE" push "$img"
+    echo "==> rmi    $img"
+    "$ENGINE" rmi "$img" >/dev/null
   fi
 done
 
