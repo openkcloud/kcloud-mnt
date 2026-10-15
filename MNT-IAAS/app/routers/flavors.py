@@ -40,6 +40,12 @@ def _cyborg(method: str, path: str, *, json=None):
                    headers={"OpenStack-API-Version": "2.2"})
 
 
+# Placement — 경로에 버전 세그먼트 없음(루트). microversion 은 'placement X.Y' 형식(traits 는 1.6+).
+def _placement(method: str, path: str):
+    return _os_req("placement", "placement", "", method, path,
+                   headers={"OpenStack-API-Version": "placement 1.6"})
+
+
 # device-profile group 의 resource class → 화면 가속기 종류
 _ACCEL_KIND = {"PGPU": "GPU", "CUSTOM_AICHIP": "NPU"}
 
@@ -188,6 +194,92 @@ def delete_device_profile(uuid: str, force: bool = Query(False)):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"device-profile 삭제 실패: {e}")
     return None
+
+
+@router.get("/accelerator-devices")
+def accelerator_devices(type: str | None = Query(None), vendor: str | None = Query(None),
+                        hostname: str | None = Query(None)):
+    """물리 가속기 장치 현황 — 인벤토리 + Resource Class/Trait + 연결 VM + 사용 상태(조회 전용)."""
+    try:
+        devices = _cyborg("GET", "/devices").json().get("devices", [])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"가속기 장치 조회 실패: {e}")
+    # deployables·arqs 조회 실패 시 상태 '알 수 없음'(절대 '사용 가능'으로 보지 않는다)
+    unknown = False
+    try:
+        deployables = _cyborg("GET", "/deployables").json().get("deployables", [])
+    except Exception:  # noqa: BLE001
+        deployables, unknown = [], True
+    try:
+        arqs = _cyborg("GET", "/accelerator_requests").json().get("arqs", [])
+    except Exception:  # noqa: BLE001
+        arqs, unknown = [], True
+
+    device_rps: dict = {}  # device_id → [rp_uuid]
+    for d in deployables:
+        device_rps.setdefault(d.get("device_id"), []).append(d.get("rp_uuid"))
+    rp_instances: dict = {}  # rp_uuid → [instance_uuid] (바인딩된 VM)
+    for a in arqs:
+        rp, inst = a.get("device_rp_uuid"), a.get("instance_uuid")
+        if rp and inst:
+            rp_instances.setdefault(rp, []).append(inst)
+    try:
+        servers = _nova("GET", "/servers/detail?all_tenants=1").json().get("servers", [])
+        inst_name = {s["id"]: s.get("name") for s in servers}
+    except Exception:  # noqa: BLE001
+        inst_name = {}
+
+    rc_cache: dict = {}
+    tr_cache: dict = {}
+
+    def _rp_rc(rp: str) -> list[str]:
+        if rp not in rc_cache:
+            try:
+                rc_cache[rp] = list(_placement("GET", f"/resource_providers/{rp}/inventories").json().get("inventories", {}).keys())
+            except Exception:  # noqa: BLE001
+                rc_cache[rp] = []
+        return rc_cache[rp]
+
+    def _rp_traits(rp: str) -> list[str]:
+        if rp not in tr_cache:
+            try:
+                tr_cache[rp] = [t for t in _placement("GET", f"/resource_providers/{rp}/traits").json().get("traits", []) if t.startswith("CUSTOM_")]
+            except Exception:  # noqa: BLE001
+                tr_cache[rp] = []
+        return tr_cache[rp]
+
+    items = []
+    for dev in devices:
+        did, duuid = dev.get("id"), dev.get("uuid")
+        rps = device_rps.get(did) or device_rps.get(duuid) or []
+        rcs: list[str] = []
+        traits: list[str] = []
+        instances: list[dict] = []
+        for rp in rps:
+            rcs += _rp_rc(rp)
+            traits += _rp_traits(rp)
+            for inst in rp_instances.get(rp, []):
+                instances.append({"id": inst, "name": inst_name.get(inst)})
+        if instances:
+            usage = "used"
+        elif unknown or not rps:
+            usage = "unknown"
+        else:
+            usage = "available"
+        items.append({
+            "id": did, "uuid": duuid, "hostname": dev.get("hostname"),
+            "type": dev.get("type"), "model": dev.get("model"), "vendor": dev.get("vendor"),
+            "resourceClasses": sorted(set(rcs)), "traits": sorted(set(traits)),
+            "usage": usage, "instances": instances,
+        })
+
+    def _ok(it: dict) -> bool:
+        return ((not type or (it["type"] or "").lower() == type.lower())
+                and (not vendor or (it["vendor"] or "").lower() == vendor.lower())
+                and (not hostname or (it["hostname"] or "") == hostname))
+
+    items = [it for it in items if _ok(it)]
+    return {"items": items, "count": len(items)}
 
 
 class CreateFlavorBody(BaseModel):

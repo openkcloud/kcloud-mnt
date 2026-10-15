@@ -693,6 +693,30 @@ export function useDeleteDeviceProfile() {
     },
   });
 }
+
+// 가속기 장치 현황(Cyborg 5-2) — 물리 장치 인벤토리 + 사용 상태(조회 전용)
+export interface AcceleratorDevice {
+  id: number | string | null;
+  uuid: string;
+  hostname: string | null;
+  type: string | null;
+  model: string | null;
+  vendor: string | null;
+  resourceClasses: string[];
+  traits: string[];
+  usage: "used" | "available" | "unknown";
+  instances: { id: string; name: string | null }[];
+}
+export function useAcceleratorDevices() {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["iaas-accel-devices"],
+    queryFn: async (): Promise<AcceleratorDevice[]> =>
+      (await fetchJson<{ items: AcceleratorDevice[] }>(`${IAAS_BASE}/api/iaas/accelerator-devices`)).items,
+    staleTime: 10 * 1000, retry: 0,
+    refetchInterval: pollMs || false,
+  });
+}
 export interface CreateFlavorInput {
   name: string; vcpus: number; ramMb: number; diskGb: number; isPublic?: boolean; deviceProfile?: string;
 }

@@ -90,6 +90,7 @@ const SECTION_CLOUD: NavSection = {
         { label: "이미지", href: "/iaas/images", icon: Disc, roles: ["admin"] as Role[] },
         { label: "플레이버", href: "/iaas/flavors", icon: Cpu, roles: ["admin"] as Role[] },
         { label: "디바이스 프로파일", href: "/iaas/device-profiles", icon: Cpu, roles: ["admin"] as Role[] },
+        { label: "가속기 장치 현황", href: "/iaas/accelerator-devices", icon: Cpu },
       ],
     },
     {
