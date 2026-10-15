@@ -595,8 +595,9 @@ export interface ResourceRequest {
   status: RequestStatus;
   requestedBy: string;
   requestedByName: string;
+  requesterOrgName?: string | null; // 신청자 본인 조직
   requestedAt: string;
-  orgId?: string;
+  orgId?: string;   // 프로젝트 조직
   orgName?: string;
   projectId: string;
   projectName: string;

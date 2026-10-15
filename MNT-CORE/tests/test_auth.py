@@ -124,6 +124,13 @@ def test_티켓_목록_사용자는_본인것만(client):
     assert client.get("/api/core/tickets/req-990101-002/steps", headers=user).status_code == 200
 
 
+def test_목록의_신청자_조직은_신청자_본인_조직(client):
+    sql("""INSERT INTO tkt_request (id, project_id, requested_by, request_spec)
+           SELECT 'req-990101-003', :p, id, '{}'::jsonb FROM iam_user WHERE username = 'admin'""", p=PROJECT)
+    t = client.get("/api/core/tickets?requestedBy=admin", headers=bearer(make_token("admin"))).json()["items"][0]
+    assert (t["requesterOrgName"], t["orgName"]) == ("ETRI", "오케스트로")  # 신청자(admin) 조직 ≠ 프로젝트 조직
+
+
 def test_승인은_관리자만(client):
     r = client.patch("/api/core/tickets/req-x", json={"action": "approve", "processedBy": "admin"},
                      headers=bearer(make_token()))

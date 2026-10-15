@@ -146,6 +146,22 @@ def test_프로젝트_목록은_소속만(monkeypatch):
     assert [p["id"] for p in client_as(USER).get(P + "/projects").json()["items"]] == [MINE]
 
 
+def test_승인용_네트워크_보안그룹에서_Magnum_클러스터_자원_제외(monkeypatch):
+    mag = f"magnum-{MINE}-okc-test-clstr-1-7mdm"
+    fake = {
+        "/networks": {"networks": [{"id": "n1", "name": "my-network", "project_id": MINE},
+                                   {"id": "n2", "name": f"k8s-clusterapi-cluster-{mag}", "project_id": MINE}]},
+        "/subnets": {"subnets": []}, "/rbac-policies": {"rbac_policies": []},
+        "/security-groups": {"security_groups": [{"id": "s1", "name": "default"},
+                                                 {"id": "s2", "name": f"k8s-cluster-{mag}-secgroup-worker"},
+                                                 {"id": "s3", "name": f"k8s-cluster-{mag}-secgroup-controlplane"}]},
+    }
+    monkeypatch.setattr(networks, "_neutron_get", lambda path, params=None: fake[path])
+    user = client_as(USER)
+    assert [n["name"] for n in user.get(P + f"/projects/{MINE}/networks").json()["items"]] == ["my-network"]
+    assert [g["name"] for g in user.get(P + f"/projects/{MINE}/security-groups").json()["items"]] == ["default"]
+
+
 def test_플레이버가_가리키는_디바이스_프로파일이_없음(monkeypatch):
     fl = [{"id": "f1", "name": "rngd"}, {"id": "f2", "name": "2rngd"}, {"id": "f3", "name": "plain"}]
     specs = {"f1": {"accel:device_profile": "dp-rngd"}, "f2": {"accel:device_profile": "dp-2rngd"}, "f3": {}}

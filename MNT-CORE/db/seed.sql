@@ -71,7 +71,7 @@ FROM (VALUES
     ('sec.observability', 'obs.traces',         '분산 트레이스',        '/monitoring/traces',      'GitBranch',       30),
     ('sec.observability', 'obs.logs',           '로그·이벤트',          '/monitoring/logs',        'ScrollText',      40),
     ('sec.observability', 'obs.alerts',         '알람',                 '/monitoring/alerts',      'Bell',            50),
-    -- 클라우드 자원 (ticket 라벨은 역할별 오버라이드: 사용자=자원 요청 관리 / 관리자=신청 관리)
+    -- 클라우드 자원 (ticket 라벨은 역할별 오버라이드: 사용자=자원 요청 관리 / 관리자=자원 신청 관리)
     ('sec.cloud',         'cloud.ticket',       '자원 요청 관리',       '/ticket/requests',        'ClipboardList',   10),
     ('sec.cloud',         'cloud.iaas',         'IaaS (OpenStack)',     '/iaas',                   'Server',          20),
     ('sec.cloud',         'cloud.paas',         'PaaS (Kubernetes)',    '/paas',                   'Boxes',           30),
@@ -173,7 +173,7 @@ JOIN mnu_menu m ON m.code = v.code;
 
 -- ── 7) 역할-메뉴 매핑: 관리자 ────────────────────────────────────
 -- 섹션 순서: 개요 → 옵저버빌리티 → 클라우드 자원(전체) → 마켓 → AI 개발환경 → AI 인프라 → 운영
--- 관리자 = IaaS/PaaS 전체 자원. 사용자는 부분집합(라우터·이미지 제외). ticket 라벨 '신청 관리'.
+-- 관리자 = IaaS/PaaS 전체 자원. 사용자는 부분집합(라우터·이미지 제외). ticket 라벨 '자원 신청 관리'.
 INSERT INTO mnu_role_menu (role_id, menu_id, sort_order, label_override)
 SELECT r.id, m.id, v.ord, v.label_ov
 FROM (VALUES
@@ -190,7 +190,7 @@ FROM (VALUES
     ('admin', 'obs.traces',        NULL, NULL),
     ('admin', 'obs.logs',          NULL, NULL),
     ('admin', 'obs.alerts',        NULL, NULL),
-    ('admin', 'cloud.ticket',      NULL, '신청 관리'),
+    ('admin', 'cloud.ticket',      NULL, '자원 신청 관리'),
     ('admin', 'cloud.iaas',        NULL, NULL),
     ('admin', 'iaas.projects',     NULL, NULL),
     ('admin', 'iaas.instances',    NULL, NULL),
