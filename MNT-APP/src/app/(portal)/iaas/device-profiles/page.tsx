@@ -178,9 +178,11 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           {accs.map((a, ai) => (
-            <div key={ai} className="space-y-3 rounded-md border p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-muted-foreground">가속기 {ai + 1}</span>
+            <div key={ai} className="overflow-hidden rounded-lg border">
+              <div className="flex items-center justify-between border-b bg-muted/40 px-3 py-2">
+                <span className="flex items-center gap-1.5 text-xs font-semibold">
+                  <Cpu className="size-3.5 text-brand-indigo-600" /> 가속기 {ai + 1}
+                </span>
                 {accs.length > 1 && (
                   <Button variant="ghost" size="icon-sm" title="가속기 삭제" onClick={() => setAccs((as) => as.filter((_, i) => i !== ai))}>
                     <X className="size-3.5" />
@@ -188,57 +190,64 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
                 )}
               </div>
 
-              <div className="flex items-end gap-2">
-                <div className="space-y-1.5">
-                  <Label className="text-[11px]">리소스 클래스</Label>
-                  <Select value={a.cls} onValueChange={(v) => patchAcc(ai, (ar) => ({ ...ar, cls: v }))}>
-                    <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
-                    <SelectContent>{KNOWN_CLASSES.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}</SelectContent>
-                  </Select>
+              <div className="space-y-3 p-3">
+                <div className="grid grid-cols-[1fr_7rem] gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px]">리소스 클래스</Label>
+                    <Select value={a.cls} onValueChange={(v) => patchAcc(ai, (ar) => ({ ...ar, cls: v }))}>
+                      <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                      <SelectContent>{KNOWN_CLASSES.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px]">수량(장치 수)</Label>
+                    <Input type="number" min={1} className="w-full" value={a.quantity}
+                      onChange={(e) => patchAcc(ai, (ar) => ({ ...ar, quantity: e.target.value }))} />
+                  </div>
                 </div>
                 {a.cls === "__custom__" && (
                   <div className="space-y-1.5">
-                    <Label className="text-[11px]">클래스명</Label>
-                    <Input className="w-44 font-mono text-xs" placeholder="CUSTOM_XPU" value={a.custom}
+                    <Label className="text-[11px]">클래스명 직접 입력</Label>
+                    <Input className="w-full font-mono text-xs" placeholder="CUSTOM_XPU" value={a.custom}
                       onChange={(e) => patchAcc(ai, (ar) => ({ ...ar, custom: e.target.value }))} />
                   </div>
                 )}
-                <div className="space-y-1.5">
-                  <Label className="text-[11px]">수량(장치 수)</Label>
-                  <Input type="number" min={1} className="w-24" value={a.quantity}
-                    onChange={(e) => patchAcc(ai, (ar) => ({ ...ar, quantity: e.target.value }))} />
-                </div>
-              </div>
 
-              {/* 트레잇(고급) */}
-              <div className="space-y-2">
-                <Label className="text-[11px]">트레잇 (선택 · 특정 하드웨어 지정)</Label>
-                {a.traits.map((t, ti) => (
-                  <div key={ti} className="flex items-center gap-2">
-                    <Input className="flex-1 font-mono text-xs" placeholder="CUSTOM_FURIOSA_0001" value={t.name}
-                      onChange={(e) => patchAcc(ai, (ar) => ({ ...ar, traits: ar.traits.map((x, i) => i === ti ? { ...x, name: e.target.value } : x) }))} />
-                    <Select value={t.policy} onValueChange={(v) => patchAcc(ai, (ar) => ({ ...ar, traits: ar.traits.map((x, i) => i === ti ? { ...x, policy: v as TraitRow["policy"] } : x) }))}>
-                      <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="required">required</SelectItem>
-                        <SelectItem value="forbidden">forbidden</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Button variant="ghost" size="icon-sm" onClick={() => patchAcc(ai, (ar) => ({ ...ar, traits: ar.traits.filter((_, i) => i !== ti) }))}>
-                      <X className="size-3.5" />
+                {/* 트레잇(고급) */}
+                <div className="space-y-2 border-t pt-3">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[11px] text-muted-foreground">트레잇 (선택 · 특정 하드웨어 지정)</Label>
+                    <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => patchAcc(ai, (ar) => ({ ...ar, traits: [...ar.traits, { name: "", policy: "required" }] }))}>
+                      <Plus className="size-3.5" /> 트레잇 추가
                     </Button>
                   </div>
-                ))}
-                <Button variant="outline" size="sm" onClick={() => patchAcc(ai, (ar) => ({ ...ar, traits: [...ar.traits, { name: "", policy: "required" }] }))}>
-                  <Plus className="size-3.5" /> 트레잇 추가
-                </Button>
+                  {a.traits.map((t, ti) => (
+                    <div key={ti} className="grid grid-cols-[1fr_8rem_2rem] items-center gap-2">
+                      <Input className="w-full font-mono text-xs" placeholder="CUSTOM_FURIOSA_0001" value={t.name}
+                        onChange={(e) => patchAcc(ai, (ar) => ({ ...ar, traits: ar.traits.map((x, i) => i === ti ? { ...x, name: e.target.value } : x) }))} />
+                      <Select value={t.policy} onValueChange={(v) => patchAcc(ai, (ar) => ({ ...ar, traits: ar.traits.map((x, i) => i === ti ? { ...x, policy: v as TraitRow["policy"] } : x) }))}>
+                        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="required">required</SelectItem>
+                          <SelectItem value="forbidden">forbidden</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button variant="ghost" size="icon-sm" onClick={() => patchAcc(ai, (ar) => ({ ...ar, traits: ar.traits.filter((_, i) => i !== ti) }))}>
+                        <X className="size-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                  {a.traits.length === 0 && <p className="text-[11px] text-muted-foreground/70">지정한 트레잇이 없습니다.</p>}
+                </div>
               </div>
             </div>
           ))}
 
-          <Button variant="outline" size="sm" onClick={() => setAccs((as) => [...as, newAcc()])}>
-            <Plus className="size-3.5" /> 가속기 추가
-          </Button>
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={() => setAccs((as) => [...as, newAcc()])}>
+              <Plus className="size-3.5" /> 가속기 추가
+            </Button>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={create.isPending}>취소</Button>

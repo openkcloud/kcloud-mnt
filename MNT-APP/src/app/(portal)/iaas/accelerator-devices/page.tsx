@@ -1,13 +1,17 @@
 "use client";
 import * as React from "react";
-import { Cpu, Search, Server } from "lucide-react";
+import { Cpu, Search, Server, Monitor } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useAcceleratorDevices, type AcceleratorDevice } from "@/lib/iaas-api";
@@ -19,11 +23,26 @@ const USAGE: Record<AcceleratorDevice["usage"], { label: string; variant: "warni
   unknown: { label: "알 수 없음", variant: "secondary" },
 };
 
+// Cyborg 가 주는 vendor 값은 PCI 벤더 ID(4자리 16진수). 알려진 값은 제조사명 + 원본 ID 로 표기.
+const PCI_VENDORS: Record<string, string> = {
+  "1ed2": "Furiosa",
+  "1eff": "Rebellions",
+  "10de": "NVIDIA",
+  "1002": "AMD",
+  "8086": "Intel",
+};
+function vendorLabel(v: string | null): string {
+  if (!v) return "—";
+  const name = PCI_VENDORS[v.toLowerCase().replace(/^0x/, "")];
+  return name ? `${name} (${v})` : v;
+}
+
 export default function AcceleratorDevicesPage() {
   const { data, isLoading } = useAcceleratorDevices();
   const [q, setQ] = React.useState("");
   const [type, setType] = React.useState("all");
   const [vendor, setVendor] = React.useState("all");
+  const [vmView, setVmView] = React.useState<AcceleratorDevice | null>(null); // 연결 VM 목록 보기
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
 
@@ -61,7 +80,7 @@ export default function AcceleratorDevicesPage() {
             <SelectTrigger className="w-40"><SelectValue placeholder="벤더" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">전체 벤더</SelectItem>
-              {vendors.map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}
+              {vendors.map((v) => <SelectItem key={v} value={v}>{vendorLabel(v)}</SelectItem>)}
             </SelectContent>
           </Select>
           <span className="text-xs text-muted-foreground">총 {items.length}개 장치</span>
@@ -83,7 +102,7 @@ export default function AcceleratorDevicesPage() {
               <TableRow>
                 <TableHead>종류</TableHead>
                 <TableHead>모델</TableHead>
-                <TableHead>벤더</TableHead>
+                <TableHead>벤더 (PCI ID)</TableHead>
                 <TableHead>Resource Class</TableHead>
                 <TableHead>Trait</TableHead>
                 <TableHead>상태</TableHead>
@@ -100,7 +119,7 @@ export default function AcceleratorDevicesPage() {
                     </div>
                   </TableCell>
                   <TableCell className="text-sm">{d.model || "—"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{d.vendor || "—"}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{vendorLabel(d.vendor)}</TableCell>
                   <TableCell>
                     {d.resourceClasses.length
                       ? <div className="flex flex-wrap gap-1">{d.resourceClasses.map((rc) => <Badge key={rc} variant="outline" className="font-mono text-[10px]">{rc}</Badge>)}</div>
@@ -112,10 +131,12 @@ export default function AcceleratorDevicesPage() {
                       : <span className="text-muted-foreground">—</span>}
                   </TableCell>
                   <TableCell><Badge variant={USAGE[d.usage].variant} className="text-[10px]">{USAGE[d.usage].label}</Badge></TableCell>
-                  <TableCell className="text-xs">
+                  <TableCell>
                     {d.instances.length
-                      ? <div className="flex flex-col gap-0.5">{d.instances.map((i) => <span key={i.id} className="font-mono">{i.name || i.id}</span>)}</div>
-                      : <span className="text-muted-foreground">—</span>}
+                      ? <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setVmView(d)}>
+                          <Monitor className="size-3.5" /> {d.instances.length}개 보기
+                        </Button>
+                      : <span className="text-xs text-muted-foreground">—</span>}
                   </TableCell>
                 </TableRow>
               ))}
@@ -123,6 +144,35 @@ export default function AcceleratorDevicesPage() {
           </Table>
         </Card>
       ))}
+
+      <Dialog open={!!vmView} onOpenChange={(o) => !o && setVmView(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Monitor className="size-4 text-brand-indigo-600" /> 연결된 VM</DialogTitle>
+            <DialogDescription className="font-mono text-xs">
+              {vmView?.type} · {vmView?.model || vmView?.uuid} · {vmView?.hostname}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-y-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>이름</TableHead>
+                  <TableHead>인스턴스 ID</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(vmView?.instances ?? []).map((i) => (
+                  <TableRow key={i.id}>
+                    <TableCell className="text-sm">{i.name || "—"}</TableCell>
+                    <TableCell className="font-mono text-[11px] text-muted-foreground">{i.id}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
