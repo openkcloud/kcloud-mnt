@@ -16,6 +16,7 @@ import {
   Boxes,
   Disc3,
   Cpu,
+  BrainCircuit,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -37,6 +38,7 @@ import { api } from "@/lib/api";
 import { useFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
 import { useCreateTicket, useTicketProjects, useVmNameCheck } from "@/lib/ticket-api";
 import { useSshKeys } from "@/lib/sshkey-api";
+import { WorkspaceRequestForm } from "@/components/workspace-requests";
 
 const STEPS = [
   { key: "project", title: "프로젝트", icon: FolderKanban, desc: "OpenStack 프로젝트 선택" },
@@ -117,7 +119,7 @@ interface ResourceRequestWizardProps {
 }
 
 /**
- * 자원 신청 통합 모달 — '가상머신 신청'(기본) · '서비스 클러스터 신청' 탭.
+ * 자원 신청 통합 모달 — '가상머신 신청'(기본) · '서비스 클러스터 신청' · 'AI 워크스페이스 신청' 탭.
  * 탭 본문은 Radix Tabs/Dialog가 비활성·닫힘 시 언마운트하므로 입력값은 그때 초기화된다.
  */
 export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardProps) {
@@ -139,12 +141,15 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
         </DialogHeader>
 
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="vm">
               <Server className="size-3.5" /> 가상머신 신청
             </TabsTrigger>
             <TabsTrigger value="cluster">
               <Boxes className="size-3.5" /> 서비스 클러스터 신청
+            </TabsTrigger>
+            <TabsTrigger value="ai-workspace">
+              <BrainCircuit className="size-3.5" /> AI 워크스페이스 신청
             </TabsTrigger>
           </TabsList>
           <TabsContent value="vm">
@@ -152,6 +157,10 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
           </TabsContent>
           <TabsContent value="cluster">
             <ClusterRequestForm onDone={close} />
+          </TabsContent>
+          {/* AI 워크스페이스 = 프로젝트 1:1 (Kubeflow Profile) — 승인 후 관리자가 생성 시작 */}
+          <TabsContent value="ai-workspace">
+            <WorkspaceRequestForm onDone={close} />
           </TabsContent>
         </Tabs>
       </DialogContent>
@@ -288,7 +297,6 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
     // 이름·스펙·이미지 정보는 서버가 라이브 조회로 다시 확인해 저장한다 — 화면은 식별자만 보낸다
     createTicket.mutate(
       {
-        requestedBy: user?.username ?? "",
         projectId: proj.id,
         vmName,
         networkType: network,

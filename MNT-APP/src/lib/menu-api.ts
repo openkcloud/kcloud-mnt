@@ -38,24 +38,24 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { Role } from "@/lib/auth";
+import { authFetch, readError } from "@/lib/http";
 import type { NavItem, NavSection } from "@/lib/nav";
 
 const RAW = process.env.NEXT_PUBLIC_CORE_API;
 export const CORE_BASE = RAW === undefined ? "http://localhost:8000" : RAW;
 
-/** MNT-CORE 호출 공통 — 실패 시 서버 detail(문자열)을 메시지로, 연결 실패는 안내 문구로 던진다. 204 는 undefined. */
+/** MNT-CORE 호출 공통(토큰 포함) — 실패 시 서버 detail(문자열)을 메시지로 한 ApiError, 연결 실패는 안내 문구로 던진다.
+ *  204 는 undefined. */
 export async function coreFetch<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${CORE_BASE}/api/core${path}`, { headers: { "Content-Type": "application/json" }, ...init });
+    const headers = new Headers(init?.headers);
+    if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    res = await authFetch(`${CORE_BASE}/api/core${path}`, { ...init, headers });
   } catch {
     throw new Error("서버(MNT-CORE)에 연결할 수 없습니다");
   }
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try { const j = await res.json(); if (typeof j.detail === "string") msg = j.detail; } catch {}
-    throw new Error(msg);
-  }
+  if (!res.ok) throw await readError(res);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
@@ -122,12 +122,13 @@ function toSections(data: ApiMenusResponse): NavSection[] {
     .map((s) => ({ label: s.label, items: (s.children ?? []).map(toNavItem) }));
 }
 
-/** 역할별 메뉴 — 성공 시 DB 메뉴, 실패 시 undefined(호출측이 정적 nav 폴백). */
+/** 내 역할의 메뉴(역할은 서버가 토큰으로 판단) — 성공 시 DB 메뉴, 실패 시 undefined(호출측이 정적 nav 폴백).
+ *  role 은 캐시 구분·로그인 대기용. */
 export function useMenusFromCore(role: Role | undefined) {
   return useQuery({
     queryKey: ["core-menus", role],
     queryFn: async (): Promise<NavSection[]> => {
-      const res = await fetch(`${CORE_BASE}/api/core/menus?role=${role}`);
+      const res = await authFetch(`${CORE_BASE}/api/core/menus`);
       if (!res.ok) throw new Error(`menus API ${res.status}`);
       return toSections((await res.json()) as ApiMenusResponse);
     },

@@ -10,13 +10,16 @@ import re
 import time
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from ..auth import Caller, caller, ensure_project, project_member, require_admin, scoped
 from ..config import settings
 from ..openstack_client import get_conn, get_conn_for_project, os_request
 from .flavors import _cyborg
-from .volumes import CreateVolumeBody, _cinder_req, create_volume, delete_volume
+from .networks import network_info
+from .volumes import CreateVolumeBody, _cinder_req, create_volume, delete_volume, volume_project
 
 router = APIRouter(tags=["servers"])
 
@@ -87,18 +90,33 @@ def _to_server(s: dict, accel_map: dict) -> dict:
     }
 
 
+def server_project(server_id: str) -> str:
+    """가상서버가 속한 프로젝트 ID(권한 확인용)."""
+    try:
+        return _nova_req("GET", f"/servers/{server_id}").json()["server"].get("tenant_id") or ""
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"가상서버 조회 실패: {e}")
+
+
+async def server_access(server_id: str, c: Caller = Depends(caller)) -> Caller:
+    """경로의 가상서버가 소속 프로젝트 것인지(관리자는 통과) — 상세·콘솔·전원·연결/분리."""
+    if not c.is_admin:
+        ensure_project(c, await run_in_threadpool(server_project, server_id))
+    return c
+
+
 @router.get("/servers")
-def list_servers():
-    """전체 프로젝트 가상서버 목록(관리자)."""
+def list_servers(c: Caller = Depends(caller)):
+    """가상서버 목록 — 관리자는 전체 프로젝트, 사용자는 소속 프로젝트."""
     try:
         servers = _nova_req("GET", "/servers/detail?all_tenants=1").json()["servers"]
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"가상서버 조회 실패: {e}")
     amap = _accel_map()
-    return {"items": [_to_server(s, amap) for s in servers], "count": len(servers)}
+    return scoped(c, [_to_server(s, amap) for s in servers])
 
 
-@router.get("/projects/{project_id}/server-names")
+@router.get("/projects/{project_id}/server-names", dependencies=[Depends(project_member)])
 def list_server_names(project_id: str, name: str | None = None):
     """프로젝트의 가상서버 이름 목록(경량, Nova 1회) — 자원신청 VM 이름 중복 확인용.
     name 을 주면 Nova 이름 필터(정규식 ^이름$)로 그 이름의 서버만 조회 — VM 이 많아도 결과 0~1건, 목록 1000건 제한과 무관."""
@@ -161,7 +179,7 @@ def _discard_volume(volume_id: str) -> str:
         return f" — 부팅 볼륨({volume_id})이 남아 있음({e.detail})"
 
 
-@router.post("/projects/{project_id}/servers", status_code=202)
+@router.post("/projects/{project_id}/servers", status_code=202, dependencies=[Depends(require_admin)])
 def create_server(project_id: str, body: CreateServerBody):
     """VM 생성 — ① 부팅 볼륨(이미지→Cinder 볼륨, 이름 `{이름}-boot-vol`)을 만들어 사용 가능해질 때까지 기다린 뒤
     ② Nova 1회 요청으로 그 볼륨(인스턴스 삭제 시 볼륨 삭제)·네트워크(+고정 IP)·보안그룹·hostname·SSH 공개키(cloud-init)를
@@ -200,7 +218,7 @@ def _boot_server(project_id: str, body: CreateServerBody, volume_id: str) -> str
     return s["id"]
 
 
-@router.get("/servers/{server_id}/accelerator-requests")
+@router.get("/servers/{server_id}/accelerator-requests", dependencies=[Depends(server_access)])
 def list_server_arqs(server_id: str):
     """가상서버의 가속기 요청(Cyborg ARQ) — 상태: Initial → Bound(바인딩 완료) 등."""
     try:
@@ -211,7 +229,7 @@ def list_server_arqs(server_id: str):
                       for a in arqs]}
 
 
-@router.get("/servers/{server_id}")
+@router.get("/servers/{server_id}", dependencies=[Depends(server_access)])
 def get_server(server_id: str):
     return _server_detail(server_id, _accel_map())
 
@@ -240,8 +258,12 @@ class AttachInterfaceBody(BaseModel):
 
 
 @router.post("/servers/{server_id}/interfaces")
-def attach_interface(server_id: str, body: AttachInterfaceBody):
-    """VM에 네트워크 인터페이스(NIC) 연결 — 포털 네트워크 선택."""
+def attach_interface(server_id: str, body: AttachInterfaceBody, c: Caller = Depends(server_access)):
+    """VM에 네트워크 인터페이스(NIC) 연결 — 포털 네트워크 선택. 사용자는 소속 프로젝트 망 또는 공유·외부망만."""
+    if not c.is_admin:
+        project_id, kind = network_info(body.networkId)
+        if kind == "tenant":
+            ensure_project(c, project_id)
     try:
         _nova_req("POST", f"/servers/{server_id}/os-interface",
                   json={"interfaceAttachment": {"net_id": body.networkId}})
@@ -250,7 +272,7 @@ def attach_interface(server_id: str, body: AttachInterfaceBody):
     return get_server(server_id)
 
 
-@router.delete("/servers/{server_id}/interfaces/{port_id}")
+@router.delete("/servers/{server_id}/interfaces/{port_id}", dependencies=[Depends(server_access)])
 def detach_interface(server_id: str, port_id: str):
     """VM에서 네트워크 인터페이스 분리."""
     try:
@@ -264,7 +286,7 @@ class ResizeBody(BaseModel):
     flavorId: str
 
 
-@router.post("/servers/{server_id}/resize")
+@router.post("/servers/{server_id}/resize", dependencies=[Depends(require_admin)])
 def resize_server(server_id: str, body: ResizeBody):
     """스펙(플레이버) 변경 시작 → VM이 VERIFY_RESIZE 상태가 되면 확정/되돌리기 필요(재부팅 동반)."""
     try:
@@ -274,7 +296,7 @@ def resize_server(server_id: str, body: ResizeBody):
     return {"ok": True}
 
 
-@router.post("/servers/{server_id}/resize-confirm")
+@router.post("/servers/{server_id}/resize-confirm", dependencies=[Depends(require_admin)])
 def resize_confirm(server_id: str):
     try:
         _nova_req("POST", f"/servers/{server_id}/action", json={"confirmResize": None})
@@ -283,7 +305,7 @@ def resize_confirm(server_id: str):
     return {"ok": True}
 
 
-@router.post("/servers/{server_id}/resize-revert")
+@router.post("/servers/{server_id}/resize-revert", dependencies=[Depends(require_admin)])
 def resize_revert(server_id: str):
     try:
         _nova_req("POST", f"/servers/{server_id}/action", json={"revertResize": None})
@@ -292,7 +314,7 @@ def resize_revert(server_id: str):
     return {"ok": True}
 
 
-@router.get("/servers/{server_id}/diagnostics")
+@router.get("/servers/{server_id}/diagnostics", dependencies=[Depends(server_access)])
 def diagnostics(server_id: str):
     """하이퍼바이저 진단(현재 카운터) — CPU time·메모리·디스크/NIC 누적. 시계열 아님(프론트가 폴링해 속도 계산).
     실행 중(ACTIVE)이 아니면 Nova가 거부할 수 있음."""
@@ -323,7 +345,7 @@ class PowerBody(BaseModel):
     hard: bool = False  # reboot 시 HARD 여부
 
 
-@router.post("/servers/{server_id}/power")
+@router.post("/servers/{server_id}/power", dependencies=[Depends(server_access)])
 def power_action(server_id: str, body: PowerBody):
     """전원 제어 — start/stop/reboot."""
     act = body.action
@@ -342,7 +364,7 @@ def power_action(server_id: str, body: PowerBody):
     return {"ok": True}
 
 
-@router.get("/servers/{server_id}/console")
+@router.get("/servers/{server_id}/console", dependencies=[Depends(server_access)])
 def server_console(server_id: str, type: str = "novnc", protocol: str = "vnc"):
     """웹 콘솔 URL 발급 — Nova remote-consoles(noVNC). 호출마다 토큰 URL 새로 발급."""
     try:
@@ -363,7 +385,7 @@ def server_console(server_id: str, type: str = "novnc", protocol: str = "vnc"):
     return {"url": url, "type": rc.get("type"), "protocol": rc.get("protocol")}
 
 
-@router.delete("/servers/{server_id}", status_code=204)
+@router.delete("/servers/{server_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_server(server_id: str):
     try:
         _nova_req("DELETE", f"/servers/{server_id}")
@@ -377,8 +399,10 @@ class AttachVolumeBody(BaseModel):
 
 
 @router.post("/servers/{server_id}/volumes")
-def attach_volume(server_id: str, body: AttachVolumeBody):
-    """볼륨을 VM에 연결(attach)."""
+def attach_volume(server_id: str, body: AttachVolumeBody, c: Caller = Depends(server_access)):
+    """볼륨을 VM에 연결(attach). 사용자는 소속 프로젝트 볼륨만."""
+    if not c.is_admin:
+        ensure_project(c, volume_project(body.volumeId))
     try:
         _nova_req("POST", f"/servers/{server_id}/os-volume_attachments",
                   json={"volumeAttachment": {"volumeId": body.volumeId}})
@@ -387,7 +411,7 @@ def attach_volume(server_id: str, body: AttachVolumeBody):
     return get_server(server_id)
 
 
-@router.delete("/servers/{server_id}/volumes/{volume_id}")
+@router.delete("/servers/{server_id}/volumes/{volume_id}", dependencies=[Depends(server_access)])
 def detach_volume(server_id: str, volume_id: str):
     """볼륨을 VM에서 분리(detach)."""
     try:

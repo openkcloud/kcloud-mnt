@@ -9,21 +9,24 @@ export interface ProjectMember {
 }
 
 /** 포털 사용자 목록 — 멤버 추가 picker용. */
-export function usePortalUsers() {
+/** 포털 사용자 목록 — 관리자 전용 API(멤버 추가 후보). enabled 로 사용자 화면에서는 부르지 않는다. */
+export function usePortalUsers(enabled = true) {
   return useQuery({
     queryKey: ["core-users"],
+    enabled,
     queryFn: async (): Promise<PortalUser[]> => (await coreFetch<{ items: PortalUser[] }>(`/users`)).items,
     staleTime: 5 * 60 * 1000, retry: 0,
   });
 }
 
-/** 내가(username) 멤버인 프로젝트 ID 집합 — 사용자 화면 스코프(프로젝트·VM·네트워크·볼륨 필터). */
+/** 내가 멤버인 프로젝트 ID 집합 — 사용자 화면 스코프(프로젝트·VM·네트워크·볼륨 필터). 사용자는 서버가 토큰으로 정한다.
+ *  username 은 캐시 구분·호출 여부(관리자는 undefined → 호출 안 함)용. */
 export function useMyProjectIds(username: string | undefined) {
   return useQuery({
     queryKey: ["core-my-projects", username],
     enabled: !!username,
     queryFn: async (): Promise<Set<string>> =>
-      new Set((await coreFetch<{ projectIds: string[] }>(`/my-projects?username=${encodeURIComponent(username!)}`)).projectIds),
+      new Set((await coreFetch<{ projectIds: string[] }>(`/my-projects`)).projectIds),
     staleTime: 60 * 1000, retry: 0,
   });
 }

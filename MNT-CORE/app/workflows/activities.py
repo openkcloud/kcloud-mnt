@@ -44,6 +44,39 @@ def init_steps(ticket_id: str, attempt: int, has_accelerator: bool, has_fip: boo
         return plan
 
 
+@activity.defn(name="core.init_steps_ainb")
+def init_steps_ainb(ticket_id: str, attempt: int) -> list[dict]:
+    """AI 워크스페이스 회차의 단계·상세 단계를 waiting 으로 등록하고 진행 순서(plan)를 돌려준다 — 이미 등록돼 있으면 plan 만.
+    단계·상세 단계와 순서는 공통코드(TKT_PROVISION_STEP_AINB / TKT_PROVISION_SUBSTEP_AINB) 기준."""
+    with SessionLocal() as db:
+        steps = db.execute(text("""SELECT code FROM cmn_code
+                                    WHERE group_code = 'TKT_PROVISION_STEP_AINB' AND is_active
+                                    ORDER BY sort_order""")).scalars().all()
+        subs = db.execute(text("""SELECT upper_code, code FROM cmn_code
+                                   WHERE group_code = 'TKT_PROVISION_SUBSTEP_AINB' AND is_active
+                                   ORDER BY sort_order""")).all()
+        registered = db.execute(
+            text("SELECT 1 FROM tkt_provision_step WHERE request_id = :id AND attempt = :a LIMIT 1"),
+            {"id": ticket_id, "a": attempt},
+        ).first() is not None
+        plan = []
+        for seq, step in enumerate(steps, 1):
+            codes = [c for up, c in subs if up == step]
+            if not registered:
+                step_id = db.execute(
+                    text("""INSERT INTO tkt_provision_step (request_id, attempt, seq, step_code, step_group_code, status)
+                            VALUES (:id, :a, :seq, :code, 'TKT_PROVISION_STEP_AINB', 'waiting') RETURNING id"""),
+                    {"id": ticket_id, "a": attempt, "seq": seq, "code": step},
+                ).scalar()
+                for i, code in enumerate(codes, 1):
+                    db.execute(text("""INSERT INTO tkt_provision_substep (step_id, seq, substep_code, substep_group_code)
+                                       VALUES (:s, :i, :c, 'TKT_PROVISION_SUBSTEP_AINB')"""),
+                               {"s": step_id, "i": i, "c": code})
+            plan += [{"step": step, "sub": code} for code in codes]
+        db.commit()
+        return plan
+
+
 def _sets(change: dict, prefix: str, params: dict) -> list[str]:
     """변경 하나 → SET 절. 진행 중이 되면 시작 시각, 완료·실패면 종료 시각(이미 있으면 유지 — 재시도해도 같은 결과)."""
     sets = []
@@ -94,4 +127,4 @@ def finish(ticket_id: str, status: str, result: dict | None, error: str | None) 
         db.commit()
 
 
-ALL = [init_steps, update_steps, finish]
+ALL = [init_steps, init_steps_ainb, update_steps, finish]
