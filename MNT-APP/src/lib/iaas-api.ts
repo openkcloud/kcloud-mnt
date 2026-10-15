@@ -663,11 +663,12 @@ export function useDeviceProfiles() {
     staleTime: 5 * 60 * 1000, retry: 0,
   });
 }
-// 디바이스 프로파일 생성/삭제 (관리자) — Cyborg 는 불변이라 수정은 없다
+// 디바이스 프로파일 생성/삭제 (관리자) — Cyborg 는 불변이라 수정은 없다.
+// 가속기 1종류 = 장치 조건. 수량은 Cyborg group 복제 수(각 group 개수는 1 고정).
 export interface CreateDeviceProfileInput {
   name: string;
   description?: string;
-  groups: { resources: { resourceClass: string; count: number }[]; traits: { name: string; policy: "required" | "forbidden" }[] }[];
+  accelerators: { resourceClass: string; quantity: number; traits: { name: string; policy: "required" | "forbidden" }[] }[];
 }
 export function useCreateDeviceProfile() {
   const qc = useQueryClient();
@@ -683,7 +684,9 @@ export function useCreateDeviceProfile() {
 export function useDeleteDeviceProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (uuid: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/device-profiles/${uuid}`),
+    // force=true 면 참조 플레이버가 있어도 강제 삭제(기본은 백엔드가 409 로 막음)
+    mutationFn: ({ uuid, force }: { uuid: string; force?: boolean }) =>
+      sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/device-profiles/${uuid}${force ? "?force=true" : ""}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["iaas-device-profiles"] });
       qc.invalidateQueries({ queryKey: ["iaas-flavors"] });

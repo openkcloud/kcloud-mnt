@@ -44,7 +44,8 @@ export default function DeviceProfilesPage() {
       description: `${d.name} 을(를) 삭제할까요?${warn}`,
     }))) return;
     if (!d.uuid) return toast.error("uuid 가 없어 삭제할 수 없습니다");
-    del.mutate(d.uuid, {
+    // 참조 플레이버가 있어도 사용자가 경고를 확인했으면 force 로 진행(백엔드는 기본 409 로 막음)
+    del.mutate({ uuid: d.uuid, force: linked > 0 }, {
       onSuccess: () => toast.success(`디바이스 프로파일 ${d.name} 삭제됨`),
       onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }),
     });
@@ -116,43 +117,40 @@ export default function DeviceProfilesPage() {
   );
 }
 
-// ── 생성 다이얼로그 — 이름·설명 + 그룹[](리소스·트레잇) ──
-type ResRow = { cls: string; custom: string; count: string };
+// ── 생성 다이얼로그 — 이름·설명 + 가속기[](클래스·수량·트레잇) ──
+// Cyborg 규칙: group 1개 = 장치 1개(개수 1 고정). 수량은 백엔드에서 group 복제로 처리하므로
+// 화면은 "가속기 종류 + 수량 + 트레잇"으로 받는다.
 type TraitRow = { name: string; policy: "required" | "forbidden" };
-type GroupRow = { resources: ResRow[]; traits: TraitRow[] };
+type AccRow = { cls: string; custom: string; quantity: string; traits: TraitRow[] };
 
 const KNOWN_CLASSES = [
   { value: "PGPU", label: "PGPU (GPU)" },
   { value: "CUSTOM_AICHIP", label: "CUSTOM_AICHIP (NPU)" },
   { value: "__custom__", label: "직접 입력…" },
 ];
-const newRes = (): ResRow => ({ cls: "PGPU", custom: "", count: "1" });
-const newGroup = (): GroupRow => ({ resources: [newRes()], traits: [] });
+const newAcc = (): AccRow => ({ cls: "PGPU", custom: "", quantity: "1", traits: [] });
 
 function CreateDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateDeviceProfile();
   const [name, setName] = React.useState("");
   const [desc, setDesc] = React.useState("");
-  const [groups, setGroups] = React.useState<GroupRow[]>(() => [newGroup()]);
+  const [accs, setAccs] = React.useState<AccRow[]>(() => [newAcc()]);
 
-  const patchGroup = (gi: number, fn: (g: GroupRow) => GroupRow) =>
-    setGroups((gs) => gs.map((g, i) => (i === gi ? fn(g) : g)));
+  const patchAcc = (ai: number, fn: (a: AccRow) => AccRow) =>
+    setAccs((as) => as.map((a, i) => (i === ai ? fn(a) : a)));
 
   function submit() {
     if (!name.trim()) return toast.error("이름을 입력하세요");
-    const payloadGroups: CreateDeviceProfileInput["groups"] = [];
-    for (const g of groups) {
-      const resources = g.resources
-        .map((r) => ({ resourceClass: (r.cls === "__custom__" ? r.custom : r.cls).trim(), count: Number(r.count) }))
-        .filter((r) => r.resourceClass && r.count >= 1);
-      if (!resources.length) return toast.error("각 그룹에 리소스(클래스·개수)를 하나 이상 입력하세요");
-      const traits = g.traits
-        .map((t) => ({ name: t.name.trim(), policy: t.policy }))
-        .filter((t) => t.name);
-      payloadGroups.push({ resources, traits });
+    const accelerators: CreateDeviceProfileInput["accelerators"] = [];
+    for (const a of accs) {
+      const resourceClass = (a.cls === "__custom__" ? a.custom : a.cls).trim();
+      const quantity = Number(a.quantity);
+      if (!resourceClass || quantity < 1) return toast.error("가속기 클래스와 1 이상의 수량이 필요합니다");
+      const traits = a.traits.map((t) => ({ name: t.name.trim(), policy: t.policy })).filter((t) => t.name);
+      accelerators.push({ resourceClass, quantity, traits });
     }
     create.mutate(
-      { name: name.trim(), description: desc.trim() || undefined, groups: payloadGroups },
+      { name: name.trim(), description: desc.trim() || undefined, accelerators },
       {
         onSuccess: (d) => { toast.success(`디바이스 프로파일 ${d.name} 생성됨`); onClose(); },
         onError: (e) => toast.error("생성 실패", { description: String((e as Error).message) }),
@@ -165,86 +163,81 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
       <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>디바이스 프로파일 생성</DialogTitle>
-          <DialogDescription>Cyborg device-profile. 그룹마다 가속기 리소스 클래스·개수와(선택) 트레잇을 지정합니다.</DialogDescription>
+          <DialogDescription>Cyborg device-profile. 가속기 종류와 수량(장치 수)·(선택) 트레잇을 지정합니다. 장치 1개당 그룹 1개로 만들어집니다.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>이름</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="gpu-1x" />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="dp-rngd" />
             </div>
             <div className="space-y-1.5">
               <Label>설명 (선택)</Label>
-              <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="NVIDIA A100 1장" />
+              <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Furiosa RNGD 1장" />
             </div>
           </div>
 
-          {groups.map((g, gi) => (
-            <div key={gi} className="space-y-3 rounded-md border p-3">
+          {accs.map((a, ai) => (
+            <div key={ai} className="space-y-3 rounded-md border p-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-muted-foreground">그룹 {gi + 1}</span>
-                {groups.length > 1 && (
-                  <Button variant="ghost" size="icon-sm" title="그룹 삭제" onClick={() => setGroups((gs) => gs.filter((_, i) => i !== gi))}>
+                <span className="text-xs font-semibold text-muted-foreground">가속기 {ai + 1}</span>
+                {accs.length > 1 && (
+                  <Button variant="ghost" size="icon-sm" title="가속기 삭제" onClick={() => setAccs((as) => as.filter((_, i) => i !== ai))}>
                     <X className="size-3.5" />
                   </Button>
                 )}
               </div>
 
-              {/* 리소스 */}
-              <div className="space-y-2">
-                <Label className="text-[11px]">리소스 (가속기 클래스 · 개수)</Label>
-                {g.resources.map((r, ri) => (
-                  <div key={ri} className="flex items-center gap-2">
-                    <Select value={r.cls} onValueChange={(v) => patchGroup(gi, (gr) => ({ ...gr, resources: gr.resources.map((x, i) => i === ri ? { ...x, cls: v } : x) }))}>
-                      <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
-                      <SelectContent>{KNOWN_CLASSES.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}</SelectContent>
-                    </Select>
-                    {r.cls === "__custom__" && (
-                      <Input className="w-44 font-mono text-xs" placeholder="CUSTOM_XPU" value={r.custom}
-                        onChange={(e) => patchGroup(gi, (gr) => ({ ...gr, resources: gr.resources.map((x, i) => i === ri ? { ...x, custom: e.target.value } : x) }))} />
-                    )}
-                    <Input type="number" min={1} className="w-20" value={r.count}
-                      onChange={(e) => patchGroup(gi, (gr) => ({ ...gr, resources: gr.resources.map((x, i) => i === ri ? { ...x, count: e.target.value } : x) }))} />
-                    {g.resources.length > 1 && (
-                      <Button variant="ghost" size="icon-sm" onClick={() => patchGroup(gi, (gr) => ({ ...gr, resources: gr.resources.filter((_, i) => i !== ri) }))}>
-                        <X className="size-3.5" />
-                      </Button>
-                    )}
+              <div className="flex items-end gap-2">
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">리소스 클래스</Label>
+                  <Select value={a.cls} onValueChange={(v) => patchAcc(ai, (ar) => ({ ...ar, cls: v }))}>
+                    <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
+                    <SelectContent>{KNOWN_CLASSES.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                {a.cls === "__custom__" && (
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px]">클래스명</Label>
+                    <Input className="w-44 font-mono text-xs" placeholder="CUSTOM_XPU" value={a.custom}
+                      onChange={(e) => patchAcc(ai, (ar) => ({ ...ar, custom: e.target.value }))} />
                   </div>
-                ))}
-                <Button variant="outline" size="sm" onClick={() => patchGroup(gi, (gr) => ({ ...gr, resources: [...gr.resources, newRes()] }))}>
-                  <Plus className="size-3.5" /> 리소스 추가
-                </Button>
+                )}
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">수량(장치 수)</Label>
+                  <Input type="number" min={1} className="w-24" value={a.quantity}
+                    onChange={(e) => patchAcc(ai, (ar) => ({ ...ar, quantity: e.target.value }))} />
+                </div>
               </div>
 
               {/* 트레잇(고급) */}
               <div className="space-y-2">
                 <Label className="text-[11px]">트레잇 (선택 · 특정 하드웨어 지정)</Label>
-                {g.traits.map((t, ti) => (
+                {a.traits.map((t, ti) => (
                   <div key={ti} className="flex items-center gap-2">
-                    <Input className="flex-1 font-mono text-xs" placeholder="CUSTOM_AICHIP_FURIOSA" value={t.name}
-                      onChange={(e) => patchGroup(gi, (gr) => ({ ...gr, traits: gr.traits.map((x, i) => i === ti ? { ...x, name: e.target.value } : x) }))} />
-                    <Select value={t.policy} onValueChange={(v) => patchGroup(gi, (gr) => ({ ...gr, traits: gr.traits.map((x, i) => i === ti ? { ...x, policy: v as TraitRow["policy"] } : x) }))}>
+                    <Input className="flex-1 font-mono text-xs" placeholder="CUSTOM_FURIOSA_0001" value={t.name}
+                      onChange={(e) => patchAcc(ai, (ar) => ({ ...ar, traits: ar.traits.map((x, i) => i === ti ? { ...x, name: e.target.value } : x) }))} />
+                    <Select value={t.policy} onValueChange={(v) => patchAcc(ai, (ar) => ({ ...ar, traits: ar.traits.map((x, i) => i === ti ? { ...x, policy: v as TraitRow["policy"] } : x) }))}>
                       <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="required">required</SelectItem>
                         <SelectItem value="forbidden">forbidden</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Button variant="ghost" size="icon-sm" onClick={() => patchGroup(gi, (gr) => ({ ...gr, traits: gr.traits.filter((_, i) => i !== ti) }))}>
+                    <Button variant="ghost" size="icon-sm" onClick={() => patchAcc(ai, (ar) => ({ ...ar, traits: ar.traits.filter((_, i) => i !== ti) }))}>
                       <X className="size-3.5" />
                     </Button>
                   </div>
                 ))}
-                <Button variant="outline" size="sm" onClick={() => patchGroup(gi, (gr) => ({ ...gr, traits: [...gr.traits, { name: "", policy: "required" }] }))}>
+                <Button variant="outline" size="sm" onClick={() => patchAcc(ai, (ar) => ({ ...ar, traits: [...ar.traits, { name: "", policy: "required" }] }))}>
                   <Plus className="size-3.5" /> 트레잇 추가
                 </Button>
               </div>
             </div>
           ))}
 
-          <Button variant="outline" size="sm" onClick={() => setGroups((gs) => [...gs, newGroup()])}>
-            <Plus className="size-3.5" /> 그룹 추가
+          <Button variant="outline" size="sm" onClick={() => setAccs((as) => [...as, newAcc()])}>
+            <Plus className="size-3.5" /> 가속기 추가
           </Button>
         </div>
         <DialogFooter>

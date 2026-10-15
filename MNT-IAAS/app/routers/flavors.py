@@ -3,7 +3,7 @@
 플레이버는 '전역(admin)' 자원 — 프로젝트 소속 아님(프로젝트 컬럼 없음).
 환경독립: override=template.format(service=...)+버전, catalog=service_type.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..auth import require_admin
@@ -13,17 +13,17 @@ from ..openstack_client import get_conn
 router = APIRouter(tags=["flavors"])
 
 
-def _os_req(service: str, stype: str, ver: str, method: str, path: str, *, json=None):
+def _os_req(service: str, stype: str, ver: str, method: str, path: str, *, json=None, headers=None):
     conn = get_conn()
     if settings.os_endpoint_mode == "catalog":
         r = conn.session.request(
-            f"{ver}{path}", method, json=json, raise_exc=False,
+            f"{ver}{path}", method, json=json, headers=headers, raise_exc=False,
             endpoint_filter={"service_type": stype, "interface": settings.os_interface}, timeout=20,
             connect_retries=1 if method == "GET" else 0,  # 조회만 재시도(간헐 연결 끊김 대비)
         )
     else:  # override
         base = settings.os_endpoint_template.format(service=service) + ver
-        r = conn.session.request(f"{base}{path}", method, json=json, raise_exc=False, timeout=20,
+        r = conn.session.request(f"{base}{path}", method, json=json, headers=headers, raise_exc=False, timeout=20,
                                  connect_retries=1 if method == "GET" else 0)
     if not r.ok:
         raise RuntimeError((r.text or f"HTTP {r.status_code}")[:300])
@@ -34,8 +34,10 @@ def _nova(method: str, path: str, *, json=None):
     return _os_req("nova", "compute", "/v2.1", method, path, json=json)
 
 
+# Cyborg microversion — 값은 '숫자만'(접두어 금지). 이름 조회·일부 기능에 2.2+ 필요(미충족 시 406).
 def _cyborg(method: str, path: str, *, json=None):
-    return _os_req("cyborg", "accelerator", "/v2", method, path, json=json)
+    return _os_req("cyborg", "accelerator", "/v2", method, path, json=json,
+                   headers={"OpenStack-API-Version": "2.2"})
 
 
 # device-profile group 의 resource class → 화면 가속기 종류
@@ -107,54 +109,50 @@ def list_device_profiles():
     } for d in dps]}
 
 
-class DpResource(BaseModel):
-    resourceClass: str          # 예: PGPU(GPU), CUSTOM_AICHIP(NPU)
-    count: int
-
-
 class DpTrait(BaseModel):
-    name: str                   # 예: CUSTOM_AICHIP_FURIOSA
+    name: str                   # 예: CUSTOM_FURIOSA_0001
     policy: str = "required"    # required | forbidden
 
 
-class DpGroup(BaseModel):
-    resources: list[DpResource]
+# 가속기 사양 — Cyborg 규칙상 group 1개 = 장치 1개(개수 고정 1)라, 수량은 group 복제 수로 표현한다.
+class DpAccelerator(BaseModel):
+    resourceClass: str          # 예: PGPU(GPU), CUSTOM_AICHIP(NPU)
+    quantity: int = 1           # 장치 수 — 이 수만큼 count=1 group 을 만든다
     traits: list[DpTrait] = []
 
 
 class CreateDeviceProfileBody(BaseModel):
     name: str
     description: str | None = None
-    groups: list[DpGroup]
+    accelerators: list[DpAccelerator]
 
 
 @router.post("/device-profiles", status_code=201, dependencies=[Depends(require_admin)])
 def create_device_profile(body: CreateDeviceProfileBody):
     if not body.name.strip():
         raise HTTPException(400, "프로파일 이름이 필요합니다")
-    if not body.groups:
-        raise HTTPException(400, "그룹이 하나 이상 필요합니다")
+    if not body.accelerators:
+        raise HTTPException(400, "가속기를 하나 이상 지정해야 합니다")
     groups: list[dict] = []
-    for g in body.groups:
-        if not g.resources:
-            raise HTTPException(400, "그룹마다 리소스가 하나 이상 필요합니다")
-        grp: dict[str, str] = {}
-        for r in g.resources:
-            if not r.resourceClass.strip() or r.count < 1:
-                raise HTTPException(400, "리소스 클래스와 1 이상의 개수가 필요합니다")
-            grp[f"resources:{r.resourceClass.strip()}"] = str(r.count)
-        for t in g.traits:
+    for a in body.accelerators:
+        rc = a.resourceClass.strip()
+        if not rc or a.quantity < 1:
+            raise HTTPException(400, "리소스 클래스와 1 이상의 수량이 필요합니다")
+        traits: dict[str, str] = {}
+        for t in a.traits:
             if not t.name.strip():
                 continue
             if t.policy not in ("required", "forbidden"):
                 raise HTTPException(400, "트레잇 정책은 required 또는 forbidden 이어야 합니다")
-            grp[f"trait:{t.name.strip()}"] = t.policy
-        groups.append(grp)
+            traits[f"trait:{t.name.strip()}"] = t.policy
+        # group 1개 = 장치 1개(재고 1) → 수량만큼 동일 group 복제, 각 개수는 반드시 "1"
+        for _ in range(a.quantity):
+            groups.append({f"resources:{rc}": "1", **traits})
     payload = {"name": body.name.strip(), "groups": groups}
     if body.description:
         payload["description"] = body.description.strip()
     try:
-        # Cyborg POST /device_profiles 는 리스트 바디를 받는다
+        # Cyborg POST /device_profiles 는 '원소 1개 배열' 바디를 받는다(객체 직접 전송 시 400)
         r = _cyborg("POST", "/device_profiles", json=[payload]).json()
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"device-profile 생성 실패: {e}")
@@ -163,8 +161,28 @@ def create_device_profile(body: CreateDeviceProfileBody):
     return {"name": body.name.strip(), "uuid": (first or {}).get("uuid") if isinstance(first, dict) else None}
 
 
+def _flavors_using(dp_name: str) -> list[str]:
+    """accel:device_profile 로 이 프로파일을 참조하는 플레이버 이름 목록."""
+    out: list[str] = []
+    for f in _nova("GET", "/flavors/detail").json()["flavors"]:
+        specs = _nova("GET", f"/flavors/{f['id']}/os-extra_specs").json().get("extra_specs", {})
+        if specs.get("accel:device_profile") == dp_name:
+            out.append(f.get("name") or f["id"])
+    return out
+
+
 @router.delete("/device-profiles/{uuid}", status_code=204, dependencies=[Depends(require_admin)])
-def delete_device_profile(uuid: str):
+def delete_device_profile(uuid: str, force: bool = Query(False)):
+    # 참조 무결성: Cyborg 는 참조 중인 프로파일도 즉시 지운다 → 삭제 전 flavor 참조를 선검증(가이드 권장).
+    if not force:
+        try:
+            dps = _cyborg("GET", "/device_profiles").json().get("device_profiles", [])
+            name = next((d["name"] for d in dps if d.get("uuid") == uuid), None)
+            used = _flavors_using(name) if name else []
+        except Exception:  # noqa: BLE001
+            used = []  # 조회 실패 시 삭제를 막지는 않는다(아래에서 시도)
+        if used:
+            raise HTTPException(409, f"이 프로파일을 참조하는 플레이버가 있습니다: {', '.join(used)}. 먼저 연결을 해제하거나 강제 삭제하세요.")
     try:
         _cyborg("DELETE", f"/device_profiles/{uuid}")
     except Exception as e:  # noqa: BLE001
