@@ -130,6 +130,41 @@ def test_승인은_관리자만(client):
     assert r.status_code == 403 and r.json()["detail"] == "승인·반려는 관리자만 할 수 있습니다"
 
 
+def test_관리자는_멤버가_아니어도_모든_조직_프로젝트에_신청(client, monkeypatch):
+    monkeypatch.setattr(tickets, "_iaas", lambda path, token: {"items": [{"id": PROJECT, "name": "okc_test_prj"}]})
+    user, admin = bearer(make_token()), bearer(make_token("admin"))
+    assert client.get("/api/core/tickets/projects", headers=user).json()["items"] == []
+    assert [p["id"] for p in client.get("/api/core/tickets/projects", headers=admin).json()["items"]] == [PROJECT]
+    # 멤버 확인을 통과하면 다음 확인(희망 네트워크)에서 400
+    body = {"projectId": PROJECT, "vmName": "vm-a", "flavorId": "f", "imageId": "i", "networkType": "bad"}
+    assert client.post("/api/core/tickets", json=body, headers=user).status_code == 403
+    assert client.post("/api/core/tickets", json=body, headers=admin).status_code == 400
+    # 조직이 할당되지 않은 프로젝트는 관리자도 불가
+    assert client.post("/api/core/tickets", json={**body, "projectId": "no-org"}, headers=admin).status_code == 403
+
+
+def test_AI_워크스페이스_신청자는_토큰_사용자(client, monkeypatch):
+    monkeypatch.setattr(tickets, "_iaas", lambda path, token: {"items": [{"id": PROJECT, "name": "okc_test_prj"}]})
+    monkeypatch.setattr(tickets, "_ainb", lambda path: {"available": True})
+    user, admin = bearer(make_token()), bearer(make_token("admin"))
+    body = {"requestedBy": "admin", "projectId": PROJECT}  # requestedBy 는 무시된다
+    assert client.post("/api/core/tickets/ai-workspace", json=body, headers=user).status_code == 403  # 멤버 아님
+    r = client.post("/api/core/tickets/ai-workspace", json={**body, "requestedBy": "ek.lee"}, headers=admin)
+    try:
+        assert r.status_code == 201 and r.json()["requestedBy"] == "admin"  # 관리자는 멤버가 아니어도 신청
+    finally:
+        sql("DELETE FROM tkt_request WHERE type = 'ai-workspace' AND project_id = :p", p=PROJECT)
+
+
+def test_디바이스_프로파일이_없는_스펙은_신청_불가(client, monkeypatch):
+    flavor = {"id": "f", "name": "m1.large.2rngd", "isPublic": True, "accelerator": "dp-2rngd", "deviceProfileMissing": True}
+    fake = {"/projects": {"items": [{"id": PROJECT, "name": "okc_test_prj"}]}, "/flavors": {"items": [flavor]}}
+    monkeypatch.setattr(tickets, "_iaas", lambda path, token: fake[path])
+    body = {"projectId": PROJECT, "vmName": "vm-a", "flavorId": "f", "imageId": "i", "networkType": "internal"}
+    r = client.post("/api/core/tickets", json=body, headers=bearer(make_token("admin")))
+    assert r.status_code == 400 and r.json()["detail"] == "연결된 디바이스 프로파일이 존재하지 않습니다"
+
+
 def test_IAAS_호출에_사용자_토큰_전달(client, monkeypatch):
     add_member("ek.lee")
     seen = []

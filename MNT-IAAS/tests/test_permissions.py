@@ -2,10 +2,10 @@
 가상서버 상세의 사용자 기능(콘솔·전원·네트워크/볼륨 연결·분리)만, 나머지 쓰기와 라우터는 관리자만."""
 import httpx
 import pytest
-from conftest import ADMIN, MINE, OTHER, USER, client_as
+from conftest import ADMIN, MINE, OTHER, USER, _blocked, client_as
 
 from app import auth
-from app.routers import images, networks, projects, servers
+from app.routers import flavors, images, networks, projects, servers
 
 A, D = "허용", "거부"
 P = "/api/iaas"
@@ -144,6 +144,27 @@ def test_이미지는_공개와_소속_프로젝트_것(monkeypatch):
 def test_프로젝트_목록은_소속만(monkeypatch):
     monkeypatch.setattr(projects, "_fetch_projects", lambda: [{"id": MINE, "name": "m"}, {"id": OTHER, "name": "o"}])
     assert [p["id"] for p in client_as(USER).get(P + "/projects").json()["items"]] == [MINE]
+
+
+def test_플레이버가_가리키는_디바이스_프로파일이_없음(monkeypatch):
+    fl = [{"id": "f1", "name": "rngd"}, {"id": "f2", "name": "2rngd"}, {"id": "f3", "name": "plain"}]
+    specs = {"f1": {"accel:device_profile": "dp-rngd"}, "f2": {"accel:device_profile": "dp-2rngd"}, "f3": {}}
+
+    def nova(method, path, **k):
+        data = {"flavors": fl} if path == "/flavors/detail" else {"extra_specs": specs[path.split("/")[2]]}
+        return type("R", (), {"json": lambda self: data})()
+
+    def cyborg(method, path):
+        data = {"device_profiles": [{"name": "dp-rngd", "groups": [{"resources:CUSTOM_AICHIP": "1"}]}]}
+        return type("R", (), {"json": lambda self: data})()
+
+    monkeypatch.setattr(flavors, "_nova", nova)
+    monkeypatch.setattr(flavors, "_cyborg", cyborg)
+    items = client_as(USER).get(P + "/flavors").json()["items"]
+    assert {f["name"]: f["deviceProfileMissing"] for f in items} == {"rngd": False, "2rngd": True, "plain": False}
+
+    monkeypatch.setattr(flavors, "_cyborg", _blocked)  # Cyborg 조회 실패면 없다고 단정하지 않는다
+    assert not any(f["deviceProfileMissing"] for f in client_as(USER).get(P + "/flavors").json()["items"])
 
 
 # ── 사용자 확인(MNT-CORE /auth/me) ───────────────────────────────

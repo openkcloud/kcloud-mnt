@@ -635,6 +635,7 @@ export function useDeleteImage() {
 export interface FlavorSummary {
   id: string; name: string; vcpus: number; ramMb: number; diskGb: number; isPublic: boolean; accelerator: string | null;
   accelerators?: { kind: string; count: number }[]; // device-profile 의 가속기 종류(GPU/NPU)·개수
+  deviceProfileMissing?: boolean; // 가리키는 device-profile 이 Cyborg 에 없음 — 신청 불가
 }
 export interface DeviceProfile { name: string; uuid: string }
 

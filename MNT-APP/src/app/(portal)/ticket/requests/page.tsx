@@ -912,6 +912,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
 
 // ─────────── 관리자 뷰 ───────────
 function AdminView() {
+  const [wizardOpen, setWizardOpen] = React.useState(false); // 관리자도 신청(조직이 할당된 모든 프로젝트)
   const [statusFilter, setStatusFilter] = React.useState("all");
   const [typeFilter, setTypeFilter] = React.useState("all");
   const [orgFilter, setOrgFilter] = React.useState("all");
@@ -1078,7 +1079,12 @@ function AdminView() {
               <SelectItem value="ai-workspace">AI 워크스페이스</SelectItem>
             </SelectContent>
           </Select>
-          <span className="ml-auto text-xs text-muted-foreground">{items.length}건</span>
+          <span className="text-xs text-muted-foreground">{items.length}건</span>
+          <div className="ml-auto">
+            <Button size="sm" onClick={() => setWizardOpen(true)}>
+              <Plus className="size-4" /> 자원 신청
+            </Button>
+          </div>
         </div>
       </Card>
 
@@ -1270,6 +1276,8 @@ function AdminView() {
           )}
         </DialogContent>
       </Dialog>
+
+      <ResourceRequestWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
     </div>
   );
 }

@@ -486,36 +486,43 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
             <Label>스펙</Label>
             {flavorLoading && <p className="text-xs text-muted-foreground">스펙을 불러오는 중…</p>}
             {flavorError && <LoadError what="스펙" message={flavorError.message} />}
+            <div className="grid gap-2 sm:grid-cols-2">
             {flavors.map((f) => (
               <button
                 key={f.id}
+                disabled={f.deviceProfileMissing}
                 onClick={() => handleFlavorSelect(f)}
                 className={cn(
                   "flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border p-2.5 text-left transition-colors",
+                  f.deviceProfileMissing && "cursor-not-allowed opacity-50",
                   flavor === f.name ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
                 )}
               >
-                <Server className="size-5 text-rose-600" />
-                <div className="flex-1">
+                <Server className="size-5 shrink-0 text-rose-600" />
+                <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono font-semibold">{f.name}</span>
+                    <span className="truncate font-mono font-semibold">{f.name}</span>
                     {(f.accelerators ?? []).map((a) => (
-                      <Badge key={a.kind} variant="ghost" className={cn("h-5 gap-1 px-1.5 font-mono text-[10px]", accKindClass(a.kind))}>
+                      <Badge key={a.kind} variant="ghost" className={cn("h-5 shrink-0 gap-1 px-1.5 font-mono text-[10px]", accKindClass(a.kind))}>
                         <Cpu className="size-3" />{a.kind} × {a.count}
                       </Badge>
                     ))}
-                    {/* 종류를 모를 때(Cyborg 조회 실패) — 가속기 없음으로 보이지 않게 */}
+                    {/* 종류를 모를 때(Cyborg 조회 실패·device-profile 없음) — 가속기 없음으로 보이지 않게 */}
                     {f.accelerator && !f.accelerators?.length && (
-                      <Badge variant="ghost" className={cn("h-5 gap-1 px-1.5 font-mono text-[10px]", accKindClass(""))}><Cpu className="size-3" />가속기</Badge>
+                      <Badge variant="ghost" className={cn("h-5 shrink-0 gap-1 px-1.5 font-mono text-[10px]", accKindClass(""))}><Cpu className="size-3" />가속기</Badge>
                     )}
                   </div>
                   <div className="font-mono text-xs text-muted-foreground tabular-nums">
                     {f.vcpus} vCPU · {f.ramMb / 1024} GB RAM · {f.diskGb > 0 ? `${f.diskGb} GB Disk` : "Disk 볼륨 지정"}
                   </div>
+                  {f.deviceProfileMissing && (
+                    <div className="text-[11px] text-amber-700">연결된 디바이스 프로파일이 존재하지 않습니다.</div>
+                  )}
                 </div>
-                {flavor === f.name && <CheckCircle2 className="size-4 text-brand-mint-600" />}
+                {flavor === f.name && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
               </button>
             ))}
+            </div>
           </div>
         </>
       )}

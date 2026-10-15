@@ -55,7 +55,7 @@ def _dp_accelerators(groups: list[dict] | None) -> list[dict]:
     return [{"kind": k, "count": c} for k, c in counts.items()]
 
 
-def _to_flavor(f: dict, accel: str | None, accelerators: list[dict] | None = None) -> dict:
+def _to_flavor(f: dict, accel: str | None, accelerators: list[dict] | None = None, dp_missing: bool = False) -> dict:
     return {
         "id": f["id"],
         "name": f.get("name") or f["id"],
@@ -65,6 +65,7 @@ def _to_flavor(f: dict, accel: str | None, accelerators: list[dict] | None = Non
         "isPublic": bool(f.get("os-flavor-access:is_public", True)),
         "accelerator": accel,  # 가속기 device-profile(없으면 None)
         "accelerators": accelerators or [],  # device-profile 의 가속기 종류·개수 [{kind: GPU|NPU, count}]
+        "deviceProfileMissing": dp_missing,  # 가리키는 device-profile 이 Cyborg 에 없음 — 이 플레이버로는 VM 을 만들 수 없다
     }
 
 
@@ -76,14 +77,15 @@ def list_flavors():
         dps = {d["name"]: _dp_accelerators(d.get("groups"))
                for d in _cyborg("GET", "/device_profiles").json().get("device_profiles", [])}
     except Exception:  # noqa: BLE001
-        dps = {}
+        dps = None  # 조회 실패 — device-profile 이 없는지 알 수 없다
     try:
         flavors = _nova("GET", "/flavors/detail").json()["flavors"]
         items = []
         for f in flavors:
             specs = _nova("GET", f"/flavors/{f['id']}/os-extra_specs").json().get("extra_specs", {})
             dp = specs.get("accel:device_profile")
-            items.append(_to_flavor(f, dp, dps.get(dp)))
+            missing = bool(dp) and dps is not None and dp not in dps
+            items.append(_to_flavor(f, dp, (dps or {}).get(dp), missing))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"플레이버 조회 실패: {e}")
     return {"items": items, "count": len(items)}
