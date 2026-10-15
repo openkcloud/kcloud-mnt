@@ -388,7 +388,7 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="max-h-[88vh] w-[90vw] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>워크로드 생성</DialogTitle>
           <DialogDescription>폼(Deployment/StatefulSet) 또는 YAML(Job·CronJob 등 모든 종류).</DialogDescription>
@@ -496,7 +496,7 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
                     </SelectContent>
                   </Select>
                 </div>
-                <textarea value={yaml} onChange={(e) => setYaml(e.target.value)} rows={16} className={TEXTAREA_CLS} spellCheck={false} />
+                <textarea value={yaml} onChange={(e) => setYaml(e.target.value)} rows={20} className={TEXTAREA_CLS} spellCheck={false} />
                 <DialogFooter>
                   <Button variant="outline" onClick={onClose}>취소</Button>
                   <Button disabled={pending || previewing || !yaml.trim()} onClick={requestPreview}>
@@ -637,7 +637,7 @@ function YamlDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
   );
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="max-h-[88vh] w-[90vw] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><FileCode className="size-4 text-brand-indigo-600" /> {w.name} · YAML</DialogTitle>
           <DialogDescription className="font-mono text-xs">{w.kind} · {w.namespace} — {preview ? "변경 미리보기 (실행 전)" : "수정 후 저장 시 server-side apply"}</DialogDescription>
@@ -655,7 +655,7 @@ function YamlDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
         ) : (
           <>
             {loading ? <Skeleton className="h-80" /> : (
-              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={22} className={TEXTAREA_CLS} spellCheck={false} />
+              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={24} className={TEXTAREA_CLS} spellCheck={false} />
             )}
             <DialogFooter>
               <Button variant="outline" onClick={onClose}>닫기</Button>
