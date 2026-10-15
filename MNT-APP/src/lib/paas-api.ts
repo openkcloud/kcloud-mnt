@@ -349,6 +349,11 @@ export function useUpdateWorkloadYaml(clusterId: string) {
 export function fetchWorkloadYaml(clusterId: string, kind: string, namespace: string, name: string) {
   return fetchJson<{ yaml: string }>(`${PAAS_BASE}${base(clusterId)}/workloads/${kind}/${namespace}/${name}/yaml`);
 }
+/** 적용 전 미리보기 — before(현재)·after(dryRun 적용 결과)·action. 클러스터에 아무것도 바꾸지 않는다 */
+export interface WorkloadPreview { before: string; after: string; action: "create" | "update" }
+export function previewWorkloadApply(clusterId: string, yaml: string) {
+  return sendJson<WorkloadPreview>("POST", `${base(clusterId)}/workloads/apply/preview`, { yaml });
+}
 
 // ── 파드 드릴다운 ──
 export interface PodRow {
