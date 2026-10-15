@@ -46,6 +46,10 @@ spec:
     - match:
         - uri:
             prefix: {{ $b.env.API_PREFIX | quote }}
+        {{- range $b.extraPrefixes }}
+        - uri:
+            prefix: {{ . | quote }}
+        {{- end }}
       route:
         - destination:
             host: {{ printf "mnt-%s.%s.svc.cluster.local" $name $g.namespace }}
@@ -53,6 +57,27 @@ spec:
               number: 80
     {{- end }}
     {{- end }}
+    {{- with $gw.keycloak }}{{- if .enabled }}
+    {{- $kc := . }}
+    # Keycloak 로그인에 필요한 두 경로만(접두사 떼고 전달) — 관리 화면·master realm 은 열지 않음
+    {{- range $p := list (printf "/realms/%s/" $kc.realm) "/resources/" }}
+    - match:
+        - uri:
+            prefix: {{ printf "%s%s" $kc.pathPrefix $p | quote }}
+      rewrite:
+        uri: {{ $p | quote }}
+      headers:
+        request:
+          set:
+            X-Forwarded-Port: {{ $kc.externalPort | quote }}
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: {{ $kc.service }}
+            port:
+              number: {{ $kc.port }}
+    {{- end }}
+    {{- end }}{{- end }}
     # 그 외 전부 → 프론트(mnt-app)
     - route:
         - destination:

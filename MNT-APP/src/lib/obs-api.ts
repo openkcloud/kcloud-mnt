@@ -9,6 +9,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePollingInterval } from "@/lib/polling";
+import { authFetch } from "@/lib/http";
 
 const RAW = process.env.NEXT_PUBLIC_OBS_API;
 export const OBS_BASE = RAW === undefined ? "http://localhost:8003" : RAW;
@@ -59,14 +60,15 @@ export interface PowerTimeseries {
   series: PowerSeriesRow[];
 }
 
+// 토큰은 미리 붙여 보낸다(MNT-OBS 의 토큰 확인은 추후)
 async function obsFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`${OBS_BASE}/api/obs${path}`, { headers: { Accept: "application/json" } });
+  const res = await authFetch(`${OBS_BASE}/api/obs${path}`, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`OBS ${res.status}`);
   return res.json() as Promise<T>;
 }
 
 async function obsSend<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${OBS_BASE}/api/obs${path}`, {
+  const res = await authFetch(`${OBS_BASE}/api/obs${path}`, {
     method,
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

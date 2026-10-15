@@ -11,12 +11,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { usePollingInterval } from "@/lib/polling";
+import { authFetch } from "@/lib/http";
 
 const RAW = process.env.NEXT_PUBLIC_PAAS_API;
 export const PAAS_BASE = RAW === undefined ? "http://localhost:8002" : RAW;
 
+// 토큰은 미리 붙여 보낸다(MNT-PAAS 의 토큰 확인은 추후)
 async function sendJson<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${PAAS_BASE}${path}`, {
+  const res = await authFetch(`${PAAS_BASE}${path}`, {
     method,
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -30,7 +32,7 @@ async function sendJson<T>(method: string, path: string, body?: unknown): Promis
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  const res = await authFetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`PAAS ${res.status}`);
   return res.json() as Promise<T>;
 }

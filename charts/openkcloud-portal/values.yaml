@@ -1,6 +1,6 @@
 # openKcloud 포털 엄브렐러 차트 값
 # 배포: helm upgrade --install openkcloud-portal charts/openkcloud-portal -n openkcloud-mnt
-# 시크릿(DATABASE_URL, OS_USERNAME/PASSWORD)은 이 파일에 넣지 말 것 → secrets.example.yaml 참고해 별도 apply.
+# 앱 시크릿도 이 차트가 만든다 — 값은 아래 secrets·workflow.dbPassword(비공개 저장소 전제로 이 파일에 적는다).
 
 global:
   namespace: openkcloud-mnt
@@ -25,7 +25,7 @@ backends:
     image: mnt-core
     port: 8000
     replicas: 1
-    secretName: mnt-core-secret        # DATABASE_URL 제공
+    secretName: mnt-core-secret        # DATABASE_URL, KEYCLOAK_CLIENT_SECRET 제공
     env:
       SERVICE_NAME: mnt-core
       API_PREFIX: /api/core
@@ -33,8 +33,16 @@ backends:
       IAAS_API_BASE: http://mnt-iaas.openkcloud-mnt.svc.cluster.local
       PAAS_API_BASE: http://mnt-paas.openkcloud-mnt.svc.cluster.local
       OBS_API_BASE: http://mnt-obs.openkcloud-mnt.svc.cluster.local
-      AINB_API_BASE: ""
+      AINB_API_BASE: http://mnt-ainb.openkcloud-mnt.svc.cluster.local
       TEMPORAL_API_BASE: mnt-workflow.openkcloud-mnt.svc.cluster.local:7233   # Temporal 서버(gRPC)
+      # Keycloak(로그인 토큰 검증) — 발급자는 브라우저가 보는 주소, JWKS·관리 API 는 클러스터 내부(25443 은 외부 NAT 전용)
+      # 비밀키 KEYCLOAK_CLIENT_SECRET 은 mnt-core-secret 에
+      KEYCLOAK_ISSUER: https://portal.kcloud.etri:25443/auth/realms/openkcloud_realm
+      KEYCLOAK_JWKS_URL: http://keycloak-http.openkcloud-mnt.svc.cluster.local/realms/openkcloud_realm/protocol/openid-connect/certs
+      KEYCLOAK_INTERNAL_URL: http://keycloak-http.openkcloud-mnt.svc.cluster.local/realms/openkcloud_realm
+      # 동시 로그인 제한 — "true": 같은 계정이 다른 곳(다른 브라우저)에서 로그인하면 앞의 세션을 끝낸다("다른곳에서 로그인되었습니다.")
+      #                   "false": 여러 곳 동시 로그인 허용(계정을 여럿이 같이 쓸 때). 관리자 포함 전체 적용
+      SESSION_SINGLE_LOGIN: "false"
 
   iaas:
     image: mnt-iaas
@@ -93,11 +101,55 @@ backends:
       # 안 되면 Service/Endpoints(→172.29.236.153:8000) 구성 후 그 DNS 로 교체.
       MONITOR_BASE_URL: http://172.29.236.153:8000/api/v2
 
+  ainb:
+    image: mnt-ainb
+    port: 8000
+    replicas: 1                        # 1대 고정 — IDE 연결(port-forward)·성능 분석 상태를 프로세스가 들고 있다
+    secretName: mnt-ainb-secret        # CMP_SESSION_SECRET / MODEL_STORE_KEY / MODEL_STORE_SECRET 제공
+    # 노트북이 도는 서비스 클러스터 kubeconfig — Secret(키 config)을 /etc/mnt-ainb/kubeconfig 에 마운트
+    kubeconfigSecret: mnt-ainb-kubeconfig
+    # 게이트웨이 경로 추가 — 노트북 IDE 프록시(노트북 서버가 /notebook/{ns}/{name}/ 경로로 링크를 만든다)
+    extraPrefixes:
+      - /notebook/
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits: { cpu: "2", memory: 2Gi }
+    env:
+      SERVICE_NAME: mnt-ainb
+      API_PREFIX: /api/ainb
+      CORS_ORIGINS: ""
+      CORE_API_BASE: http://mnt-core.openkcloud-mnt.svc.cluster.local
+      TEMPORAL_API_BASE: mnt-workflow.openkcloud-mnt.svc.cluster.local:7233   # Temporal 서버(gRPC)
+      PUBLIC_BASE_URL: https://portal.kcloud.etri:25443   # 브라우저가 여는 포털 주소 — IDE 주소 발급용
+      KUBECONFIG: /etc/mnt-ainb/kubeconfig/config
+      DEFAULT_NAMESPACE: okc
+      ACCEL_RESOURCE: furiosa.ai/rngd  # 서비스 클러스터 NPU(device plugin 설치 후 노출되는 이름)
+      GPU_RUNTIME_CLASS: ""
+
+# ── 앱 시크릿 — 차트가 만든다(templates/secrets.yaml) ─────────────────
+# 적은 값을 쓰고, 비워 두면 클러스터에 이미 있는 값을 그대로 쓴다. 값을 바꾸면 파드가 다시 시작된다.
+# 릴리스와 함께 만들고 지운다 — helm uninstall 하면 시크릿도 지워지므로 다시 설치하려면 값이 모두 여기 있어야 한다
+# (빈 값이 있으면 배포가 멈추고 빠진 항목을 알려 준다).
+secrets:
+  keycloakClientSecret: "YC1lVqa9LxwSx43CXlGTk8Yj4T1wDpO7CadawUU2CehGLEPr8xv5jGkjLJ3w1dBxnIy28mdji627YvC203fov4"     # mnt-core-secret — Keycloak openkcloud_realm → Clients → mnt-core-client → Credentials
+  openstack:                   # mnt-iaas-secret·mnt-paas-secret 공통(extadmin)
+    username: "extadmin"
+    password: "@3h_t9+Z7rWwG2zR"
+  monitor:                     # mnt-obs-secret — KCloud Monitor v2 관리 계정
+    username: "admin"
+    password: "changeme"
+  # mnt-core-secret 의 DATABASE_URL — CNPG 시크릿(appSecret)의 비밀번호로 차트가 만든다(적을 것 없음)
+  db:
+    appSecret: openkcloud-db-app-cred
+    user: portal_user
+    host: openkcloud-db-rw.openkcloud-mnt:5432
+    name: openkcloud_portal
+
 # ── Temporal 서버(MNT-WORKFLOW) — 프로비저닝 워크플로의 작업 장부 ─────────
 # 한 파드(replicas 1, Recreate): initContainer schema(스키마 자동 설치·업그레이드) + temporal(:7233) + ui(:8080)
 # + Job(워크플로 네임스페이스 준비) + VirtualService(웹 화면). 공식 이미지를 Harbor(mnt/mnt-workflow/temporalio/*)로 옮겨 사용.
 # 버전: server·adminTools 는 같은 버전으로, 마이너 버전은 한 단계씩 올린다(1.31 → 1.32 → …).
-# 배포 전 1회: MNT-WORKFLOW/db/temporal_schema.sql 적용. mnt-workflow-secret 은 첫 배포 때 dbPassword 로 차트가 만든다(아래).
+# 배포 전 1회: MNT-WORKFLOW/db/temporal_schema.sql 적용. mnt-workflow-secret 은 차트가 만든다(아래 dbPassword, templates/secrets.yaml).
 workflow:
   enabled: true
   images:
@@ -105,10 +157,9 @@ workflow:
     adminTools: harbor.io:7443/mnt/mnt-workflow/temporalio/admin-tools:1.31.3
     ui: harbor.io:7443/mnt/mnt-workflow/temporalio/ui:2.55.0
   secretName: mnt-workflow-secret      # POSTGRES_PWD / VISIBILITY_POSTGRES_PWD 제공
-  # 위 시크릿을 차트가 만들 때의 DB 비밀번호(계정 temporal·temporal_view 공통). ⚠️ 여기에 적지 말고 배포할 때 넘긴다:
-  #   helm upgrade ... --set-string workflow.dbPassword='<비밀번호>'   (처음 배포·비밀번호 변경 때만)
-  # 비워 두면 차트는 시크릿을 만들지 않는다(직접 만든 시크릿 사용). 한 번 만든 시크릿은 이후 값을 빼도 유지(resource-policy: keep).
-  dbPassword: ""
+  # 위 시크릿의 DB 비밀번호(계정 temporal·temporal_view 공통, MNT-WORKFLOW/db/temporal_schema.sql 과 같은 값).
+  # 비워 두면 클러스터에 있는 기존 값 유지(위 secrets 와 같은 규칙).
+  dbPassword: "portal1234!"
   uiHost: temporal.kcloud.etri         # 웹 화면 호스트(portal-gateway 와일드카드 TLS) — 로그인 없음, 사내망 전용
   temporalNamespace: default           # 워크플로 네임스페이스(Job 이 없을 때만 생성)
   retention: 720h                      # 끝난 워크플로 기록 보관 기간(30일)
@@ -160,3 +211,13 @@ gateway:
   tls:
     mode: SIMPLE
     credentialName: portal-wildcard-tls
+  # 포털 호스트의 Keycloak 로그인 경로 — /auth/realms/<realm>/·/auth/resources/ 만 Keycloak 으로(접두사 떼고 전달).
+  # /auth/login 은 포털 화면(mnt-app). 관리 화면·master realm 은 keycloak.kcloud.etri 로만 접근.
+  # 켜기 전: realm 의 Frontend URL = https://portal.kcloud.etri:25443/auth
+  keycloak:
+    enabled: true # 2026-10-14 테스트배드 로그인 연동 적용
+    pathPrefix: /auth
+    realm: openkcloud_realm
+    service: keycloak-http.openkcloud-mnt.svc.cluster.local
+    port: 80
+    externalPort: "25443"   # 외부 NAT 포트(keycloak-vs 와 같은 값)

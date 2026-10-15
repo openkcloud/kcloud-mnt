@@ -1,7 +1,8 @@
 "use client";
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
+import { ensureAuth, useAuth } from "@/lib/auth";
+import { AuthLoading, SessionBlur, SessionEnded } from "@/components/session-ended";
 
 /* Full-screen 라우트 그룹 — 사이드바·헤더 없이 풀스크린 사용.
  * IDE / 라이브 토폴로지 등 몰입형 화면용. 인증 가드는 유지. */
@@ -11,26 +12,22 @@ export default function FullscreenLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const status = useAuth((s) => s.status);
   const user = useAuth((s) => s.user);
 
-  // persist 복원 완료 후 판단 (새로고침 시 /login 튕김 방지)
-  const [hydrated, setHydrated] = React.useState(false);
   React.useEffect(() => {
-    if (useAuth.persist.hasHydrated()) setHydrated(true);
-    return useAuth.persist.onFinishHydration(() => setHydrated(true));
+    void ensureAuth();
   }, []);
 
   React.useEffect(() => {
-    if (hydrated && !user) router.replace("/login");
-  }, [hydrated, user, router]);
+    if (status === "unauthenticated") {
+      router.replace(`/auth/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+    }
+  }, [status, router]);
 
-  if (!hydrated || !user) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center bg-slate-950">
-        <div className="size-8 animate-spin rounded-full border-2 border-brand-mint-500 border-t-transparent" />
-      </div>
-    );
-  }
+  const ended = status === "ended";
+  if (ended && !user) return <SessionEnded />; // 보던 화면이 없으면(새로고침 직후 등) 빈 배경 위에 안내
+  if (!ended && status !== "authenticated") return <AuthLoading dark />;
 
-  return <>{children}</>;
+  return <SessionBlur ended={ended}>{children}</SessionBlur>;
 }

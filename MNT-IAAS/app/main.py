@@ -7,9 +7,11 @@ IaaS 관련 OpenStack 호출은 전부 이 모듈에서. 프론트는 MNT-IAAS�
 import asyncio
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from .auth import AuthError, caller
 from .config import settings
 from .openstack_client import get_conn
 from .routers import flavors, images, networks, projects, servers, volumes
@@ -38,6 +40,13 @@ if settings.cors_origins:
     )
 
 
+@app.exception_handler(AuthError)
+async def auth_error(_request: Request, e: AuthError):
+    """인증·권한 오류 — CORE 와 같은 형식(detail 은 화면 표시 문구, code·reason 은 원인)."""
+    headers = {"WWW-Authenticate": "Bearer"} if e.status == 401 else None
+    return JSONResponse({"detail": e.detail, "code": e.code, **e.extra}, status_code=e.status, headers=headers)
+
+
 @app.get("/healthz")
 def healthz():
     """liveness/readiness — OpenStack(Keystone) 인증까지 확인."""
@@ -49,9 +58,11 @@ def healthz():
     return {"service": settings.service_name, "status": "ok", "openstack": os_status}
 
 
-app.include_router(projects.router, prefix=settings.api_prefix)
-app.include_router(networks.router, prefix=settings.api_prefix)
-app.include_router(volumes.router, prefix=settings.api_prefix)
-app.include_router(images.router, prefix=settings.api_prefix)
-app.include_router(flavors.router, prefix=settings.api_prefix)
-app.include_router(servers.router, prefix=settings.api_prefix)
+# 로그인(토큰) 필수 — 관리자 전용·소속 프로젝트 확인은 각 라우터에서
+_login = [Depends(caller)]
+app.include_router(projects.router, prefix=settings.api_prefix, dependencies=_login)
+app.include_router(networks.router, prefix=settings.api_prefix, dependencies=_login)
+app.include_router(volumes.router, prefix=settings.api_prefix, dependencies=_login)
+app.include_router(images.router, prefix=settings.api_prefix, dependencies=_login)
+app.include_router(flavors.router, prefix=settings.api_prefix, dependencies=_login)
+app.include_router(servers.router, prefix=settings.api_prefix, dependencies=_login)
