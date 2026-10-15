@@ -593,6 +593,27 @@ export function useProjectNetworks(projectId: string | undefined) {
     staleTime: 30 * 1000, retry: 0,
   });
 }
+/** 승인 판단 — 컴퓨트 노드별 후보 여부(Placement)·가속기 여유·프로젝트 쿼터(라이브). 목업 폴백 없음. */
+export interface PlacementPreview {
+  nodes: { // 모든 컴퓨트 노드 — 후보(신청 스펙이 들어감) 먼저, 각각 여유가 큰 순
+    host: string; candidate: boolean; disabled: boolean; // disabled = 꺼 둔 노드
+    vcpu: { used: number; capacity: number }; ramMb: { used: number; capacity: number };
+    accel: { used: number; capacity: number }[]; // 노드의 가속기 사용/용량 — accelerators 와 같은 순서
+  }[];
+  accelerators: { kind: string; resourceClass: string; traits: string[]; count: number; free: number; total: number }[]; // 종류별 클러스터 전체, traits 는 금지면 '!' 접두
+  quota: Record<"vcpu" | "ramGb" | "instances" | "diskGb" | "volumes", { quota: number; used: number }> | null; // quota -1 = 무제한
+  quotaError: string | null;
+  hostPinning: boolean; // VM 생성 때 노드를 지정할 수 있는지(Nova 정책) — 없으면 스케줄러가 후보 중에서 고름
+}
+export function usePlacementPreview(flavorId: string | undefined, projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-placement-preview", flavorId, projectId],
+    enabled: !!flavorId && !!projectId,
+    queryFn: () => fetchJson<PlacementPreview>(
+      `${IAAS_BASE}/api/iaas/placement-preview?${new URLSearchParams({ flavorId: flavorId!, projectId: projectId! })}`),
+    staleTime: 30 * 1000, retry: 0,
+  });
+}
 /** 승인 설정 — 프로젝트 보안그룹(라이브). 목업 폴백 없음. */
 export function useProjectSecurityGroups(projectId: string | undefined) {
   return useQuery({

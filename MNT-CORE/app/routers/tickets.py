@@ -485,9 +485,10 @@ class ProvisionSpecBody(BaseModel):
     floatingNetworkId: str | None = None  # 내부·공유망 + Floating IP 일 때 FIP 풀(external 망)
     fixedIp: str | None = None            # external 망 Static IP 직접 입력 (없으면 자동 할당)
     securityGroups: list[str] = []        # 보안그룹 이름 (프로젝트 라이브 조회 기준)
+    host: str | None = None               # 배치할 컴퓨트 노드(미리보기에서 고름) — 노드 지정 권한이 있을 때만, 없으면 스케줄러
 
 
-def _verified_provision_spec(project_id: str, spec: ProvisionSpecBody, token: str) -> dict:
+def _verified_provision_spec(project_id: str, flavor_id: str, spec: ProvisionSpecBody, token: str) -> dict:
     """승인 설정을 라이브 조회로 다시 확인하고, 네트워크 이름·종류 등은 서버 값으로 채운다."""
     nets = {n["id"]: n for n in _iaas(_project_path(project_id) + "/networks", token)["items"]}
     net = nets.get(spec.networkId)
@@ -523,6 +524,13 @@ def _verified_provision_spec(project_id: str, spec: ProvisionSpecBody, token: st
         if sg_names.count(name) != 1:
             raise HTTPException(400, f"보안그룹 '{name}'을(를) 프로젝트에서 찾을 수 없거나 같은 이름이 여러 개입니다")
     out["securityGroups"] = list(dict.fromkeys(spec.securityGroups))  # 중복 제거, 순서 유지
+    if spec.host:  # 미리보기 뒤 권한·자원이 바뀌었을 수 있다 — 지금도 지정할 수 있고 후보인지
+        pv = _iaas(f"/placement-preview?flavorId={quote(flavor_id, safe='')}&projectId={quote(project_id, safe='')}", token)
+        if not pv["hostPinning"]:
+            raise HTTPException(409, "노드를 지정할 권한이 없습니다 — 화면을 새로 고쳐 다시 시도하세요")
+        if not any(n["host"] == spec.host and n["candidate"] for n in pv["nodes"]):
+            raise HTTPException(409, f"선택한 노드({spec.host})에는 지금 배치할 수 없습니다 — 미리보기를 새로 고쳐 다시 선택하세요")
+        out["host"] = spec.host
     return out
 
 
@@ -569,7 +577,7 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
     rs = t["request_spec"]
     db.rollback()  # MNT-IAAS 확인 동안 커넥션을 잡지 않게
 
-    spec = _verified_provision_spec(t["project_id"], body.provisionSpec, user.token)
+    spec = _verified_provision_spec(t["project_id"], rs["flavorId"], body.provisionSpec, user.token)
     if _server_name_taken(t["project_id"], rs["vmName"], user.token):  # 신청 뒤에 같은 이름 VM 이 생겼을 수 있다
         raise HTTPException(409, _SERVER_NAME_TAKEN)
 
@@ -608,6 +616,7 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         "networkLabel": spec["networkName"] + (" (external)" if spec["networkKind"] == "external" else ""),
         "fixedIp": spec.get("fixedIp"), "securityGroups": spec["securityGroups"],
         "floatingNetworkId": spec.get("floatingNetworkId"),
+        "host": spec.get("host"),
         "publicKey": public_key,
         "keypairLabel": rs.get("keypairName") or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
         "hasAccelerator": bool(rs.get("deviceProfile")),

@@ -3,12 +3,15 @@
 플레이버는 '전역(admin)' 자원 — 프로젝트 소속 아님(프로젝트 컬럼 없음).
 환경독립: override=template.format(service=...)+버전, catalog=service_type.
 """
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..auth import require_admin
 from ..config import settings
 from ..openstack_client import get_conn
+from ..openstack_quota import get_project_quota
 
 router = APIRouter(tags=["flavors"])
 
@@ -41,9 +44,9 @@ def _cyborg(method: str, path: str, *, json=None):
 
 
 # Placement — 경로에 버전 세그먼트 없음(루트). microversion 은 'placement X.Y' 형식(traits 는 1.6+).
-def _placement(method: str, path: str):
+def _placement(method: str, path: str, mv: str = "1.6"):
     return _os_req("placement", "placement", "", method, path,
-                   headers={"OpenStack-API-Version": "placement 1.6"})
+                   headers={"OpenStack-API-Version": f"placement {mv}"})
 
 
 # device-profile group 의 resource class → 화면 가속기 종류
@@ -289,6 +292,111 @@ class CreateFlavorBody(BaseModel):
     diskGb: int
     isPublic: bool = True
     deviceProfile: str | None = None  # 가속기 device-profile 이름(선택)
+
+
+# ── 배치·가용량 미리보기(자원신청 승인 판단용) ────────────────────────────────
+# Placement allocation_candidates = Nova 스케줄러가 쓰는 '자원이 맞는 노드' 질의. 최종 노드는 스케줄러 필터·가중치가 정한다.
+# 1.36: 숫자 그룹(가속기, 1.25+)·금지 trait(!, 1.22+)·provider_summaries 의 root/traits(1.29+/1.17+). 테스트배드 최대 1.39.
+_PREVIEW_MV = "1.36"
+
+
+def _req_groups(specs: dict) -> tuple[dict[str, int], list[str]]:
+    """'resources:<RC>'=개수 · 'trait:<T>'=required|forbidden 형식(플레이버 extra_specs, device-profile group) → 자원·trait."""
+    res = {k.split(":", 1)[1]: int(v) for k, v in specs.items() if k.startswith("resources:")}
+    req = [("" if v == "required" else "!") + k.split(":", 1)[1]
+           for k, v in specs.items() if k.startswith("trait:") and v in ("required", "forbidden")]
+    return res, req
+
+
+def _candidates(resources: dict[str, int], required: list[str], groups: list[tuple[dict[str, int], list[str]]]) -> dict:
+    q = {"resources": ",".join(f"{k}:{v}" for k, v in resources.items() if v > 0), "required": ",".join(required)}
+    for i, (res, req) in enumerate(groups, 1):
+        q[f"resources{i}"] = ",".join(f"{k}:{v}" for k, v in res.items())
+        q[f"required{i}"] = ",".join(req)
+    if len(groups) > 1:
+        q["group_policy"] = "none"
+    qs = urlencode({k: v for k, v in q.items() if v})
+    return _placement("GET", f"/allocation_candidates?{qs}", _PREVIEW_MV).json()
+
+
+def _matches(summary: dict, res: dict[str, int], req: list[str]) -> bool:
+    traits = set(summary.get("traits") or [])
+    return (any(rc in summary["resources"] for rc in res)
+            and all((t[1:] not in traits) if t.startswith("!") else (t in traits) for t in req))
+
+
+@router.get("/placement-preview", dependencies=[Depends(require_admin)])
+def placement_preview(flavorId: str, projectId: str):
+    """컴퓨트 노드별 vCPU·메모리·가속기 사용/용량과 후보 여부(신청 스펙이 들어가는지) + 프로젝트 쿼터
+    + 노드 지정 가능 여부(hostPinning — 없으면 스케줄러가 후보 중에서 고른다).
+    부팅 디스크는 항상 Cinder 볼륨이라 노드 디스크(DISK_GB)는 세지 않는다. Nova 처럼 꺼 둔 노드(COMPUTE_STATUS_DISABLED)는 후보에서 뺀다."""
+    try:
+        f = _nova("GET", f"/flavors/{flavorId}").json()["flavor"]
+        specs = _nova("GET", f"/flavors/{flavorId}/os-extra_specs").json().get("extra_specs", {})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"플레이버 조회 실패: {e}")
+    over, required = _req_groups(specs)  # 플레이버가 덮어쓴 자원(예: PCPU)·필수 trait
+    resources = {"VCPU": f.get("vcpus", 0), "MEMORY_MB": f.get("ram", 0), **over}
+    required.append("!COMPUTE_STATUS_DISABLED")
+    groups = []
+    if dp := specs.get("accel:device_profile"):
+        try:
+            prof = next((d for d in _cyborg("GET", "/device_profiles").json().get("device_profiles", [])
+                         if d["name"] == dp), None)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"디바이스 프로파일 조회 실패: {e}")
+        if prof is None:
+            raise HTTPException(400, "연결된 디바이스 프로파일이 존재하지 않습니다")
+        groups = [g for g in map(_req_groups, prof.get("groups") or []) if g[0]]
+    try:
+        cand = _candidates(resources, required, groups)
+        every = _candidates({"VCPU": 1}, [], [])  # 후보가 아닌 노드도 보여주려고 모든 컴퓨트 노드(꺼 둔 노드 포함)를 함께 읽는다
+        names = {rp["uuid"]: rp["name"] for rp in _placement("GET", "/resource_providers").json()["resource_providers"]}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"배치 후보 조회 실패: {e}")
+
+    sums = {**every["provider_summaries"], **cand["provider_summaries"]}
+    ok = {sums[rp]["root_provider_uuid"]  # 후보 노드(컴퓨트 RP) — 가속기 RP 의 루트
+          for a in cand["allocation_requests"] for rp in a["allocations"]}
+    roots = list(dict.fromkeys(s["root_provider_uuid"] for s in sums.values()))
+    disabled = {r for r in roots if "COMPUTE_STATUS_DISABLED" in (sums[r].get("traits") or [])}
+    # 가속기는 종류(자원+trait)별로 합쳐 센다 — 예) RNGD 1장 그룹 2개 = RNGD 2장
+    kinds: dict[tuple[str, tuple[str, ...]], int] = {}
+    for res, req in groups:
+        for rc, n in res.items():
+            kinds[(rc, tuple(req))] = kinds.get((rc, tuple(req)), 0) + n
+
+    def accel_use(root: str, rc: str, n: int, req: tuple[str, ...]) -> dict[str, int]:  # 노드의 해당 종류 가속기 사용/용량
+        ds = [s for s in sums.values() if s["root_provider_uuid"] == root and _matches(s, {rc: n}, list(req))]
+        return {k: sum(s["resources"][rc][k] for s in ds) for k in ("used", "capacity")}
+
+    nodes = [{
+        "host": names.get(root, root), "candidate": root in ok, "disabled": root in disabled,
+        "vcpu": {k: sums[root]["resources"].get("VCPU", {}).get(k, 0) for k in ("used", "capacity")},
+        "ramMb": {k: sums[root]["resources"].get("MEMORY_MB", {}).get(k, 0) for k in ("used", "capacity")},
+        "accel": [accel_use(root, rc, n, req) for (rc, req), n in kinds.items()],
+    } for root in roots]
+
+    def room(c: dict) -> float:  # vCPU·메모리 중 덜 남은 쪽 비율
+        return min(1 - c[k]["used"] / c[k]["capacity"] if c[k]["capacity"] else 0 for k in ("vcpu", "ramMb"))
+    nodes.sort(key=lambda c: (c["candidate"], room(c)), reverse=True)  # 후보 먼저, 그 안에서 여유가 큰 노드부터
+    accelerators = []
+    for (rc, req), n in kinds.items():  # 종류별 전체 여유 — 꺼 둔 노드는 뺀다
+        use = [accel_use(r, rc, n, req) for r in roots if r not in disabled]
+        accelerators.append({"kind": _ACCEL_KIND.get(rc, rc), "resourceClass": rc, "traits": list(req), "count": n,
+                             "free": sum(u["capacity"] - u["used"] for u in use), "total": sum(u["capacity"] for u in use)})
+
+    try:
+        quota, quota_error = get_project_quota(projectId), None
+    except HTTPException as e:  # 쿼터를 못 읽어도 노드 정보는 보여준다
+        quota, quota_error = None, e.detail
+    from .servers import can_pin_host  # servers 가 이 모듈을 불러 쓰므로(순환) 여기서
+    try:
+        pinning = can_pin_host(projectId)
+    except Exception:  # noqa: BLE001 — 확인을 못 하면 지정하지 않는다(스케줄러가 고름)
+        pinning = False
+    return {"nodes": nodes, "accelerators": accelerators, "hostPinning": pinning,
+            "quota": quota, "quotaError": quota_error}
 
 
 @router.post("/flavors", status_code=201, dependencies=[Depends(require_admin)])

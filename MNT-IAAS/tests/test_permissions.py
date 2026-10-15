@@ -71,6 +71,7 @@ CASES = [
     ("PATCH", "/images/i1", {"visibility": "public"}, D), ("DELETE", "/images/i1", None, D),
     # 플레이버
     ("GET", "/flavors", None, A), ("GET", "/device-profiles", None, A),
+    ("GET", "/placement-preview?flavorId=f1&projectId=p1", None, D),
     ("POST", "/flavors", {"name": "f", "vcpus": 1, "ramMb": 512, "diskGb": 1}, D), ("DELETE", "/flavors/f1", None, D),
 ]
 
@@ -160,6 +161,100 @@ def test_승인용_네트워크_보안그룹에서_Magnum_클러스터_자원_�
     user = client_as(USER)
     assert [n["name"] for n in user.get(P + f"/projects/{MINE}/networks").json()["items"]] == ["my-network"]
     assert [g["name"] for g in user.get(P + f"/projects/{MINE}/security-groups").json()["items"]] == ["default"]
+
+
+def test_배치_가용량_미리보기(monkeypatch):
+    from urllib.parse import parse_qs
+    nova = {"/flavors/f1": {"flavor": {"id": "f1", "vcpus": 4, "ram": 8192, "disk": 80}},
+            "/flavors/f1/os-extra_specs": {"extra_specs": {"accel:device_profile": "dp-rngd"}}}
+    dps = {"device_profiles": [{"name": "dp-rngd", "groups": [
+        {"resources:CUSTOM_AICHIP": "1", "trait:CUSTOM_FURIOSA_0001": "required"}]}]}
+    host = lambda vu, mu: {"resources": {"VCPU": {"capacity": 64, "used": vu}, "MEMORY_MB": {"capacity": 65536, "used": mu}},
+                           "traits": []}
+    dev = lambda root, used: {"resources": {"CUSTOM_AICHIP": {"capacity": 1, "used": used}}, "root_provider_uuid": root,
+                              "traits": ["CUSTOM_FURIOSA_0001"]}
+    sums = {"r1": {**host(10, 8192), "root_provider_uuid": "r1"},
+            "r2": {**host(40, 32768), "root_provider_uuid": "r2", "traits": ["COMPUTE_STATUS_DISABLED"]},  # 꺼 둔 노드
+            "d1": dev("r1", 0), "d2": dev("r2", 1)}
+    names = {"resource_providers": [{"uuid": u, "name": n} for u, n in
+                                    [("r1", "compute1"), ("r2", "compute2"), ("d1", "compute1_dev"), ("d2", "compute2_dev")]]}
+    queries = []
+
+    def placement(method, path, mv="1.6"):
+        if path.startswith("/allocation_candidates"):
+            q = parse_qs(path.split("?", 1)[1])
+            queries.append(q)
+            reqs = [{"allocations": {"r1": {}, "d1": {}}}] if "resources1" in q else \
+                [{"allocations": {"r1": {}}}, {"allocations": {"r2": {}}}]
+            data = {"allocation_requests": reqs, "provider_summaries": sums}
+        else:
+            data = names
+        return type("R", (), {"json": lambda self: data})()
+
+    monkeypatch.setattr(flavors, "_nova", lambda m, path, **k: type("R", (), {"json": lambda self: nova[path]})())
+    monkeypatch.setattr(flavors, "_cyborg", lambda m, path, **k: type("R", (), {"json": lambda self: dps})())
+    monkeypatch.setattr(flavors, "_placement", placement)
+    monkeypatch.setattr(flavors, "get_project_quota", lambda pid: {"vcpu": {"quota": 20, "used": 8}})
+    monkeypatch.setattr(servers, "can_pin_host", lambda pid: True)
+    d = client_as(ADMIN).get(P + "/placement-preview?flavorId=f1&projectId=p1").json()
+    # Nova 와 같은 질의 — 노드 디스크는 빼고(부팅 볼륨), 끈 노드 제외, 가속기는 숫자 그룹(자원+trait)
+    assert queries[0]["resources"] == ["VCPU:4,MEMORY_MB:8192"] and queries[0]["required"] == ["!COMPUTE_STATUS_DISABLED"]
+    assert queries[0]["resources1"] == ["CUSTOM_AICHIP:1"] and queries[0]["required1"] == ["CUSTOM_FURIOSA_0001"]
+    assert queries[1] == {"resources": ["VCPU:1"]}  # 후보가 아닌 노드까지 — 모든 컴퓨트 노드
+    # 후보 먼저, 후보가 아닌(꺼 둔) 노드도 함께
+    assert d["nodes"] == [
+        {"host": "compute1", "candidate": True, "disabled": False, "vcpu": {"used": 10, "capacity": 64},
+         "ramMb": {"used": 8192, "capacity": 65536}, "accel": [{"used": 0, "capacity": 1}]},
+        {"host": "compute2", "candidate": False, "disabled": True, "vcpu": {"used": 40, "capacity": 64},
+         "ramMb": {"used": 32768, "capacity": 65536}, "accel": [{"used": 1, "capacity": 1}]},
+    ]
+    # 가속기 전체 여유는 꺼 둔 노드를 뺀다
+    assert d["accelerators"] == [{"kind": "NPU", "resourceClass": "CUSTOM_AICHIP", "traits": ["CUSTOM_FURIOSA_0001"],
+                                 "count": 1, "free": 1, "total": 1}]
+    assert d["quota"] == {"vcpu": {"quota": 20, "used": 8}} and d["quotaError"] is None and d["hostPinning"] is True
+
+    def no_quota(pid):
+        raise flavors.HTTPException(502, "쿼터 조회 실패")
+    monkeypatch.setattr(flavors, "get_project_quota", no_quota)  # 쿼터를 못 읽어도 노드 정보는 보여준다
+    monkeypatch.setattr(servers, "can_pin_host", _blocked)  # 노드 지정 권한을 확인 못 하면 지정하지 않는다
+    d = client_as(ADMIN).get(P + "/placement-preview?flavorId=f1&projectId=p1").json()
+    assert d["quota"] is None and d["quotaError"] == "쿼터 조회 실패" and len(d["nodes"]) == 2
+    assert d["hostPinning"] is False
+
+
+def test_노드_지정_권한_확인과_생성_요청(monkeypatch):
+    # 권한 확인 — 없는 플레이버로 생성 요청: 정책 거절(403)이면 없음, 요청 내용 거절(400)이면 있음, 그 밖은 판정·캐시 안 함
+    replies = {
+        "p1": '{"forbidden": {"code": 403, "message": "Policy doesn\'t allow compute:servers:create:requested_destination '
+              'to be performed."}}',
+        "p2": '{"badRequest": {"code": 400, "message": "Missing imageRef attribute"}}',
+        "p3": '{"computeFault": {"code": 500, "message": "Unexpected API Error."}}',
+    }
+    calls = []
+
+    def probe(method, path, *, json=None, project_id=None, **k):
+        calls.append((method, path, project_id, json["server"]))
+        raise RuntimeError(replies[project_id])
+    monkeypatch.setattr(servers, "_nova_req", probe)
+    monkeypatch.setattr(servers, "_pin_cache", {})
+    assert servers.can_pin_host("p1") is False and servers.can_pin_host("p1") is False  # 두 번째는 캐시
+    assert servers.can_pin_host("p2") is True
+    with pytest.raises(RuntimeError):
+        servers.can_pin_host("p3")
+    assert [c[2] for c in calls] == ["p1", "p2", "p3"] and "p3" not in servers._pin_cache
+    assert calls[0][:2] == ("POST", "/servers") and calls[0][3]["hypervisor_hostname"] and calls[0][3]["networks"] == "none"
+
+    # 생성 요청 — 노드를 고르면 hypervisor_hostname 을 넣고, 아니면 넣지 않는다(스케줄러가 고름)
+    sent = []
+
+    def boot(method, path, *, json=None, **k):
+        sent.append(json["server"])
+        return type("R", (), {"json": lambda self: {"server": {"id": "s1"}}})()
+    monkeypatch.setattr(servers, "_nova_req", boot)
+    body = {"name": "v", "flavorId": "f", "imageId": "i", "volumeGb": 1, "networkId": "n"}
+    servers._boot_server("p1", servers.CreateServerBody(**body, host="compute1"), "vol")
+    servers._boot_server("p1", servers.CreateServerBody(**body), "vol")
+    assert sent[0]["hypervisor_hostname"] == "compute1" and "hypervisor_hostname" not in sent[1]
 
 
 def test_플레이버가_가리키는_디바이스_프로파일이_없음(monkeypatch):

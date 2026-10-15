@@ -139,6 +139,7 @@ class CreateServerBody(BaseModel):
     fixedIp: str | None = None        # 고정 IP(없으면 자동 할당)
     securityGroups: list[str] = []    # 보안그룹 이름(프로젝트 기준)
     publicKey: str | None = None      # cloud-init 으로 주입할 SSH 공개키
+    host: str | None = None           # 배치할 컴퓨트 노드(hypervisor_hostname) — 없으면 스케줄러가 고름. can_pin_host 필요
 
 
 def _cloud_init_user_data(public_key: str) -> str:
@@ -208,6 +209,7 @@ def _boot_server(project_id: str, body: CreateServerBody, volume_id: str) -> str
         "networks": [network],
         **({"security_groups": [{"name": n} for n in body.securityGroups]} if body.securityGroups else {}),
         **({"user_data": _cloud_init_user_data(body.publicKey)} if body.publicKey else {}),
+        **({"hypervisor_hostname": body.host} if body.host else {}),  # 2.74+ — 그 노드로 스케줄러가 다시 확인
     }
     try:
         # 응답 대기 60초 — 짧으면 Nova 는 만들었는데 포털은 실패로 알 수 있다(재시도 전 같은 이름 서버 확인은 호출부 몫)
@@ -216,6 +218,33 @@ def _boot_server(project_id: str, body: CreateServerBody, volume_id: str) -> str
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"가상서버 생성 요청 실패: {e}" + _discard_volume(volume_id))
     return s["id"]
+
+
+_PIN_TTL = 300  # 초
+_pin_cache: dict[str, tuple[float, bool]] = {}
+
+
+def can_pin_host(project_id: str) -> bool:
+    """이 프로젝트로 VM 을 만들 때 노드 지정(hypervisor_hostname)이 허용되는지(5분 캐시).
+    Nova 정책(기본 admin 전용)은 API 로 조회할 수 없어, 없는 플레이버로 생성 요청을 보내 본다 — Nova 는 노드 지정 권한을
+    플레이버·이미지 확인보다 먼저 보므로 정책 거절(403)이면 권한 없음, 요청 내용 거절(400)이면 허용. 어느 쪽이든 만들어지는 것은 없다."""
+    hit = _pin_cache.get(project_id)
+    if hit and time.monotonic() - hit[0] < _PIN_TTL:
+        return hit[1]
+    probe = {"server": {"name": "okc-host-pin-check", "flavorRef": "okc-host-pin-check", "networks": "none",
+                        "hypervisor_hostname": "okc-host-pin-check"}}
+    try:
+        _nova_req("POST", "/servers", json=probe, project_id=project_id, microversion="2.90")
+        ok = True  # 이미지가 없어 성공할 수 없는 요청 — 오면 정책은 통과한 것
+    except RuntimeError as e:
+        if "requested_destination" in str(e):  # 정책 거절(403)
+            ok = False
+        elif '"badRequest"' in str(e):  # 정책 통과 뒤 요청 내용 거절(400)
+            ok = True
+        else:
+            raise  # 일시 오류 등 — 판정·캐시하지 않는다
+    _pin_cache[project_id] = (time.monotonic(), ok)
+    return ok
 
 
 @router.get("/servers/{server_id}/accelerator-requests", dependencies=[Depends(server_access)])

@@ -497,6 +497,8 @@ export interface ProvisionSpec {
   // external 망 직접 연결(Static IP) — fixedIp 없으면 자동 할당
   fixedIp?: string;
   securityGroups: string[];
+  // 배치할 컴퓨트 노드 — 노드 지정 권한(hostPinning)이 있을 때만, 없으면 스케줄러가 후보 중에서 고름
+  host?: string;
 }
 
 // 프로비저닝 결과
