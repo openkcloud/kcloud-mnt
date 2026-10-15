@@ -224,23 +224,24 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-// 사용자 희망 망 배지
-function NetworkWish({ r }: { r: ResourceRequest }) {
-  const internet = r.networkType === "external";
+// 망 종류 배지 — 외부(external) 망만 인터넷망
+function NetKindBadge({ internet }: { internet: boolean }) {
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <Badge variant="ghost" className={cn("gap-1", internet ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
-        {internet ? <Globe className="size-3" /> : <Wifi className="size-3" />}
-        {internet ? "인터넷망" : "내부망"}
-      </Badge>
-      {r.floatingIp && <Badge variant="success">공인 IP 희망</Badge>}
-    </span>
+    <Badge variant="ghost" className={cn("gap-1", internet ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
+      {internet ? <Globe className="size-3" /> : <Wifi className="size-3" />}
+      {internet ? "인터넷망" : "내부망"}
+    </Badge>
   );
 }
 
-function ipModeLabel(p: ProvisionSpec) {
-  if (p.networkKind === "external") return p.fixedIp ? `Static IP (직접 입력 ${p.fixedIp})` : "Static IP (자동 할당)";
-  return p.floatingNetworkName ? `Floating IP (${p.floatingNetworkName})` : "사설 IP만";
+// 사용자 희망 망 배지
+function NetworkWish({ r }: { r: ResourceRequest }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <NetKindBadge internet={r.networkType === "external"} />
+      {r.floatingIp && <Badge variant="success">공인 IP 희망</Badge>}
+    </span>
+  );
 }
 
 function RequestDetailBody({ r }: { r: ResourceRequest }) {
@@ -361,10 +362,21 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
           <div className="flex items-center gap-1.5 text-xs font-semibold">
             <Network className="size-3.5 text-sky-600" /> 할당 네트워크
           </div>
-          <Field label="네트워크"><span className="font-mono">{p.networkName}</span></Field>
-          <Field label="IP 방식">{ipModeLabel(p)}</Field>
+          <Field label="네트워크">
+            <span className="inline-flex items-center gap-1.5">
+              <NetKindBadge internet={p.networkKind === "external"} /><span className="font-mono">{p.networkName}</span>
+            </span>
+          </Field>
           <Field label="보안그룹"><span className="font-mono">{p.securityGroups.length ? p.securityGroups.join(", ") : "—"}</span></Field>
-          {r.result?.fixedIp && <Field label="고정 IP"><span className="font-mono">{r.result.fixedIp}</span></Field>}
+          {/* 받은 IP(완료 전이면 직접 입력한 IP) — 직접 입력이면 고정 IP, 아니면 DHCP 자동 할당 */}
+          {(r.result?.fixedIp ?? p.fixedIp) && (
+            <Field label="IP">
+              <span className="inline-flex items-center gap-1.5">
+                <Badge variant="secondary" className="text-[10px]">{p.fixedIp ? "고정 IP" : "DHCP"}</Badge>
+                <span className="font-mono">{r.result?.fixedIp ?? p.fixedIp}</span>
+              </span>
+            </Field>
+          )}
           {r.result?.floatingIp && <Field label="Floating IP"><span className="font-mono text-brand-mint-700">{r.result.floatingIp}</span></Field>}
         </div>
       )}
@@ -430,7 +442,7 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
 
   // 직접 입력 IP — '중복 확인' 버튼을 누른 IP 로 사용 여부 조회. 입력을 바꾸면 다시 확인해야 한다.
   const [checkedIp, setCheckedIp] = React.useState("");
-  const ipCheckReady = isExternal && ipManual && ipInRange && checkedIp === fixedIp;
+  const ipCheckReady = ipManual && ipInRange && checkedIp === fixedIp;
   const {
     data: ipCheck, isFetching: ipChecking, isError: ipCheckFailed, error: ipCheckError, refetch: recheckIp,
   } = useIpCheck(networkId, checkedIp, ipCheckReady);
@@ -443,9 +455,8 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
       networkId: net.id,
       networkName: net.name,
       networkKind: net.kind,
-      ...(isExternal
-        ? { fixedIp: ipManual ? fixedIp : undefined }
-        : fipOn && fipNet ? { floatingNetworkId: fipNet.id, floatingNetworkName: fipNet.name } : {}),
+      fixedIp: ipManual ? fixedIp : undefined, // 직접 입력 — 망 종류와 무관
+      ...(!isExternal && fipOn && fipNet ? { floatingNetworkId: fipNet.id, floatingNetworkName: fipNet.name } : {}),
       securityGroups: sgNames,
     });
   }, [net, isExternal, fipOn, fipNet, ipManual, fixedIp, ipValid, sgNames, onChange]);
@@ -497,8 +508,8 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
         {!netLoading && !netError && networks.length > 0 && !net && <p className="text-xs text-rose-500">네트워크를 선택하세요.</p>}
       </div>
 
-      {/* IP 방식 */}
-      {net && (isExternal ? (
+      {/* IP — 자동 할당(DHCP) 또는 직접 입력(고정 IP) */}
+      {net && (
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
             {[{ v: false, l: "자동 할당" }, { v: true, l: "직접 입력" }].map((o) => (
@@ -536,7 +547,9 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
               : <p className="text-xs text-rose-500">{ipCheck?.reason ?? "사용할 수 없는 IP입니다."}</p>
           )}
         </div>
-      ) : (
+      )}
+      {/* Floating IP — 내부·공유망만(외부망은 받은 IP 가 곧 공인 IP) */}
+      {net && !isExternal && (
         <div className="space-y-1.5">
           <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
             <input type="checkbox" checked={fipOn} onChange={(e) => setFipOn(e.target.checked)} className="size-3.5 accent-primary" />
@@ -551,7 +564,7 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
             </Select>
           )}
         </div>
-      ))}
+      )}
 
       {/* 보안그룹 */}
       <div className="space-y-1.5">
@@ -625,8 +638,10 @@ function QuotaBar({ label, q, add, unit }: { label: string; q: { quota: number; 
 
 // 배치·가용량 미리보기(관리자 승인 판단용) — 후보 노드(Placement, Nova 스케줄러와 같은 질의) + 프로젝트 쿼터. MNT-IAAS 라이브 조회.
 // 실제 노드는 스케줄러가 후보 중에서 정하므로 노드마다 탭으로 보여준다(처음엔 여유가 가장 큰 후보). 후보가 아닌 노드는 '불가'와 이유.
-// 노드 지정 권한이 있으면 고른 노드를 onPin 으로 알려 프로비저닝 때 넘긴다(권한이 없거나 못 읽으면 null → 스케줄러가 고름).
-function PlacementCapacity({ r, onPin }: { r: ResourceRequest; onPin: (node: PlacementPreview["nodes"][number] | null) => void }) {
+// onState 로 알린다 — ok: 프로비저닝해도 되는지(미리보기를 읽었고 프로젝트 쿼터를 넘지 않음),
+// pin: 노드 지정 권한이 있으면 고른 노드(프로비저닝 때 넘김, 권한이 없으면 null → 스케줄러가 고름).
+type PlacementState = { ok: boolean; pin: PlacementPreview["nodes"][number] | null };
+function PlacementCapacity({ r, onState }: { r: ResourceRequest; onState: (s: PlacementState) => void }) {
   const { data, isLoading, error } = usePlacementPreview(r.flavorId, r.projectId);
   const [host, setHost] = React.useState(r.provisionSpec?.host); // 재시도면 지난 회차에 고른 노드부터
   const addVcpu = r.vcpu ?? 0;
@@ -636,7 +651,17 @@ function PlacementCapacity({ r, onPin }: { r: ResourceRequest; onPin: (node: Pla
   const cur = data?.nodes.find((c) => c.host === host) ?? data?.nodes[0]; // 다시 조회해 빠진 노드면 첫 노드
   const candidates = data?.nodes.filter((c) => c.candidate) ?? [];
   const pinned = data?.hostPinning && cur ? cur : null;
-  React.useEffect(() => onPin(pinned), [pinned, onPin]);
+  // 프로젝트 쿼터 — 막대와 초과 판정이 같은 목록을 쓴다(무제한 -1 은 초과 없음)
+  const quotaRows = data?.quota ? [
+    { label: "vCPU", q: data.quota.vcpu, add: addVcpu, unit: "vCPU" },
+    { label: "메모리", q: data.quota.ramGb, add: addRamGb, unit: "GB" },
+    { label: "인스턴스", q: data.quota.instances, add: 1, unit: "개" },
+    { label: "볼륨 용량", q: data.quota.diskGb, add: bootGb, unit: "GB" },
+    { label: "볼륨 수", q: data.quota.volumes, add: 1, unit: "개" },
+  ] : [];
+  const quotaOver = quotaRows.filter((x) => x.q.quota >= 0 && x.q.used + x.add > x.q.quota).map((x) => x.label);
+  const ok = !!data && quotaOver.length === 0;
+  React.useEffect(() => onState({ ok, pin: pinned }), [ok, pinned, onState]);
   const accelShort = data?.accelerators.find((a) => a.free < a.count);
   const blocked = (c: PlacementPreview["nodes"][number]) => { // 후보가 아닌 이유 — 막대와 같은 기준
     const why = [
@@ -655,7 +680,7 @@ function PlacementCapacity({ r, onPin }: { r: ResourceRequest; onPin: (node: Pla
         <Server className="size-3.5 text-brand-indigo-600" /> 배치 · 가용량 미리보기
       </div>
       {isLoading ? <Skeleton className="h-24" /> : error ? (
-        <p className="text-xs text-rose-500">가용량을 불러오지 못했습니다 ({error.message}).</p>
+        <p className="text-xs text-rose-500">가용량을 불러오지 못했습니다 ({error.message}). 확인할 수 없어 프로비저닝할 수 없습니다.</p>
       ) : data && (
         <>
           <div className="flex items-center justify-between text-xs">
@@ -732,13 +757,15 @@ function PlacementCapacity({ r, onPin }: { r: ResourceRequest; onPin: (node: Pla
             <div className="text-[11px] font-semibold text-muted-foreground">프로젝트 쿼터</div>
             {data.quotaError ? (
               <p className="text-xs text-rose-500">쿼터를 불러오지 못했습니다 ({data.quotaError}).</p>
-            ) : data.quota && (
+            ) : (
               <>
-                <QuotaBar label="vCPU" q={data.quota.vcpu} add={addVcpu} unit="vCPU" />
-                <QuotaBar label="메모리" q={data.quota.ramGb} add={addRamGb} unit="GB" />
-                <QuotaBar label="인스턴스" q={data.quota.instances} add={1} unit="개" />
-                <QuotaBar label="볼륨 용량" q={data.quota.diskGb} add={bootGb} unit="GB" />
-                <QuotaBar label="볼륨 수" q={data.quota.volumes} add={1} unit="개" />
+                {quotaOver.length > 0 && (
+                  <p className="flex items-start gap-1 text-[11px] text-rose-600">
+                    <AlertCircle className="mt-px size-3.5 shrink-0" />
+                    프로젝트 쿼터({quotaOver.join(", ")})를 초과해 프로비저닝할 수 없습니다. 쿼터를 늘리거나 반려하세요.
+                  </p>
+                )}
+                {quotaRows.map((x) => <QuotaBar key={x.label} label={x.label} q={x.q} add={x.add} unit={x.unit} />)}
               </>
             )}
           </div>
@@ -1033,8 +1060,8 @@ function AdminView() {
   const [rejecting, setRejecting] = React.useState(false);
   const [rejectReason, setRejectReason] = React.useState("");
   const [spec, setSpec] = React.useState<ProvisionSpec | null>(null);
-  // 배치 노드 — 미리보기 탭에서 고른 노드(노드 지정 권한이 있을 때만, null 이면 스케줄러가 고름)
-  const [pinNode, setPinNode] = React.useState<PlacementPreview["nodes"][number] | null>(null);
+  // 배치·가용량 미리보기 — 읽었는지, 고른 노드(노드 지정 권한이 있을 때만, null 이면 스케줄러가 고름)
+  const [placement, setPlacement] = React.useState<PlacementState>({ ok: false, pin: null });
   // AI 워크스페이스 생성 시작 — 신청(또는 지난 회차) 한도로 채워 두고 조정할 수 있게 한다
   const [wsLimits, setWsLimits] = React.useState<WorkspaceLimitsInput | null>(null);
   const [sheetReq, setSheetReq] = React.useState<ResourceRequest | null>(null);
@@ -1046,7 +1073,7 @@ function AdminView() {
     setRejecting(mode === "reject");
     setRejectReason("");
     setSpec(null);
-    setPinNode(null);
+    setPlacement({ ok: false, pin: null });
     setWsLimits(r.type === "ai-workspace" ? toLimitsInput(limitsOf(r)) : null);
     setDetailOpen(true);
   }
@@ -1101,7 +1128,7 @@ function AdminView() {
         : await provisionMutation.mutateAsync({
             id: r.id,
             expectedStatus: r.status,
-            provisionSpec: { ...toProvisionBody(spec!), host: pinNode?.host },
+            provisionSpec: { ...toProvisionBody(spec!), host: placement.pin?.host },
           });
       setDetailOpen(false);
       toast.success(
@@ -1283,7 +1310,7 @@ function AdminView() {
             </DialogDescription>
           </DialogHeader>
           {detail && <RequestDetailBody r={detail} />}
-          {canProvisionVm && <PlacementCapacity key={`placement-${detail.id}`} r={detail} onPin={setPinNode} />}
+          {canProvisionVm && <PlacementCapacity key={`placement-${detail.id}`} r={detail} onState={setPlacement} />}
           {canProvisionVm && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
           {canProvisionWs && !rejecting && wsLimits && (
             <div className="space-y-2.5 rounded-xl border border-brand-indigo-200 bg-brand-indigo-50/30 p-3.5">
@@ -1338,7 +1365,7 @@ function AdminView() {
                       {provisionWsMutation.isPending ? "시작 중…" : detail.status === "failed" ? "재시도" : "생성 시작"}
                     </Button>
                   ) : (
-                    <Button onClick={provision} disabled={!spec || pinNode?.candidate === false || provisionMutation.isPending}>
+                    <Button onClick={provision} disabled={!spec || !placement.ok || placement.pin?.candidate === false || provisionMutation.isPending}>
                       {isFailedVm ? <RotateCcw className="size-3.5" /> : <Server className="size-3.5" />}
                       {provisionMutation.isPending ? "시작 중…" : isFailedVm ? "재시도" : "프로비저닝"}
                     </Button>

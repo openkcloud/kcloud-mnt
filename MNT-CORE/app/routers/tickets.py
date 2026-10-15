@@ -483,7 +483,7 @@ def review_ticket(ticket_id: str, body: ReviewBody, user: CurrentUser = Depends(
 class ProvisionSpecBody(BaseModel):
     networkId: str
     floatingNetworkId: str | None = None  # 내부·공유망 + Floating IP 일 때 FIP 풀(external 망)
-    fixedIp: str | None = None            # external 망 Static IP 직접 입력 (없으면 자동 할당)
+    fixedIp: str | None = None            # 고정 IP 직접 입력 — 모든 망 (없으면 DHCP 자동 할당)
     securityGroups: list[str] = []        # 보안그룹 이름 (프로젝트 라이브 조회 기준)
     host: str | None = None               # 배치할 컴퓨트 노드(미리보기에서 고름) — 노드 지정 권한이 있을 때만, 없으면 스케줄러
 
@@ -495,17 +495,15 @@ def _verified_provision_spec(project_id: str, flavor_id: str, spec: ProvisionSpe
     if not net:
         raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
     out = {"networkId": net["id"], "networkName": net["name"], "networkKind": net["kind"]}
+    if spec.fixedIp:  # 직접 입력(고정 IP) — 망 종류와 무관, 없으면 DHCP 자동 할당
+        chk = _iaas(f"/networks/{quote(net['id'], safe='')}/ip-check?ip={quote(spec.fixedIp, safe='')}", token)
+        if not chk["available"]:
+            raise HTTPException(409, f"Static IP {spec.fixedIp}: {chk['reason']}")
+        out["fixedIp"] = str(ipaddress.ip_address(spec.fixedIp))  # 정규화해서 저장
     if net["kind"] == "external":
         if spec.floatingNetworkId:
             raise HTTPException(400, "외부(external) 네트워크에는 Floating IP 를 함께 지정할 수 없습니다")
-        if spec.fixedIp:
-            chk = _iaas(f"/networks/{quote(net['id'], safe='')}/ip-check?ip={quote(spec.fixedIp, safe='')}", token)
-            if not chk["available"]:
-                raise HTTPException(409, f"Static IP {spec.fixedIp}: {chk['reason']}")
-            out["fixedIp"] = str(ipaddress.ip_address(spec.fixedIp))  # 정규화해서 저장
     else:
-        if spec.fixedIp:
-            raise HTTPException(400, "Static IP 는 외부(external) 네트워크에서만 지정할 수 있습니다")
         if spec.floatingNetworkId:
             fip = nets.get(spec.floatingNetworkId)
             if not fip or fip["kind"] != "external":
