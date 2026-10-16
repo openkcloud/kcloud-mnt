@@ -717,8 +717,10 @@ def provision_ai_workspace_ticket(ticket_id: str, body: ProvisionAiWorkspaceBody
 def ticket_steps(ticket_id: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     """프로비저닝 진행(현재 회차) — 단계 5개와 상세 단계. 이름은 공통코드.
     현재 회차는 티켓의 workflow_id(vm-provision-{신청ID}-{회차})로 정한다 — 재시도 직후 새 회차 단계가 등록되기 전에는
-    빈 목록을 돌려준다(가장 큰 회차로 고르면 그 사이 이전 회차 기록이 보인다)."""
-    t = db.execute(text("SELECT status, result, error_message, workflow_id, requested_by FROM tkt_request WHERE id = :id"),
+    빈 목록을 돌려준다(가장 큰 회차로 고르면 그 사이 이전 회차 기록이 보인다).
+    now = 이 응답을 읽기 시작한 DB 시각 — 단계 시각(DB now())과 같은 시계라 화면이 진행 중 시간을 서버 기준으로 그린다."""
+    t = db.execute(text("""SELECT status, result, error_message, workflow_id, requested_by, clock_timestamp() AS now
+                             FROM tkt_request WHERE id = :id"""),
                    {"id": ticket_id}).mappings().first()
     if t is None or not (user.is_admin or t["requested_by"] == user.id):  # 남의 신청은 없는 것처럼
         raise HTTPException(404, "신청을 찾을 수 없습니다")
@@ -735,7 +737,7 @@ def ticket_steps(ticket_id: str, user: CurrentUser = Depends(current_user), db: 
         {"id": ticket_id, "a": attempt},
     ).mappings().all()
     subs = db.execute(
-        text("""SELECT ss.step_id, ss.substep_code, c.name, ss.value, ss.status
+        text("""SELECT ss.step_id, ss.substep_code, c.name, ss.value, ss.status, ss.started_at, ss.ended_at
                   FROM tkt_provision_substep ss
                   JOIN cmn_code c ON c.group_code = ss.substep_group_code AND c.code = ss.substep_code
                  WHERE ss.step_id = ANY(:ids)
@@ -744,13 +746,15 @@ def ticket_steps(ticket_id: str, user: CurrentUser = Depends(current_user), db: 
     ).mappings().all()
     return {
         "status": t["status"],
+        "now": _iso(t["now"]),
         "attempt": attempt,
         "errorMessage": t["error_message"],
         "result": t["result"],
         "items": [{
             "seq": s["seq"], "code": s["step_code"], "message": s["name"], "status": s["status"],
             "startedAt": _iso(s["started_at"]), "endedAt": _iso(s["ended_at"]), "error": s["error_message"],
-            "details": [{"code": d["substep_code"], "label": d["name"], "value": d["value"], "status": d["status"]}
+            "details": [{"code": d["substep_code"], "label": d["name"], "value": d["value"], "status": d["status"],
+                         "startedAt": _iso(d["started_at"]), "endedAt": _iso(d["ended_at"])}
                         for d in subs if d["step_id"] == s["id"]],
         } for s in steps],
     }
