@@ -123,8 +123,8 @@ export default function ClustersPage() {
               <TableHead>클러스터</TableHead>
               <TableHead>상태</TableHead>
               <TableHead>K8s 버전</TableHead>
-              <TableHead>노드(마스터+워커)</TableHead>
-              <TableHead>워커 사양</TableHead>
+              <TableHead>노드(Control Plane+Worker)</TableHead>
+              <TableHead>Worker 사양</TableHead>
               <TableHead>생성일</TableHead>
               <TableHead className="w-16" />
             </TableRow>
@@ -277,7 +277,7 @@ function ClusterDetailDialog({ id, isAdmin, onClose }: { id: string; isAdmin: bo
                       <TableRow key={g.id}>
                         <TableCell className="text-xs font-medium">{g.name}</TableCell>
                         <TableCell>
-                          <Badge variant={g.role === "master" ? "secondary" : "outline"} className="text-[10px]">{g.role}</Badge>
+                          <Badge variant={g.role === "master" ? "secondary" : "outline"} className="text-[10px]">{g.role === "master" ? "Control Plane" : g.role === "worker" ? "Worker" : g.role}</Badge>
                         </TableCell>
                         <TableCell className="font-mono text-xs">{g.nodeCount}</TableCell>
                         <TableCell className="font-mono text-xs">{g.flavorId}</TableCell>
