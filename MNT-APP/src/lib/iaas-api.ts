@@ -715,6 +715,32 @@ export function useDeleteDeviceProfile() {
   });
 }
 
+// Nova keypair(클러스터 노드 SSH·인프라, 관리자). 사용자 포털 DB SSH키와 별개 자원.
+export interface NovaKeypair { name: string; fingerprint: string; publicKey: string; type: string }
+export function useNovaKeypairs() {
+  return useQuery({
+    queryKey: ["iaas-nova-keypairs"],
+    queryFn: async (): Promise<NovaKeypair[]> =>
+      (await fetchJson<{ items: NovaKeypair[] }>(`${IAAS_BASE}/api/iaas/keypairs`)).items,
+    staleTime: 60 * 1000, retry: 0,
+  });
+}
+export function useImportNovaKeypair() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; publicKey: string }) =>
+      postJson<NovaKeypair>(`${IAAS_BASE}/api/iaas/keypairs`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-nova-keypairs"] }),
+  });
+}
+export function useDeleteNovaKeypair() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/keypairs/${encodeURIComponent(name)}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-nova-keypairs"] }),
+  });
+}
+
 // 가속기 장치 현황(Cyborg 5-2) — 물리 장치 인벤토리 + 사용 상태(조회 전용)
 export interface AcceleratorDevice {
   id: number | string | null;
