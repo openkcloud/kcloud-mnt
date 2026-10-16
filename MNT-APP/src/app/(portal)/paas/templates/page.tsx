@@ -27,7 +27,7 @@ import {
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useAuth } from "@/lib/auth";
-import { useImages, useFlavors, useNetworks } from "@/lib/iaas-api";
+import { useImages, useFlavors, useNetworks, useNetwork } from "@/lib/iaas-api";
 import {
   useClusterTemplates, useCreateTemplate, useUpdateTemplate, useDeleteTemplate,
   type ClusterTemplate, type ClusterTemplateInput,
@@ -78,8 +78,7 @@ export default function TemplatesPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>템플릿</TableHead>
-                <TableHead>COE</TableHead>
-                <TableHead>플레이버(워커/마스터)</TableHead>
+                <TableHead>플레이버(Worker / Control Plane)</TableHead>
                 <TableHead>네트워크</TableHead>
                 <TableHead>공개</TableHead>
                 <TableHead>LB/FIP</TableHead>
@@ -95,8 +94,7 @@ export default function TemplatesPage() {
                       <span className="max-w-[240px] truncate font-mono text-sm font-semibold">{t.name}</span>
                     </div>
                   </TableCell>
-                  <TableCell><Badge variant="outline" className="text-[10px]">{t.coe}</Badge></TableCell>
-                  <TableCell className="font-mono text-xs">{t.flavor_id || "—"}{t.master_flavor_id && t.master_flavor_id !== t.flavor_id ? ` / ${t.master_flavor_id}` : ""}</TableCell>
+                  <TableCell className="font-mono text-xs">{t.flavor_id || "—"} / {t.master_flavor_id || t.flavor_id || "—"}</TableCell>
                   <TableCell className="font-mono text-xs">{t.external_network_id || "—"}</TableCell>
                   <TableCell>{t.public ? <Badge variant="success" className="text-[10px]">public</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
                   <TableCell className="font-mono text-[11px] text-muted-foreground">
@@ -112,7 +110,7 @@ export default function TemplatesPage() {
                 </TableRow>
               ))}
               {items.length === 0 && (
-                <TableRow><TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">템플릿이 없습니다.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">템플릿이 없습니다.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
@@ -206,31 +204,15 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
           </TabsContent>
 
           <TabsContent value="node" className="space-y-3 pt-3">
-            <Field label="워커 플레이버">
+            <Field label="Worker 플레이버">
               <DropSelect value={f.flavor_id ?? ""} onChange={(v) => set("flavor_id", v)} placeholder="플레이버 선택"
                 options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
             </Field>
-            <Field label="마스터 플레이버">
+            <Field label="Control Plane 플레이버">
               <DropSelect value={f.master_flavor_id ?? ""} onChange={(v) => set("master_flavor_id", v)} placeholder="플레이버 선택"
                 options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
             </Field>
             <Field label="키페어"><Input value={f.keypair_id ?? ""} onChange={(e) => set("keypair_id", e.target.value)} placeholder="my-key" className="font-mono text-xs" /></Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="볼륨 드라이버">
-                <Select value={f.volume_driver || "none"} onValueChange={(v) => set("volume_driver", v === "none" ? "" : v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">없음</SelectItem>
-                    <SelectItem value="cinder">cinder</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="도커 볼륨 크기(GB, 0=없음)">
-                <Input type="number" min={0} value={f.docker_volume_size ?? 0}
-                  onChange={(e) => set("docker_volume_size", Number(e.target.value) || null)} />
-              </Field>
-            </div>
-            <Field label="Docker 스토리지 드라이버"><Input value={f.docker_storage_driver ?? ""} onChange={(e) => set("docker_storage_driver", e.target.value)} className="font-mono text-xs" /></Field>
           </TabsContent>
 
           <TabsContent value="network" className="space-y-3 pt-3">
@@ -240,8 +222,15 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
             </Field>
             <Field label="네트워크 드라이버"><Input value={f.network_driver ?? ""} onChange={(e) => set("network_driver", e.target.value)} className="font-mono text-xs" placeholder="calico" /></Field>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="고정 네트워크(선택)"><Input value={f.fixed_network ?? ""} onChange={(e) => set("fixed_network", e.target.value)} className="font-mono text-xs" placeholder="네트워크 ID/이름" /></Field>
-              <Field label="고정 서브넷(선택)"><Input value={f.fixed_subnet ?? ""} onChange={(e) => set("fixed_subnet", e.target.value)} className="font-mono text-xs" placeholder="서브넷 ID/이름" /></Field>
+              <Field label="고정 네트워크(선택)">
+                <DropSelect value={f.fixed_network ?? ""} onChange={(v) => { set("fixed_network", v); set("fixed_subnet", ""); }} placeholder="네트워크 선택"
+                  options={(networks.data?.items ?? []).map((n) => ({ value: n.name, label: n.name }))} />
+              </Field>
+              <Field label="고정 서브넷(선택)">
+                <FixedSubnetSelect
+                  networkId={(networks.data?.items ?? []).find((n) => n.name === f.fixed_network)?.id}
+                  value={f.fixed_subnet ?? ""} onChange={(v) => set("fixed_subnet", v)} />
+              </Field>
             </div>
             <Field label="DNS"><Input value={f.dns_nameserver ?? ""} onChange={(e) => set("dns_nameserver", e.target.value)} className="font-mono text-xs" placeholder="8.8.8.8" /></Field>
             <div className="flex items-center gap-6">
@@ -292,5 +281,14 @@ function DropSelect({ value, onChange, options, placeholder }: { value: string; 
         {options.map((o) => <SelectItem key={o.value} value={o.value} className="font-mono text-xs">{o.label}</SelectItem>)}
       </SelectContent>
     </Select>
+  );
+}
+// 고정 서브넷 — 선택한 고정 네트워크의 상세(서브넷 목록)를 받아 드롭다운. 네트워크 미선택 시 비활성.
+function FixedSubnetSelect({ networkId, value, onChange }: { networkId: string | undefined; value: string; onChange: (v: string) => void }) {
+  const net = useNetwork(networkId);
+  const subnets = net.data?.subnets ?? [];
+  return (
+    <DropSelect value={value} onChange={onChange} placeholder={networkId ? "서브넷 선택" : "네트워크 먼저 선택"}
+      options={subnets.map((s) => ({ value: s.name, label: `${s.name} (${s.cidr})` }))} />
   );
 }
