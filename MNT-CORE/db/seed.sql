@@ -200,7 +200,8 @@ FROM (VALUES
     ('admin', 'iaas.networks',     NULL, NULL),
     ('admin', 'iaas.routers',      NULL, NULL),
     ('admin', 'iaas.secgroups',    NULL, NULL),
-    -- 키페어는 사용자 전용(관리자 메뉴 아님) — user 매핑만 둔다
+    -- 키페어: user=포털 DB SSH키, admin=Nova 키페어(같은 메뉴, 화면에서 역할 분기)
+    ('admin', 'iaas.keypairs',     NULL, NULL),
     ('admin', 'iaas.volumes',      NULL, NULL),
     ('admin', 'iaas.images',       NULL, NULL),
     ('admin', 'iaas.flavors',      NULL, NULL),
