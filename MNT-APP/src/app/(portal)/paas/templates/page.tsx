@@ -27,7 +27,7 @@ import {
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useAuth } from "@/lib/auth";
-import { useImages, useFlavors, useNetworks, useNetwork } from "@/lib/iaas-api";
+import { useImages, useFlavors, useNetworks, useNetwork, useNovaKeypairs } from "@/lib/iaas-api";
 import {
   useClusterTemplates, useCreateTemplate, useUpdateTemplate, useDeleteTemplate,
   type ClusterTemplate, type ClusterTemplateInput,
@@ -129,6 +129,7 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
   const images = useImages();
   const flavors = useFlavors();
   const networks = useNetworks();
+  const keypairs = useNovaKeypairs();
 
   // base 에 id 가 있고 updatedAt 등이 있으면 '수정', 복제는 id 가 있어도 이름이 -copy → 생성으로.
   const isCopy = !!base && base.name.endsWith("-copy");
@@ -212,7 +213,10 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
               <DropSelect value={f.flavor_id ?? ""} onChange={(v) => set("flavor_id", v)} placeholder="플레이버 선택"
                 options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
             </Field>
-            <Field label="키페어"><Input value={f.keypair_id ?? ""} onChange={(e) => set("keypair_id", e.target.value)} placeholder="my-key" className="font-mono text-xs" /></Field>
+            <Field label="키페어(선택)">
+              <DropSelect value={f.keypair_id ?? ""} onChange={(v) => set("keypair_id", v)} placeholder="Nova 키페어 선택(비우면 노드 SSH 미설정)"
+                options={(keypairs.data ?? []).map((k) => ({ value: k.name, label: k.name }))} />
+            </Field>
           </TabsContent>
 
           <TabsContent value="network" className="space-y-3 pt-3">
