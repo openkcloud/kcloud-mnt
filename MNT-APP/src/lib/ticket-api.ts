@@ -158,12 +158,17 @@ export function useProvisionAiWorkspaceTicket() {
   });
 }
 
-/** 프로비저닝 진행(최신 회차 단계·상세 단계) — 생성 중이면 2초마다 다시 조회. */
+/** 프로비저닝 진행(최신 회차 단계·상세 단계) — 생성 중이면 1초마다 다시 조회.
+ *  receivedAt = 응답을 받은 순간(performance.now) — now(DB 시각)와 짝지어 지금의 서버 시각을 추정한다. */
 export function useTicketSteps(id: string | undefined) {
   return useQuery({
     queryKey: ["tickets", "steps", id],
     enabled: !!id,
-    queryFn: () => coreFetch<ProvisionStepsResp>(`/tickets/${encodeURIComponent(id!)}/steps`),
-    refetchInterval: (query) => (query.state.data?.status === "provisioning" ? 2000 : false),
+    queryFn: async () => {
+      const r = await coreFetch<ProvisionStepsResp>(`/tickets/${encodeURIComponent(id!)}/steps`);
+      // now 를 주기 전 CORE 면 PC 시각으로 대신한다(배포 순서가 엇갈린 동안)
+      return { ...r, now: r.now ?? new Date().toISOString(), receivedAt: performance.now() };
+    },
+    refetchInterval: (query) => (query.state.data?.status === "provisioning" ? 1000 : false),
   });
 }

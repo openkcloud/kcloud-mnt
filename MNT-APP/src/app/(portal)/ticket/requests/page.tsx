@@ -64,7 +64,7 @@ import {
 } from "@/components/workspace-requests";
 import { accKindClass, cn, formatDateTime } from "@/lib/utils";
 import type {
-  ProvisionSpec, ProvisionStep, ProvStepStatus, ResourceRequest, RequestStatus, RequestType,
+  ProvisionSpec, ProvisionStep, ProvisionStepsResp, ProvStepStatus, ResourceRequest, RequestStatus, RequestType,
 } from "@/lib/types";
 
 // ── 상태 표시 ──
@@ -780,10 +780,53 @@ function fmtSec(ms: number) {
   return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
 }
 
-function stepDurationMs(s: ProvisionStep) {
-  if (!s.startedAt) return undefined;
-  const end = s.endedAt ? Date.parse(s.endedAt) : Date.now();
-  return end - Date.parse(s.startedAt);
+/** 보이는 단계의 소요 시간 — 끝났으면 기록된 시각끼리, 진행 중이면 화면 시계(t)까지. */
+function stepDurationMs(s: ProvisionStep, t: number) {
+  if (!s.startedAt || s.status === "waiting") return undefined;
+  const end = s.status === "running" ? t : s.endedAt ? Date.parse(s.endedAt) : NaN;
+  return Number.isFinite(end) ? end - Date.parse(s.startedAt) : undefined;
+}
+
+// 진행 중엔 서버 시각보다 1.5초 늦게 그린다 — 조회(1초)가 먼저 와 있어, 끝난 단계를 모른 채 시간을 더 세다 되돌아가지 않게
+const LIVE_DELAY_MS = 1500;
+
+type StepsData = ProvisionStepsResp & { receivedAt: number };
+
+/** 화면 시계 t 에서 보이는 상태 — 기록된 시작·종료 시각으로 정한다(Infinity 면 기록 그대로). */
+function shownStatus(x: { status: ProvStepStatus; startedAt?: string; endedAt?: string }, t: number): ProvStepStatus {
+  if (t === Infinity || x.status === "waiting" || x.status === "skipped" || !x.startedAt) return x.status;
+  if (Date.parse(x.startedAt) > t) return "waiting";
+  return x.endedAt && Date.parse(x.endedAt) <= t ? x.status : "running";
+}
+
+/** 진행 창의 화면 시계(서버 시각, ms) — 진행 중에만 서버 시각보다 LIVE_DELAY_MS 늦게 따라간다.
+ *  서버가 확인해 준 시각(응답의 now)을 넘지 않고(응답이 늦으면 잠깐 멈춤), 뒤로 가지 않는다.
+ *  끝난 신청을 열었거나 끝난 뒤 다 따라잡으면 Infinity — 기록된 값을 그대로 보여 준다. */
+function useShownClock(data: StepsData | undefined) {
+  const [clock, setClock] = React.useState<{ attempt?: number; t: number }>({ t: Infinity });
+  const live = data?.status === "provisioning";
+  const following = live || Number.isFinite(clock.t);
+  React.useEffect(() => {
+    if (!data || !following) return;
+    const horizon = Date.parse(data.now);
+    const times = data.items.flatMap((s) => [s, ...s.details]).flatMap((x) => [x.startedAt, x.endedAt]);
+    const lastEvent = Math.max(-Infinity, ...times.filter((v): v is string => !!v).map(Date.parse));
+    const tick = () => setClock((c) => {
+      const target = Math.min(horizon + (performance.now() - data.receivedAt) - LIVE_DELAY_MS, horizon);
+      const fresh = c.attempt !== data.attempt || !Number.isFinite(c.t);  // 새로 진행 중 — 지금부터 따라간다
+      const t = fresh ? target : Math.max(c.t, target);
+      return { attempt: data.attempt, t: !live && t >= lastEvent ? Infinity : t };  // 끝났고 다 따라잡음
+    });
+    const id = window.setInterval(tick, 100);
+    const first = window.requestAnimationFrame(tick);
+    return () => {
+      window.clearInterval(id);
+      window.cancelAnimationFrame(first);
+    };
+  }, [data, following, live]);
+  // 진행 중인데 아직 따라가기 전(첫 응답 직후 한 번) — 응답 기준 시각으로 그려 앞선 상태가 비치지 않게
+  if (live && (clock.attempt !== data.attempt || !Number.isFinite(clock.t))) return Date.parse(data.now) - LIVE_DELAY_MS;
+  return clock.t;
 }
 
 function StepIcon({ status }: { status: ProvStepStatus }) {
@@ -811,9 +854,24 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
   const retryWs = useProvisionAiWorkspaceTicket();
   const user = useAuth((s) => s.user);
   const retrying = isWs ? retryWs : retry;
-  const steps = data?.items ?? [];
+  const t = useShownClock(data);
+  // 화면 시계 기준으로 보이는 단계 — 아직 오지 않은 시각의 값·오류는 감춘다
+  const steps = (data?.items ?? []).map((s) => {
+    const st = shownStatus(s, t);
+    return {
+      ...s,
+      status: st,
+      error: st === "failed" ? s.error : undefined,
+      details: s.details.map((d) => {
+        const ds = shownStatus(d, t);
+        return { ...d, status: ds, value: ds === d.status ? d.value : undefined };
+      }),
+    };
+  });
   // 재시도 직후 새 기록을 받기 전에는 '생성 중'으로 본다(진행 기록을 비웠으므로 이전 실패 화면을 보여 주지 않는다)
-  const status = data?.status ?? (retrying.isSuccess ? "provisioning" : req?.status);
+  const serverStatus = data?.status ?? (retrying.isSuccess ? "provisioning" : req?.status);
+  // 화면 시계가 따라가는 동안은 끝났어도 '생성 중' — 마지막 단계가 보이게 끝난 뒤 완료·실패로
+  const status = Number.isFinite(t) ? "provisioning" : serverStatus;
   const attempt = data?.attempt ?? 1;
   const done = status === "completed";
   const failed = status === "failed";
@@ -835,8 +893,8 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
 
   // 상태가 바뀌면 목록도 갱신
   React.useEffect(() => {
-    if (status) qc.invalidateQueries({ queryKey: ["tickets", "list"] });
-  }, [status, qc]);
+    if (serverStatus) qc.invalidateQueries({ queryKey: ["tickets", "list"] });
+  }, [serverStatus, qc]);
 
   // 재시도 — 이전 승인 설정 그대로 새 회차로 처음부터(실패한 회차의 자원은 이미 정리됨)
   function handleRetry() {
@@ -913,7 +971,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
           )}
           {steps.map((s) => {
             const expanded = isOpen(s);
-            const dur = stepDurationMs(s);
+            const dur = stepDurationMs(s, t);
             const muted = s.status === "waiting" || s.status === "skipped";
             return (
               <div key={s.seq} className={cn("rounded-lg px-2 py-2.5", s.status === "running" && "bg-secondary/40", s.status === "failed" && "bg-rose-50/60")}>
@@ -930,7 +988,8 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
                     <span className="block font-mono text-[11px] text-muted-foreground/70">{s.code}</span>
                   </span>
                   <span className="mt-0.5 flex shrink-0 items-center gap-2 font-mono text-xs text-muted-foreground tabular-nums">
-                    {s.status === "skipped" ? "건너뜀" : dur !== undefined && fmtSec(dur)}
+                    {/* 0.0s 로 보일 값 — 상태 확인(1초) 사이에 끝나 따로 잡히지 않았거나 아주 짧게 끝난 단계 */}
+                    {s.status === "skipped" ? "건너뜀" : dur !== undefined && (s.status !== "running" && dur < 50 ? "1초 미만" : fmtSec(dur))}
                     <ChevronDown className={cn("size-4 transition-transform", expanded && "rotate-180")} />
                   </span>
                 </button>
