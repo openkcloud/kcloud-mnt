@@ -204,3 +204,9 @@ body {
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+/* 토스트 — 모달(Radix Dialog·Sheet)이 열려도 누를 수 있게. 모달은 body 에 pointer-events:none 을 건다.
+   토스트 클릭을 창 바깥 클릭으로 보지 않는 처리는 ui/dialog·ui/sheet(isToastEvent) */
+[data-sonner-toaster] {
+  pointer-events: auto;
+}
