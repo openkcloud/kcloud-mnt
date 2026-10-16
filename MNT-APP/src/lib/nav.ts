@@ -85,7 +85,7 @@ const SECTION_CLOUD: NavSection = {
         { label: "가상서버", href: "/iaas/instances", icon: Server },
         // 네트워크·라우터·보안그룹은 /iaas/networks 안의 탭으로 통합(라우터·SG는 네트워크 하위가 아닌 프로젝트 자원이라 한 영역에서 관리)
         { label: "네트워크", href: "/iaas/networks", icon: Network, match: ["/iaas/routers", "/iaas/security-groups"] },
-        { label: "키페어", href: "/iaas/keypairs", icon: KeyRound, roles: ["user"] as Role[] },
+        { label: "키페어", href: "/iaas/keypairs", icon: KeyRound },
         { label: "볼륨·스토리지", href: "/iaas/volumes", icon: HardDrive },
         { label: "이미지", href: "/iaas/images", icon: Disc, roles: ["admin"] as Role[] },
         { label: "플레이버", href: "/iaas/flavors", icon: Cpu, roles: ["admin"] as Role[] },
