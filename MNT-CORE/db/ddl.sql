@@ -107,6 +107,22 @@ CREATE TABLE iam_project_member (
 );
 COMMENT ON TABLE iam_project_member IS '프로젝트-사용자 멤버십(포털). project_id=OpenStack UUID, role=포털 역할(OpenStack과 별개)';
 
+-- ── PaaS 서비스 클러스터 접근 권한 (프로젝트 ↔ 클러스터 N:N) ──────
+-- 서비스 클러스터는 인프라상 OpenStack 프로젝트 1개 소유(Magnum project_id)지만,
+-- 포털에선 여러 프로젝트에 "볼 권한"을 부여한다(소유 ≠ 사용권한). 가시성은 이 매핑으로 필터한다.
+-- namespace = NULL 이면 클러스터 전체(전용), 값이 있으면 그 네임스페이스만(공유) — 내부 격리용(2단계).
+CREATE TABLE paas_project_cluster (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    project_id VARCHAR(64) NOT NULL,                       -- OpenStack 프로젝트 UUID(불변 키). 표시명은 조인으로
+    cluster_id VARCHAR(64) NOT NULL,                       -- Magnum 클러스터 UUID
+    namespace  VARCHAR(253),                               -- NULL=클러스터 전체(전용), 값=그 네임스페이스만(공유)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (project_id, cluster_id, namespace)
+);
+CREATE INDEX idx_paas_project_cluster_cluster ON paas_project_cluster (cluster_id);
+CREATE INDEX idx_paas_project_cluster_project ON paas_project_cluster (project_id);
+COMMENT ON TABLE paas_project_cluster IS 'PaaS 서비스 클러스터 접근 권한(프로젝트↔클러스터 N:N). namespace NULL=전용, 값=공유 네임스페이스';
+
 -- ── 메뉴 (계층형: 섹션 → 메뉴 → 서브메뉴) ────────────────────────
 -- 프론트 nav.ts 의 정적 정의를 DB 원장으로. 같은 path 라도 배치가 다르면
 -- 별도 행이다(예: /iaas/networks 는 사용자 IaaS 하위와 관리자 구성 섹션에 각각 존재).
