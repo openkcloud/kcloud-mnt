@@ -5,7 +5,8 @@
  * 레이아웃·폰트는 IaaS 목록 화면 규약(툴바 Card + 테이블 Card, font-mono 셀)과 동일.
  */
 import * as React from "react";
-import { Boxes, Download, Search, Loader2 } from "lucide-react";
+import { Boxes, Download, Search, Loader2, Plus, Trash2, Users } from "lucide-react";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,11 +21,14 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useProjects, useFlavors } from "@/lib/iaas-api";
 import { useClusters, useCluster, kubeconfigUrl, type ClusterSummary } from "@/lib/paas-api";
 import { useAuth } from "@/lib/auth";
-import { useMyProjectIds } from "@/lib/member-api";
+import {
+  useMyClusterIds, useClusterAccess, useGrantClusterAccess, useRevokeClusterAccess, type ClusterAccess,
+} from "@/lib/member-api";
 
 /** Magnum 상태 → 배지 톤. *_IN_PROGRESS 는 진행 중(폴링 대상). */
 function stVariant(s: string): "success" | "warning" | "destructive" | "secondary" {
@@ -45,7 +49,8 @@ function fmtDateTime(iso?: string | null) {
 export default function ClustersPage() {
   const isAdmin = useAuth((s) => s.user?.role === "admin");
   const myUsername = useAuth((s) => s.user?.username);
-  const { data: myProjectIds } = useMyProjectIds(isAdmin ? undefined : myUsername);
+  // 가시성 = 포털 DB 매핑(paas_project_cluster) 기준. 관리자는 전체, 사용자는 내 프로젝트에 부여된 클러스터만.
+  const { data: myClusterIds } = useMyClusterIds(isAdmin ? undefined : myUsername);
   const clusters = useClusters();
   const projects = useProjects();
   const flavors = useFlavors();
@@ -66,10 +71,10 @@ export default function ClustersPage() {
     return m;
   }, [flavors.data]);
 
-  // 내가 볼 수 있는 클러스터 = 관리자 전체 / 사용자는 내 프로젝트 멤버십에 속한 것만
+  // 내가 볼 수 있는 클러스터 = 관리자 전체 / 사용자는 내 프로젝트에 접근 부여된 클러스터만(DB 매핑)
   const visible = React.useMemo(
-    () => (clusters.data ?? []).filter((c) => isAdmin || myProjectIds?.has(c.projectId)),
-    [clusters.data, isAdmin, myProjectIds],
+    () => (clusters.data ?? []).filter((c) => isAdmin || myClusterIds?.has(c.id)),
+    [clusters.data, isAdmin, myClusterIds],
   );
 
   // 드롭다운 옵션은 '프로젝트 목록(실이름)'에서 — UUID 가 라벨로 새지 않도록.
@@ -152,7 +157,7 @@ export default function ClustersPage() {
         </Table>
       </Card>
 
-      {detailId && <ClusterDetailDialog id={detailId} onClose={() => setDetailId(null)} />}
+      {detailId && <ClusterDetailDialog id={detailId} isAdmin={isAdmin} onClose={() => setDetailId(null)} />}
     </div>
   );
 }
@@ -205,7 +210,7 @@ function ClusterRow({
   );
 }
 
-function ClusterDetailDialog({ id, onClose }: { id: string; onClose: () => void }) {
+function ClusterDetailDialog({ id, isAdmin, onClose }: { id: string; isAdmin: boolean; onClose: () => void }) {
   const { data: d, isLoading, isError } = useCluster(id);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -287,6 +292,8 @@ function ClusterDetailDialog({ id, onClose }: { id: string; onClose: () => void 
               </Card>
             </div>
 
+            {isAdmin && <ClusterAccessSection clusterId={d.id} />}
+
             <div className="flex justify-end">
               {d.apiAddress ? (
                 <Button asChild size="sm">
@@ -304,6 +311,96 @@ function ClusterDetailDialog({ id, onClose }: { id: string; onClose: () => void 
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ── 접근 프로젝트 관리(관리자 전용) — 이 클러스터를 어떤 프로젝트가 볼 수 있나(paas_project_cluster) ──
+function ClusterAccessSection({ clusterId }: { clusterId: string }) {
+  const access = useClusterAccess(clusterId);
+  const projects = useProjects();
+  const grant = useGrantClusterAccess(clusterId);
+  const revoke = useRevokeClusterAccess(clusterId);
+  const confirm = useConfirm();
+  const [projectId, setProjectId] = React.useState("");
+  const [namespace, setNamespace] = React.useState("");
+
+  const projName = (id: string) => (projects.data?.items ?? []).find((p) => p.id === id)?.name || id;
+  // 이미 (전체 접근으로) 부여된 프로젝트는 picker 에서 제외
+  const granted = new Set((access.data ?? []).filter((a) => !a.namespace).map((a) => a.projectId));
+  const options = (projects.data?.items ?? []).filter((p) => !granted.has(p.id));
+
+  function add() {
+    if (!projectId) return toast.error("프로젝트를 선택하세요");
+    grant.mutate(
+      { projectId, namespace: namespace.trim() || undefined },
+      {
+        onSuccess: () => { toast.success("접근 권한 부여됨"); setProjectId(""); setNamespace(""); },
+        onError: (e) => toast.error("부여 실패", { description: String((e as Error).message) }),
+      },
+    );
+  }
+  async function remove(a: ClusterAccess) {
+    if (!(await confirm({
+      title: "접근 권한 회수", destructive: true, confirmLabel: "회수",
+      description: `${projName(a.projectId)}${a.namespace ? ` (네임스페이스 ${a.namespace})` : ""} 의 이 클러스터 접근을 회수할까요? 해당 프로젝트 사용자는 더 이상 이 클러스터를 보지 못합니다.`,
+    }))) return;
+    revoke.mutate({ projectId: a.projectId, namespace: a.namespace ?? undefined }, {
+      onSuccess: () => toast.success("회수됨"),
+      onError: (e) => toast.error("회수 실패", { description: String((e as Error).message) }),
+    });
+  }
+
+  return (
+    <div className="min-w-0">
+      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Users className="size-3.5" /> 접근 프로젝트 <span className="font-normal">— 이 클러스터를 볼 수 있는 프로젝트(관리자 설정)</span>
+      </div>
+      <Card className="space-y-3 p-3">
+        {/* 추가 */}
+        <div className="flex items-end gap-2">
+          <div className="min-w-0 flex-1 space-y-1">
+            <label className="text-[11px] text-muted-foreground">프로젝트</label>
+            <Select value={projectId} onValueChange={setProjectId}>
+              <SelectTrigger><SelectValue placeholder="프로젝트 선택" /></SelectTrigger>
+              <SelectContent>
+                {options.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="w-44 space-y-1">
+            <label className="text-[11px] text-muted-foreground">네임스페이스(선택·공유 시)</label>
+            <Input value={namespace} onChange={(e) => setNamespace(e.target.value)} placeholder="비우면 전체" className="font-mono text-xs" />
+          </div>
+          <Button size="sm" onClick={add} disabled={grant.isPending || !projectId}>
+            {grant.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} 추가
+          </Button>
+        </div>
+        {/* 목록 */}
+        <Table>
+          <TableHeader>
+            <TableRow className="[&>th]:whitespace-nowrap">
+              <TableHead>프로젝트</TableHead><TableHead>네임스페이스</TableHead><TableHead className="w-12" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(access.data ?? []).map((a) => (
+              <TableRow key={`${a.projectId}:${a.namespace ?? ""}`}>
+                <TableCell className="text-sm">{projName(a.projectId)}</TableCell>
+                <TableCell className="font-mono text-[11px] text-muted-foreground">{a.namespace || "전체(전용)"}</TableCell>
+                <TableCell>
+                  <Button variant="ghost" size="icon-sm" title="회수" disabled={revoke.isPending} onClick={() => remove(a)}>
+                    <Trash2 className="size-3.5 text-rose-600" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+            {(access.data ?? []).length === 0 && (
+              <TableRow><TableCell colSpan={3} className="py-6 text-center text-xs text-muted-foreground">접근 가능한 프로젝트가 없습니다. 추가하면 해당 프로젝트 사용자에게 이 클러스터가 보입니다.</TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </Card>
+    </div>
   );
 }
 

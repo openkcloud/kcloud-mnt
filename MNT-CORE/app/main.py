@@ -21,7 +21,7 @@ from sqlalchemy import text
 from .auth import AuthError, current_user
 from .config import settings
 from .db import engine
-from .routers import auth, codes, members, menus, ssh_keys, tickets
+from .routers import auth, cluster_access, codes, members, menus, ssh_keys, tickets
 from .workflows.runtime import run_worker
 
 
@@ -84,5 +84,6 @@ app.include_router(menus.router, prefix=settings.api_prefix, dependencies=_login
 app.include_router(codes.router, prefix=settings.api_prefix, dependencies=_login)
 app.include_router(ssh_keys.router, prefix=settings.api_prefix, dependencies=_login)
 app.include_router(members.router, prefix=settings.api_prefix, dependencies=_login)
+app.include_router(cluster_access.router, prefix=settings.api_prefix, dependencies=_login)
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(tickets.router, prefix=settings.api_prefix, dependencies=_login)
