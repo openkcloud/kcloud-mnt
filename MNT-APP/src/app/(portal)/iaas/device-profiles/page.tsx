@@ -126,7 +126,6 @@ function DetailDialog({ d, onClose }: { d: DeviceProfile; onClose: () => void })
       <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Cpu className="size-4 text-brand-indigo-600" /> <span className="font-mono">{d.name}</span></DialogTitle>
-          <DialogDescription>디바이스 프로파일 상세 — Cyborg 는 수정 기능이 없어 조회만 가능합니다(변경 시 삭제 후 재생성).</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 text-xs">
           <Field label="UUID" value={d.uuid ?? "—"} />
