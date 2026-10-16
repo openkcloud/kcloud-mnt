@@ -1,6 +1,6 @@
 "use client";
 import * as React from "react";
-import { Cpu, Plus, Search, Trash2, X, Eye } from "lucide-react";
+import { Cpu, Plus, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -77,12 +77,12 @@ export default function DeviceProfilesPage() {
               <TableHead>설명</TableHead>
               <TableHead className="text-center">연결 플레이버</TableHead>
               <TableHead>UUID</TableHead>
-              <TableHead className="w-20" />
+              <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {items.map((d) => (
-              <TableRow key={d.uuid ?? d.name}>
+              <TableRow key={d.uuid ?? d.name} className="cursor-pointer" onClick={() => setDetail(d)}>
                 <TableCell>
                   <div className="flex items-center gap-2">
                     <Cpu className="size-3.5 text-brand-indigo-600" />
@@ -99,15 +99,10 @@ export default function DeviceProfilesPage() {
                 <TableCell className="max-w-56 truncate text-sm text-muted-foreground">{d.description || "—"}</TableCell>
                 <TableCell className="text-center font-mono tabular-nums">{linkedCount(d.name)}</TableCell>
                 <TableCell className="font-mono text-[11px] text-muted-foreground">{d.uuid ?? "—"}</TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-0.5">
-                    <Button variant="ghost" size="icon-sm" title="상세 보기" onClick={() => setDetail(d)}>
-                      <Eye className="size-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending} onClick={() => remove(d)}>
-                      <Trash2 className="size-3.5 text-rose-600" />
-                    </Button>
-                  </div>
+                <TableCell onClick={(e) => e.stopPropagation()}>
+                  <Button variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending} onClick={() => remove(d)}>
+                    <Trash2 className="size-3.5 text-rose-600" />
+                  </Button>
                 </TableCell>
               </TableRow>
             ))}
