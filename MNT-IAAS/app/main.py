@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from .auth import AuthError, caller
 from .config import settings
 from .openstack_client import get_conn
-from .routers import flavors, images, networks, projects, servers, volumes
+from .routers import flavors, images, keypairs, networks, projects, servers, volumes
 from .workflows.runtime import run_worker
 
 
@@ -65,4 +65,5 @@ app.include_router(networks.router, prefix=settings.api_prefix, dependencies=_lo
 app.include_router(volumes.router, prefix=settings.api_prefix, dependencies=_login)
 app.include_router(images.router, prefix=settings.api_prefix, dependencies=_login)
 app.include_router(flavors.router, prefix=settings.api_prefix, dependencies=_login)
+app.include_router(keypairs.router, prefix=settings.api_prefix, dependencies=_login)
 app.include_router(servers.router, prefix=settings.api_prefix, dependencies=_login)
