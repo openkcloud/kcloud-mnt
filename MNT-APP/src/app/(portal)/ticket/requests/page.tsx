@@ -988,8 +988,8 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
                     <span className="block font-mono text-[11px] text-muted-foreground/70">{s.code}</span>
                   </span>
                   <span className="mt-0.5 flex shrink-0 items-center gap-2 font-mono text-xs text-muted-foreground tabular-nums">
-                    {/* 0.0s 로 보일 값 — 상태 확인(1초) 사이에 끝나 따로 잡히지 않았거나 아주 짧게 끝난 단계 */}
-                    {s.status === "skipped" ? "건너뜀" : dur !== undefined && (s.status !== "running" && dur < 50 ? "1초 미만" : fmtSec(dur))}
+                    {/* 1초 안에 끝난 단계 — 상태 확인(1초) 사이에 끝나 0.0s 인 것도, 0.5s 처럼 기록된 것도 */}
+                    {s.status === "skipped" ? "건너뜀" : dur !== undefined && (s.status !== "running" && dur < 1000 ? "1초 미만" : fmtSec(dur))}
                     <ChevronDown className={cn("size-4 transition-transform", expanded && "rotate-180")} />
                   </span>
                 </button>
