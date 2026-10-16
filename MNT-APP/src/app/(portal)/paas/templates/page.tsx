@@ -78,7 +78,7 @@ export default function TemplatesPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>템플릿</TableHead>
-                <TableHead>플레이버(Worker / Control Plane)</TableHead>
+                <TableHead>플레이버(Control Plane / Worker)</TableHead>
                 <TableHead>네트워크</TableHead>
                 <TableHead>공개</TableHead>
                 <TableHead>LB/FIP</TableHead>
@@ -94,7 +94,7 @@ export default function TemplatesPage() {
                       <span className="max-w-[240px] truncate font-mono text-sm font-semibold">{t.name}</span>
                     </div>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{t.flavor_id || "—"} / {t.master_flavor_id || t.flavor_id || "—"}</TableCell>
+                  <TableCell className="font-mono text-xs">{t.master_flavor_id || t.flavor_id || "—"} / {t.flavor_id || "—"}</TableCell>
                   <TableCell className="font-mono text-xs">{t.external_network_id || "—"}</TableCell>
                   <TableCell>{t.public ? <Badge variant="success" className="text-[10px]">public</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
                   <TableCell className="font-mono text-[11px] text-muted-foreground">
@@ -204,12 +204,12 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
           </TabsContent>
 
           <TabsContent value="node" className="space-y-3 pt-3">
-            <Field label="Worker 플레이버">
-              <DropSelect value={f.flavor_id ?? ""} onChange={(v) => set("flavor_id", v)} placeholder="플레이버 선택"
-                options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
-            </Field>
             <Field label="Control Plane 플레이버">
               <DropSelect value={f.master_flavor_id ?? ""} onChange={(v) => set("master_flavor_id", v)} placeholder="플레이버 선택"
+                options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
+            </Field>
+            <Field label="Worker 플레이버">
+              <DropSelect value={f.flavor_id ?? ""} onChange={(v) => set("flavor_id", v)} placeholder="플레이버 선택"
                 options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
             </Field>
             <Field label="키페어"><Input value={f.keypair_id ?? ""} onChange={(e) => set("keypair_id", e.target.value)} placeholder="my-key" className="font-mono text-xs" /></Field>
