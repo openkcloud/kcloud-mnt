@@ -70,6 +70,25 @@ def grant_cluster_access(cluster_id: str, body: GrantBody, db: Session = Depends
     return list_cluster_access(cluster_id, db)
 
 
+class ReconcileBody(BaseModel):
+    existingClusterIds: list[str]   # 현재 Magnum 에 실재하는 클러스터 ID 목록
+
+
+@router.post("/clusters/access/reconcile", dependencies=[Depends(require_admin)])
+def reconcile_cluster_access(body: ReconcileBody, db: Session = Depends(get_db)):
+    """실재 목록에 없는 cluster_id 의 매핑 행을 모두 삭제(고아 정리). 관리자 클러스터 화면 로드 시 호출.
+    안전: 빈 목록이면 아무것도 지우지 않는다(Magnum 일시적 빈 응답에 전체 삭제되는 사고 방지)."""
+    ids = [c for c in body.existingClusterIds if c]
+    if not ids:
+        return {"purged": 0}
+    res = db.execute(
+        text("DELETE FROM paas_project_cluster WHERE cluster_id <> ALL(:ids)"),
+        {"ids": ids},
+    )
+    db.commit()
+    return {"purged": res.rowcount}
+
+
 @router.delete("/clusters/{cluster_id}/access", status_code=204, dependencies=[Depends(require_admin)])
 def revoke_cluster_access(cluster_id: str, projectId: str, namespace: str | None = None,
                           db: Session = Depends(get_db)):
