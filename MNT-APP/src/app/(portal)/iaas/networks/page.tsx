@@ -245,7 +245,7 @@ function AdminNetworksView() {
 
       {/* 상세 — 가운데 모달 */}
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-5xl">
           {selected && <NetworkDetailPanel network={selected} projectLabel={projName(selected.tenantId)} onClose={() => setSelected(undefined)} />}
         </DialogContent>
       </Dialog>
