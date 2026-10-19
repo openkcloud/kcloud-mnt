@@ -13,7 +13,7 @@
 from fastapi import HTTPException
 
 from .config import settings
-from .openstack_client import get_conn
+from .openstack_client import get_conn, os_request
 
 
 def get_project_quota(pid: str) -> dict:
@@ -21,24 +21,24 @@ def get_project_quota(pid: str) -> dict:
     try:
         admin_pid = conn.session.get_project_id()
         if settings.os_endpoint_mode == "catalog":
-            nova = conn.session.get(
-                f"/limits?tenant_id={pid}",
+            nova = os_request(
+                conn, f"/limits?tenant_id={pid}", "GET",
                 endpoint_filter={"service_type": "compute", "interface": settings.os_interface},
                 timeout=15,
             ).json()["limits"]["absolute"]
-            cset = conn.session.get(
-                f"/os-quota-sets/{pid}?usage=true",
+            cset = os_request(
+                conn, f"/os-quota-sets/{pid}?usage=true", "GET",
                 endpoint_filter={"service_type": "block-storage", "interface": settings.os_interface},
                 timeout=15,
             ).json()["quota_set"]
         else:  # override
             nova_base = settings.os_endpoint_template.format(service="nova")
             cinder_base = settings.os_endpoint_template.format(service="cinder")
-            nr = conn.session.get(f"{nova_base}/v2.1/limits?tenant_id={pid}", timeout=15)
+            nr = os_request(conn, f"{nova_base}/v2.1/limits?tenant_id={pid}", "GET", timeout=15)
             nr.raise_for_status()
             nova = nr.json()["limits"]["absolute"]
-            cr = conn.session.get(
-                f"{cinder_base}/v3/{admin_pid}/os-quota-sets/{pid}?usage=true", timeout=15
+            cr = os_request(
+                conn, f"{cinder_base}/v3/{admin_pid}/os-quota-sets/{pid}?usage=true", "GET", timeout=15
             )
             cr.raise_for_status()
             cset = cr.json()["quota_set"]
@@ -68,20 +68,22 @@ def set_project_quota(pid: str, *, vcpu: int, ram_gb: int, disk_gb: int) -> None
     try:
         admin_pid = conn.session.get_project_id()
         if settings.os_endpoint_mode == "catalog":
-            conn.session.put(
-                f"/os-quota-sets/{pid}", json=nova_body,
+            os_request(
+                conn, f"/os-quota-sets/{pid}", "PUT", json=nova_body,
                 endpoint_filter={"service_type": "compute", "interface": settings.os_interface}, timeout=15,
             ).raise_for_status()
-            conn.session.put(
-                f"/os-quota-sets/{pid}", json=cinder_body,
+            os_request(
+                conn, f"/os-quota-sets/{pid}", "PUT", json=cinder_body,
                 endpoint_filter={"service_type": "block-storage", "interface": settings.os_interface}, timeout=15,
             ).raise_for_status()
         else:  # override
             nova_base = settings.os_endpoint_template.format(service="nova")
             cinder_base = settings.os_endpoint_template.format(service="cinder")
-            conn.session.put(f"{nova_base}/v2.1/os-quota-sets/{pid}", json=nova_body, timeout=15).raise_for_status()
-            conn.session.put(
-                f"{cinder_base}/v3/{admin_pid}/os-quota-sets/{pid}", json=cinder_body, timeout=15
+            os_request(
+                conn, f"{nova_base}/v2.1/os-quota-sets/{pid}", "PUT", json=nova_body, timeout=15
+            ).raise_for_status()
+            os_request(
+                conn, f"{cinder_base}/v3/{admin_pid}/os-quota-sets/{pid}", "PUT", json=cinder_body, timeout=15
             ).raise_for_status()
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"쿼터 설정 실패(pid={pid}): {type(e).__name__}: {e}")

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from ..auth import Caller, caller, ensure_project, project_member, require_admin, scoped
 from ..config import settings
-from ..openstack_client import get_conn
+from ..openstack_client import get_conn, os_request
 
 router = APIRouter(tags=["images"])
 
@@ -20,15 +20,12 @@ _GB = 1024 ** 3
 def _glance_req(method: str, path: str, *, params=None, data=None, headers=None):
     conn = get_conn()
     if settings.os_endpoint_mode == "catalog":
-        r = conn.session.request(
-            path, method, params=params, data=data, headers=headers, raise_exc=False,
-            endpoint_filter={"service_type": "image", "interface": settings.os_interface}, timeout=20,
-            connect_retries=1 if method == "GET" else 0,  # 조회만 재시도(간헐 연결 끊김 대비)
-        )
+        r = os_request(conn, path, method, params=params, data=data, headers=headers, raise_exc=False,
+                       endpoint_filter={"service_type": "image", "interface": settings.os_interface}, timeout=20)
     else:  # override
         base = settings.os_endpoint_template.format(service="glance") + "/v2"
-        r = conn.session.request(f"{base}{path}", method, params=params, data=data, headers=headers, raise_exc=False, timeout=20,
-                                 connect_retries=1 if method == "GET" else 0)
+        r = os_request(conn, f"{base}{path}", method, params=params, data=data, headers=headers, raise_exc=False,
+                       timeout=20)
     if not r.ok:
         raise RuntimeError((r.text or f"HTTP {r.status_code}")[:300])
     return r
