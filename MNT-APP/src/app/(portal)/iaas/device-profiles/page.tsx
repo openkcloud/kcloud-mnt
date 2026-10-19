@@ -22,6 +22,27 @@ import {
   type DeviceProfile, type CreateDeviceProfileInput,
 } from "@/lib/iaas-api";
 
+// group 원본(resources:*/trait:*) 파싱 — 실제 식별자(CUSTOM_NVIDIA_26B9 등) 노출용
+function parseGroup(g: Record<string, string>) {
+  const resources: { rc: string; count: string }[] = [];
+  const traits: { name: string; policy: string }[] = [];
+  const others: { k: string; v: string }[] = [];
+  for (const [k, v] of Object.entries(g)) {
+    if (k.startsWith("resources:")) resources.push({ rc: k.slice(10), count: v });
+    else if (k.startsWith("trait:")) traits.push({ name: k.slice(6), policy: v });
+    else others.push({ k, v });
+  }
+  return { resources, traits, others };
+}
+
+// 프로파일 전체의 고유 트레잇(하드웨어 식별자) — 목록 배지용
+function profileTraits(groups?: Record<string, string>[]): string[] {
+  const s = new Set<string>();
+  for (const g of groups ?? [])
+    for (const k of Object.keys(g)) if (k.startsWith("trait:")) s.add(k.slice(6));
+  return Array.from(s);
+}
+
 // 디바이스 프로파일(Cyborg device-profile) — 전역(admin) 자원. 플레이버가 accel:device_profile 로 참조.
 // Cyborg 는 불변이라 생성·삭제만(수정 없음).
 export default function DeviceProfilesPage() {
@@ -81,7 +102,9 @@ export default function DeviceProfilesPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((d) => (
+            {items.map((d) => {
+              const traits = profileTraits(d.groups);
+              return (
               <TableRow key={d.uuid ?? d.name} className="cursor-pointer" onClick={() => setDetail(d)}>
                 <TableCell>
                   <div className="flex items-center gap-2">
@@ -90,11 +113,20 @@ export default function DeviceProfilesPage() {
                   </div>
                 </TableCell>
                 <TableCell>
-                  {(d.accelerators ?? []).length
-                    ? <div className="flex flex-wrap gap-1">{d.accelerators!.map((a) => (
-                        <Badge key={a.kind} variant="default" className="font-mono text-[10px]">{a.kind} ×{a.count}</Badge>
-                      ))}</div>
-                    : <span className="text-muted-foreground">—</span>}
+                  {(d.accelerators ?? []).length || traits.length ? (
+                    <div className="flex flex-col gap-1">
+                      {(d.accelerators ?? []).length > 0 && (
+                        <div className="flex flex-wrap gap-1">{d.accelerators!.map((a) => (
+                          <Badge key={a.kind} variant="default" className="font-mono text-[10px]">{a.kind} ×{a.count}</Badge>
+                        ))}</div>
+                      )}
+                      {traits.length > 0 && (
+                        <div className="flex flex-wrap gap-1">{traits.map((t) => (
+                          <Badge key={t} variant="secondary" className="font-mono text-[10px]">{t}</Badge>
+                        ))}</div>
+                      )}
+                    </div>
+                  ) : <span className="text-muted-foreground">—</span>}
                 </TableCell>
                 <TableCell className="max-w-56 truncate text-sm text-muted-foreground">{d.description || "—"}</TableCell>
                 <TableCell className="text-center font-mono tabular-nums">{linkedCount(d.name)}</TableCell>
@@ -105,7 +137,8 @@ export default function DeviceProfilesPage() {
                   </Button>
                 </TableCell>
               </TableRow>
-            ))}
+              );
+            })}
             {items.length === 0 && (
               <TableRow><TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">디바이스 프로파일이 없습니다.</TableCell></TableRow>
             )}
@@ -139,20 +172,46 @@ function DetailDialog({ d, onClose }: { d: DeviceProfile; onClose: () => void })
               : <span className="text-muted-foreground">—</span>}
           </div>
           <div>
-            <div className="mb-1 text-[11px] font-medium text-muted-foreground">그룹(원본) — 장치 1개당 그룹 1개</div>
+            <div className="mb-1 text-[11px] font-medium text-muted-foreground">그룹 — 장치 1개당 그룹 1개</div>
             <div className="space-y-2">
-              {(d.groups ?? []).map((g, i) => (
-                <div key={i} className="rounded-md border p-2">
-                  <div className="mb-1 text-[10px] text-muted-foreground">그룹 {i + 1}</div>
-                  <div className="flex flex-col gap-0.5 font-mono text-[11px]">
-                    {Object.entries(g).map(([k, v]) => (
-                      <div key={k} className="flex justify-between gap-2">
-                        <span className="text-slate-600">{k}</span><span className="text-slate-900">{String(v)}</span>
+              {(d.groups ?? []).map((g, i) => {
+                const { resources, traits, others } = parseGroup(g);
+                return (
+                  <div key={i} className="rounded-md border p-2 text-[11px]">
+                    <div className="mb-1.5 text-[10px] text-muted-foreground">그룹 {i + 1}</div>
+                    <div className="space-y-1.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="shrink-0 text-muted-foreground">리소스 클래스</span>
+                        <div className="flex flex-wrap justify-end gap-1">
+                          {resources.length
+                            ? resources.map((r) => <Badge key={r.rc} variant="outline" className="font-mono text-[10px]">{r.rc} ×{r.count}</Badge>)
+                            : <span className="text-muted-foreground">—</span>}
+                        </div>
                       </div>
-                    ))}
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="shrink-0 text-muted-foreground">트레잇</span>
+                        <div className="flex flex-wrap justify-end gap-1">
+                          {traits.length
+                            ? traits.map((t) => (
+                                <Badge key={t.name} variant="secondary" className="font-mono text-[10px]">
+                                  {t.name}{t.policy !== "required" ? ` (${t.policy})` : ""}
+                                </Badge>
+                              ))
+                            : <span className="text-muted-foreground">—</span>}
+                        </div>
+                      </div>
+                      {others.length > 0 && (
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="shrink-0 text-muted-foreground">기타</span>
+                          <div className="flex flex-col items-end gap-0.5 font-mono">
+                            {others.map((o) => <span key={o.k}>{o.k}: {o.v}</span>)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {!(d.groups ?? []).length && <span className="text-muted-foreground">그룹 정보 없음</span>}
             </div>
           </div>
