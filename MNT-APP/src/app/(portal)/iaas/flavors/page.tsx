@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import {
-  useFlavors, useDeviceProfiles, useCreateFlavor, useDeleteFlavor, type FlavorSummary,
+  useFlavors, useDeviceProfiles, useCreateFlavor, useDeleteFlavor, profileTraits, type FlavorSummary,
 } from "@/lib/iaas-api";
 
 // 플레이버 — OpenStack Nova 실연동. 전역(admin) 자원이라 프로젝트 컬럼 없음. 가속기=Cyborg device-profile.
@@ -151,7 +151,17 @@ function CreateFlavorDialog({ open, onClose }: { open: boolean; onClose: () => v
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">없음 (일반)</SelectItem>
-                {(dps ?? []).map((d) => (<SelectItem key={d.name} value={d.name}>{d.name}</SelectItem>))}
+                {(dps ?? []).map((d) => {
+                  const traits = profileTraits(d.groups);
+                  return (
+                    <SelectItem key={d.name} value={d.name}>
+                      <span className="font-mono">{d.name}</span>
+                      {traits.length > 0 && (
+                        <span className="ml-2 font-mono text-[10px] text-muted-foreground">{traits.join(", ")}</span>
+                      )}
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
             <p className="text-[10px] text-muted-foreground">가속기 선택 시 flavor extra_spec `accel:device_profile`로 연결됩니다.</p>
