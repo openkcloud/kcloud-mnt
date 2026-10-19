@@ -34,17 +34,20 @@ def list_cluster_access(cluster_id: str, db: Session = Depends(get_db)):
                        "createdAt": r["created_at"].isoformat() if r["created_at"] else None} for r in rows]}
 
 
+def project_cluster_ids(db: Session, project_ids: list[str]) -> list[str]:
+    """프로젝트들에 매핑된 클러스터 ID — 사용자 화면 가시성·MNT-PAAS 권한 판정(/auth/me)의 기준."""
+    if not project_ids:
+        return []
+    return list(db.execute(
+        text("SELECT DISTINCT cluster_id FROM paas_project_cluster WHERE project_id = ANY(:ps)"),
+        {"ps": project_ids},
+    ).scalars())
+
+
 @router.get("/my-cluster-ids")
 def my_cluster_ids(user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     """내가 접근 가능한 클러스터 ID 목록(사용자 화면 가시성용). 내 프로젝트에 매핑된 클러스터."""
-    pids = member_project_ids(db, user.username)
-    if not pids:
-        return {"clusterIds": []}
-    rows = db.execute(
-        text("SELECT DISTINCT cluster_id FROM paas_project_cluster WHERE project_id = ANY(:ps)"),
-        {"ps": pids},
-    ).scalars()
-    return {"clusterIds": list(rows)}
+    return {"clusterIds": project_cluster_ids(db, member_project_ids(db, user.username))}
 
 
 class GrantBody(BaseModel):

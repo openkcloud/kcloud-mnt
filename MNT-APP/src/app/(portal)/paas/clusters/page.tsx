@@ -24,7 +24,7 @@ import {
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useProjects, useFlavors } from "@/lib/iaas-api";
-import { useClusters, useCluster, useDeleteCluster, kubeconfigUrl, type ClusterSummary } from "@/lib/paas-api";
+import { useClusters, useCluster, useDeleteCluster, downloadKubeconfig, type ClusterSummary } from "@/lib/paas-api";
 import { useAuth } from "@/lib/auth";
 import {
   useMyClusterIds, useClusterAccess, useGrantClusterAccess, useRevokeClusterAccess,
@@ -45,6 +45,12 @@ function fmtDateTime(iso?: string | null) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString("ko-KR", { hour12: false });
+}
+
+/** kubeconfig 받기(목록 행·상세 모달 공용) — 실패하면 오류 안내. */
+function saveKubeconfig(id: string, name: string) {
+  downloadKubeconfig(id, name).catch((e) =>
+    toast.error("kubeconfig 다운로드 실패", { description: String((e as Error).message) }));
 }
 
 export default function ClustersPage() {
@@ -238,8 +244,8 @@ function ClusterRow({
       <TableCell onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-end gap-0.5">
           {ready ? (
-            <Button asChild variant="ghost" size="icon-sm" title="kubeconfig 다운로드">
-              <a href={kubeconfigUrl(c.id)} download><Download className="size-3.5" /></a>
+            <Button variant="ghost" size="icon-sm" title="kubeconfig 다운로드" onClick={() => saveKubeconfig(c.id, c.name)}>
+              <Download className="size-3.5" />
             </Button>
           ) : (
             <Button variant="ghost" size="icon-sm" disabled title="클러스터가 준비되면 받을 수 있습니다">
@@ -361,10 +367,8 @@ function ClusterDetailDialog({
                 </Button>
               ) : <span />}
               {d.apiAddress ? (
-                <Button asChild size="sm">
-                  <a href={kubeconfigUrl(d.id)} download>
-                    <Download className="size-3.5" /> kubeconfig 다운로드
-                  </a>
+                <Button size="sm" onClick={() => saveKubeconfig(d.id, d.name)}>
+                  <Download className="size-3.5" /> kubeconfig 다운로드
                 </Button>
               ) : (
                 <Button size="sm" disabled>

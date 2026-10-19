@@ -12,11 +12,12 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { usePollingInterval } from "@/lib/polling";
 import { authFetch } from "@/lib/http";
+import { downloadText } from "@/lib/ssh-keygen";
 
 const RAW = process.env.NEXT_PUBLIC_PAAS_API;
 export const PAAS_BASE = RAW === undefined ? "http://localhost:8002" : RAW;
 
-// 토큰은 미리 붙여 보낸다(MNT-PAAS 의 토큰 확인은 추후)
+// 모든 요청에 토큰을 붙인다 — MNT-PAAS 가 CORE 로 사용자·접근 클러스터를 확인한다
 async function sendJson<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await authFetch(`${PAAS_BASE}${path}`, {
     method,
@@ -99,9 +100,15 @@ export function useCluster(id: string | null) {
   });
 }
 
-/** kubeconfig 다운로드 URL — 브라우저가 직접 받는다(Content-Disposition attachment). */
-export function kubeconfigUrl(id: string): string {
-  return `${PAAS_BASE}/api/paas/clusters/${id}/kubeconfig`;
+/** kubeconfig 다운로드 — MNT-PAAS 가 토큰을 확인하므로 링크 대신 토큰을 붙여 받아 파일로 저장한다. */
+export async function downloadKubeconfig(id: string, name: string): Promise<void> {
+  const res = await authFetch(`${PAAS_BASE}/api/paas/clusters/${id}/kubeconfig`);
+  if (!res.ok) {
+    let msg = `${res.status}`;
+    try { msg = (await res.json()).detail ?? msg; } catch { /* keep */ }
+    throw new Error(String(msg));
+  }
+  downloadText(`${name}-kubeconfig.yaml`, await res.text());
 }
 
 /** 클러스터 삭제(관리자). Magnum DELETE 는 비동기 — 목록은 DELETE_IN_PROGRESS 로 바뀐 뒤 소멸. */
