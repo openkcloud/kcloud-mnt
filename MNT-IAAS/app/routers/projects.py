@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from ..auth import Caller, caller, project_member, require_admin
 from ..config import settings
-from ..openstack_client import get_conn
+from ..openstack_client import get_conn, os_request
 from ..openstack_quota import get_project_quota, set_project_quota
 
 router = APIRouter(tags=["projects"])
@@ -44,7 +44,7 @@ def _to_tenant(p: dict, quota: dict | None) -> dict:
 def _fetch_projects() -> list[dict]:
     conn = get_conn()
     url = settings.os_auth_url.rstrip("/") + "/projects"
-    r = conn.session.get(url, timeout=15)
+    r = os_request(conn, url, "GET", timeout=15)
     r.raise_for_status()
     return r.json().get("projects", [])
 
@@ -82,7 +82,7 @@ def create_project(body: CreateProjectBody):
         url = settings.os_auth_url.rstrip("/") + "/projects"
         payload = {"project": {"name": name, "description": body.description or "",
                                "domain_id": "default", "enabled": True}}
-        r = conn.session.post(url, json=payload, timeout=15)
+        r = os_request(conn, url, "POST", json=payload, timeout=15)
         r.raise_for_status()
         proj = r.json()["project"]
     except Exception as e:  # noqa: BLE001
@@ -122,7 +122,7 @@ def update_project(project_id: str, body: UpdateProjectBody):
     if patch:
         try:
             url = settings.os_auth_url.rstrip("/") + f"/projects/{project_id}"
-            r = conn.session.patch(url, json={"project": patch}, timeout=15)
+            r = os_request(conn, url, "PATCH", json={"project": patch}, timeout=15)
             r.raise_for_status()
         except Exception as e:  # noqa: BLE001
             raise HTTPException(502, f"프로젝트 수정 실패: {type(e).__name__}: {e}")
@@ -140,7 +140,7 @@ def delete_project(project_id: str):
     conn = get_conn()
     try:
         url = settings.os_auth_url.rstrip("/") + f"/projects/{project_id}"
-        r = conn.session.delete(url, timeout=15)
+        r = os_request(conn, url, "DELETE", timeout=15)
         r.raise_for_status()
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"프로젝트 삭제 실패: {type(e).__name__}: {e}")
