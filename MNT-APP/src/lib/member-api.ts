@@ -119,3 +119,21 @@ export function useRevokeClusterAccess(clusterId: string) {
     },
   });
 }
+
+/** 고아 매핑 정리(관리자) — 실재 클러스터 ID 목록을 보내 없는 cluster_id 행을 purge.
+ *  클러스터 삭제 완료가 비동기라, 관리자 클러스터 화면 로드 시 sweep 으로 정리한다(자가 치유). */
+export function useReconcileClusterAccess() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (existingClusterIds: string[]) =>
+      coreFetch<{ purged: number }>(`/clusters/access/reconcile`, {
+        method: "POST", body: JSON.stringify({ existingClusterIds }),
+      }),
+    onSuccess: (r) => {
+      if (r.purged > 0) {
+        qc.invalidateQueries({ queryKey: ["core-my-clusters"] });
+        qc.invalidateQueries({ queryKey: ["core-cluster-access"] });
+      }
+    },
+  });
+}

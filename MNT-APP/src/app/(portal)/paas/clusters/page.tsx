@@ -24,10 +24,11 @@ import {
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useProjects, useFlavors } from "@/lib/iaas-api";
-import { useClusters, useCluster, kubeconfigUrl, type ClusterSummary } from "@/lib/paas-api";
+import { useClusters, useCluster, useDeleteCluster, kubeconfigUrl, type ClusterSummary } from "@/lib/paas-api";
 import { useAuth } from "@/lib/auth";
 import {
-  useMyClusterIds, useClusterAccess, useGrantClusterAccess, useRevokeClusterAccess, type ClusterAccess,
+  useMyClusterIds, useClusterAccess, useGrantClusterAccess, useRevokeClusterAccess,
+  useReconcileClusterAccess, type ClusterAccess,
 } from "@/lib/member-api";
 
 /** Magnum 상태 → 배지 톤. *_IN_PROGRESS 는 진행 중(폴링 대상). */
@@ -57,6 +58,33 @@ export default function ClustersPage() {
   const [q, setQ] = React.useState("");
   const [projFilter, setProjFilter] = React.useState("all");
   const [detailId, setDetailId] = React.useState<string | null>(null);
+
+  const del = useDeleteCluster();
+  const confirm = useConfirm();
+  async function handleDelete(c: { id: string; name: string }, onDone?: () => void) {
+    if (!(await confirm({
+      title: "클러스터 삭제", destructive: true, confirmLabel: "삭제",
+      description: `클러스터 "${c.name}" 을(를) 삭제할까요? 되돌릴 수 없으며, 클러스터와 그 위의 모든 워크로드가 함께 삭제됩니다.`,
+    }))) return;
+    del.mutate(c.id, {
+      onSuccess: () => { toast.success("클러스터 삭제를 시작했습니다"); onDone?.(); },
+      onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }),
+    });
+  }
+
+  // 고아 매핑 정리(sweep) — 관리자가 목록을 열 때마다 실재 ID 집합으로 1회 reconcile.
+  // 삭제 완료가 비동기라 "삭제 추적" 대신 자가 치유 방식. 에러·빈 목록이면 호출 안 함(전체 삭제 사고 방지).
+  const reconcile = useReconcileClusterAccess();
+  const reconciledKey = React.useRef("");
+  React.useEffect(() => {
+    if (!isAdmin || !clusters.isSuccess) return;
+    const ids = (clusters.data ?? []).map((c) => c.id);
+    if (ids.length === 0) return;
+    const key = ids.slice().sort().join(",");
+    if (key === reconciledKey.current) return;
+    reconciledKey.current = key;
+    reconcile.mutate(ids);
+  }, [isAdmin, clusters.isSuccess, clusters.data, reconcile]);
 
   const projName = React.useMemo(() => {
     const m: Record<string, string> = {};
@@ -126,7 +154,7 @@ export default function ClustersPage() {
               <TableHead>노드(Control Plane+Worker)</TableHead>
               <TableHead>Worker 사양</TableHead>
               <TableHead>생성일</TableHead>
-              <TableHead className="w-16" />
+              <TableHead className="w-24" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -144,6 +172,9 @@ export default function ClustersPage() {
                 projectName={projName(c.projectId)}
                 accel={flavorAccel.get(c.flavorId) ?? null}
                 onDetail={() => setDetailId(c.id)}
+                isAdmin={isAdmin}
+                deleting={del.isPending}
+                onDelete={() => handleDelete(c)}
               />
             ))}
             {!clusters.isError && items.length === 0 && (
@@ -157,15 +188,24 @@ export default function ClustersPage() {
         </Table>
       </Card>
 
-      {detailId && <ClusterDetailDialog id={detailId} isAdmin={isAdmin} onClose={() => setDetailId(null)} />}
+      {detailId && (
+        <ClusterDetailDialog
+          id={detailId}
+          isAdmin={isAdmin}
+          deleting={del.isPending}
+          onDelete={(c) => handleDelete(c, () => setDetailId(null))}
+          onClose={() => setDetailId(null)}
+        />
+      )}
     </div>
   );
 }
 
 function ClusterRow({
-  c, projectName, accel, onDetail,
+  c, projectName, accel, onDetail, isAdmin, deleting, onDelete,
 }: {
   c: ClusterSummary; projectName: string; accel: string | null; onDetail: () => void;
+  isAdmin: boolean; deleting: boolean; onDelete: () => void;
 }) {
   const ready = c.status.endsWith("_COMPLETE") && !!c.apiAddress;
   return (
@@ -196,21 +236,37 @@ function ClusterRow({
       </TableCell>
       <TableCell className="font-mono text-[11px] text-muted-foreground">{fmtDateTime(c.createdAt)}</TableCell>
       <TableCell onClick={(e) => e.stopPropagation()}>
-        {ready ? (
-          <Button asChild variant="ghost" size="icon-sm" title="kubeconfig 다운로드">
-            <a href={kubeconfigUrl(c.id)} download><Download className="size-3.5" /></a>
-          </Button>
-        ) : (
-          <Button variant="ghost" size="icon-sm" disabled title="클러스터가 준비되면 받을 수 있습니다">
-            <Download className="size-3.5" />
-          </Button>
-        )}
+        <div className="flex items-center justify-end gap-0.5">
+          {ready ? (
+            <Button asChild variant="ghost" size="icon-sm" title="kubeconfig 다운로드">
+              <a href={kubeconfigUrl(c.id)} download><Download className="size-3.5" /></a>
+            </Button>
+          ) : (
+            <Button variant="ghost" size="icon-sm" disabled title="클러스터가 준비되면 받을 수 있습니다">
+              <Download className="size-3.5" />
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              variant="ghost" size="icon-sm" title="클러스터 삭제"
+              disabled={deleting || c.status.startsWith("DELETE_")}
+              onClick={onDelete}
+            >
+              <Trash2 className="size-3.5 text-rose-600" />
+            </Button>
+          )}
+        </div>
       </TableCell>
     </TableRow>
   );
 }
 
-function ClusterDetailDialog({ id, isAdmin, onClose }: { id: string; isAdmin: boolean; onClose: () => void }) {
+function ClusterDetailDialog({
+  id, isAdmin, deleting, onDelete, onClose,
+}: {
+  id: string; isAdmin: boolean; deleting: boolean;
+  onDelete: (c: { id: string; name: string }) => void; onClose: () => void;
+}) {
   const { data: d, isLoading, isError } = useCluster(id);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -294,7 +350,16 @@ function ClusterDetailDialog({ id, isAdmin, onClose }: { id: string; isAdmin: bo
 
             {isAdmin && <ClusterAccessSection clusterId={d.id} />}
 
-            <div className="flex justify-end">
+            <div className="flex items-center justify-between">
+              {isAdmin ? (
+                <Button
+                  variant="destructive" size="sm"
+                  disabled={deleting || d.status.startsWith("DELETE_")}
+                  onClick={() => onDelete({ id: d.id, name: d.name })}
+                >
+                  <Trash2 className="size-3.5" /> 클러스터 삭제
+                </Button>
+              ) : <span />}
               {d.apiAddress ? (
                 <Button asChild size="sm">
                   <a href={kubeconfigUrl(d.id)} download>
