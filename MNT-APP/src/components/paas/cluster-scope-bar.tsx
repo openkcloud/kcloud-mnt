@@ -47,12 +47,15 @@ export function ClusterScopeBar({
 }) {
   const { clusterId, setClusterId, clusters, isLoading } = useClusterScope();
   const namespaces = useNamespaces(clusterId);
+  const noClusters = !isLoading && clusters.length === 0;
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <Select value={clusterId || undefined} onValueChange={setClusterId}>
+      <Select value={clusters.some((c) => c.id === clusterId) ? clusterId : undefined} onValueChange={setClusterId} disabled={noClusters}>
         <SelectTrigger className="w-52">
-          <SelectValue placeholder={isLoading ? "클러스터 불러오는 중…" : "서비스 클러스터 선택"} />
+          <SelectValue
+            placeholder={isLoading ? "클러스터 불러오는 중…" : noClusters ? "사용 가능한 클러스터 없음" : "서비스 클러스터 선택"}
+          />
         </SelectTrigger>
         <SelectContent>
           {clusters.map((c) => (
