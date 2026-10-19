@@ -674,6 +674,13 @@ export function profileTraits(groups?: Record<string, string>[]): string[] {
   return Array.from(s);
 }
 
+/** IaaS 목록 공통 정렬 비교자 — 프로젝트명 → 자원명(한국어 로캘). 프로젝트 컬럼이 있는 화면 공용. */
+export function byProjectThenName<T extends { tenantId?: string; name: string }>(projName: (id: string) => string) {
+  return (a: T, b: T) =>
+    projName(a.tenantId ?? "").localeCompare(projName(b.tenantId ?? ""), "ko") ||
+    a.name.localeCompare(b.name, "ko");
+}
+
 export function useFlavors() {
   const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({

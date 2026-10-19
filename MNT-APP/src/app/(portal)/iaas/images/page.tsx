@@ -16,7 +16,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
-import { useImages, useSetImageVisibility, useDeleteImage, useProjects, type ImageSummary } from "@/lib/iaas-api";
+import { useImages, useSetImageVisibility, useDeleteImage, useProjects, byProjectThenName, type ImageSummary } from "@/lib/iaas-api";
 
 const VIS_VARIANT: Record<string, "success" | "secondary" | "warning" | "outline"> = {
   public: "success", shared: "warning", private: "outline", community: "secondary",
@@ -45,7 +45,7 @@ export default function ImagesPage() {
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const items = data.filter(
     (i) => (!q || i.name.toLowerCase().includes(q.toLowerCase())) && (projFilter === "all" || i.tenantId === projFilter),
-  );
+  ).sort(byProjectThenName(projName));
 
   async function remove(img: ImageSummary) {
     if (img.protected) {
