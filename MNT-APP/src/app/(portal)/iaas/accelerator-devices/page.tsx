@@ -146,7 +146,7 @@ export default function AcceleratorDevicesPage() {
       ))}
 
       <Dialog open={!!vmView} onOpenChange={(o) => !o && setVmView(null)}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><Monitor className="size-4 text-brand-indigo-600" /> 연결된 VM</DialogTitle>
             <DialogDescription className="font-mono text-xs">
@@ -164,8 +164,8 @@ export default function AcceleratorDevicesPage() {
               <TableBody>
                 {(vmView?.instances ?? []).map((i) => (
                   <TableRow key={i.id}>
-                    <TableCell className="text-sm">{i.name || "—"}</TableCell>
-                    <TableCell className="font-mono text-[11px] text-muted-foreground">{i.id}</TableCell>
+                    <TableCell className="whitespace-nowrap text-sm">{i.name || "—"}</TableCell>
+                    <TableCell className="whitespace-nowrap font-mono text-[11px] text-muted-foreground">{i.id}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
