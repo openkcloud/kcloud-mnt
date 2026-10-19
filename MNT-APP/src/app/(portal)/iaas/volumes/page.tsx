@@ -25,6 +25,7 @@ import {
   useVolumes, useVolume, useVolumeTypes, useStorageCapacity,
   useCreateVolume, useDeleteVolume, useExtendVolume, useCreateSnapshot, useDeleteSnapshot, useProjects,
   type VolumeSummary, type VolumeDetail,
+  byProjectThenName,
 } from "@/lib/iaas-api";
 import type { Tenant } from "@/lib/types";
 
@@ -68,7 +69,7 @@ export default function VolumesPage() {
       (isAdmin || myProjectIds?.has(v.tenantId)) &&
       (!q || v.name.toLowerCase().includes(q.toLowerCase())) &&
       (projFilter === "all" || v.tenantId === projFilter),
-  );
+  ).sort(byProjectThenName(projName));
 
   return (
     <div className="space-y-4">

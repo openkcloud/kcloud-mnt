@@ -28,6 +28,7 @@ import {
   useUpdateFip,
   useAddSubnet,
   useDeleteNetwork,
+  byProjectThenName,
 } from "@/lib/iaas-api";
 import type { NetworkDetail } from "@/lib/iaas-api";
 import { SgRulesDialog } from "@/components/iaas/sg-rules-dialog";
@@ -129,7 +130,7 @@ function AdminNetworksView() {
     (n) =>
       (!q || n.name.toLowerCase().includes(q.toLowerCase())) &&
       (projFilter === "all" || n.tenantId === projFilter),
-  );
+  ).sort(byProjectThenName(projName));
 
   return (
     <div className="space-y-4">
