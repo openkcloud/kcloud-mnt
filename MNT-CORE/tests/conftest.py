@@ -69,6 +69,7 @@ def _clean_db():
         c.execute(text("DELETE FROM iam_ssh_key"))
         c.execute(text("DELETE FROM tkt_request WHERE id LIKE 'req-990101-%'"))
         c.execute(text("DELETE FROM iam_project_member"))
+        c.execute(text("DELETE FROM paas_project_cluster"))
         c.execute(text("DELETE FROM iam_user WHERE username LIKE 'test-%'"))
         c.execute(text("UPDATE iam_user SET keycloak_sub = NULL"))
 

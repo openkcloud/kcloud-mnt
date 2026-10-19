@@ -1,13 +1,14 @@
-"""클러스터 템플릿(Magnum ClusterTemplate) — 관리자 전용 CRUD.
+"""클러스터 템플릿(Magnum ClusterTemplate) — 조회 + 관리자 CRUD.
 
 클러스터 생성의 설계도(이미지·플레이버·네트워크·드라이버·라벨 등). Horizon 의
-Cluster Templates 화면과 동일 범위. 사용자 노출 없음(프론트 역할 게이팅).
+Cluster Templates 화면과 동일 범위. 조회는 로그인 사용자(클러스터 신청 화면), 생성·수정·삭제는 관리자.
 """
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
+from ..auth import require_admin
 from ..openstack_client import magnum
 
 router = APIRouter(tags=["cluster-templates"])
@@ -66,7 +67,7 @@ def get_template(template_id: str):
         raise _err(e)
 
 
-@router.post("/clustertemplates", status_code=201)
+@router.post("/clustertemplates", status_code=201, dependencies=[Depends(require_admin)])
 def create_template(body: dict = Body(...)):
     """템플릿 생성. 빈 값은 빼서 Magnum 기본값에 맡긴다. coe 기본=kubernetes."""
     payload = {k: v for k, v in body.items() if k in _WRITABLE and v not in (None, "", {})}
@@ -77,7 +78,7 @@ def create_template(body: dict = Body(...)):
         raise _err(e)
 
 
-@router.patch("/clustertemplates/{template_id}")
+@router.patch("/clustertemplates/{template_id}", dependencies=[Depends(require_admin)])
 def update_template(template_id: str, body: dict = Body(...)):
     """수정 — Magnum 은 JSON Patch(RFC 6902) 를 받는다. 넘어온 쓰기 가능 필드를 replace."""
     patch = [
@@ -92,7 +93,7 @@ def update_template(template_id: str, body: dict = Body(...)):
         raise _err(e)
 
 
-@router.delete("/clustertemplates/{template_id}")
+@router.delete("/clustertemplates/{template_id}", dependencies=[Depends(require_admin)])
 def delete_template(template_id: str):
     try:
         return magnum.request("DELETE", f"/clustertemplates/{template_id}")

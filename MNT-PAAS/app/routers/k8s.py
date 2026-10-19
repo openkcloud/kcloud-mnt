@@ -2,6 +2,7 @@
 
 경로 규칙: /clusters/{id}/... (프론트의 전역 클러스터 선택기와 1:1).
 쓰기(CRUD)는 네임스페이스 리소스(사용자 self-service)만 — 클러스터·PV·StorageClass 는 관리자 영역.
+권한: 관리자 또는 그 클러스터에 접근 권한이 있는 사용자(main.py 가 라우터 전체에 auth.cluster_member 를 건다).
 """
 from __future__ import annotations
 
