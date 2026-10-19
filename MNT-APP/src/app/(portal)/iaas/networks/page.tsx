@@ -518,11 +518,11 @@ function NetworkDetailPanel({ network, projectLabel, onClose }: { network: IaasN
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-mono font-semibold">{sg.name}</span>
-                      <Badge variant="outline" className="text-[10px]">{sg.rules} 규칙</Badge>
+                      <Badge variant="outline" className="whitespace-nowrap text-[10px]">{sg.rules} 규칙</Badge>
                     </div>
                     <div className="text-xs text-muted-foreground">{sg.desc}</div>
                   </div>
-                  {isAdmin && <Button variant="ghost" size="sm" onClick={() => setSgEditId(sg.id)}>규칙 편집</Button>}
+                  {isAdmin && <Button variant="outline" size="sm" className="shrink-0" onClick={() => setSgEditId(sg.id)}>규칙 편집</Button>}
                 </div>
               </Card>
             ))}
