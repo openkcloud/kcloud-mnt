@@ -666,6 +666,14 @@ export interface DeviceProfile {
   groups?: Record<string, string>[]; // 원본 그룹(resources:*, trait:*)
 }
 
+/** 프로파일 groups 의 고유 트레잇(하드웨어 식별자 CUSTOM_NVIDIA_26B9 등) — 목록·셀렉트 표기용. */
+export function profileTraits(groups?: Record<string, string>[]): string[] {
+  const s = new Set<string>();
+  for (const g of groups ?? [])
+    for (const k of Object.keys(g)) if (k.startsWith("trait:")) s.add(k.slice(6));
+  return Array.from(s);
+}
+
 export function useFlavors() {
   const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({

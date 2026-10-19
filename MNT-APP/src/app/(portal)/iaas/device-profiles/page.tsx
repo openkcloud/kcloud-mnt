@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import {
-  useDeviceProfiles, useFlavors, useCreateDeviceProfile, useDeleteDeviceProfile,
+  useDeviceProfiles, useFlavors, useCreateDeviceProfile, useDeleteDeviceProfile, profileTraits,
   type DeviceProfile, type CreateDeviceProfileInput,
 } from "@/lib/iaas-api";
 
@@ -33,14 +33,6 @@ function parseGroup(g: Record<string, string>) {
     else others.push({ k, v });
   }
   return { resources, traits, others };
-}
-
-// 프로파일 전체의 고유 트레잇(하드웨어 식별자) — 목록 배지용
-function profileTraits(groups?: Record<string, string>[]): string[] {
-  const s = new Set<string>();
-  for (const g of groups ?? [])
-    for (const k of Object.keys(g)) if (k.startsWith("trait:")) s.add(k.slice(6));
-  return Array.from(s);
 }
 
 // 디바이스 프로파일(Cyborg device-profile) — 전역(admin) 자원. 플레이버가 accel:device_profile 로 참조.
