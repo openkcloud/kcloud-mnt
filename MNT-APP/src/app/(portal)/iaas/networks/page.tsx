@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import Link from "next/link";
 import {
   Network as NetworkIcon,
   Wifi,
@@ -496,7 +497,19 @@ function NetworkDetailPanel({ network, projectLabel, onClose }: { network: IaasN
                       <TableCell className="font-mono text-[10px]">{p.mac}</TableCell>
                       <TableCell className="font-mono text-[10px] text-muted-foreground">
                         {p.deviceOwner}
-                        {p.vm && <span className="ml-1 text-brand-indigo-600">→ {p.vm}</span>}
+                        {p.vm && (
+                          p.deviceOwner.startsWith("compute:") ? (
+                            <Link
+                              href={`/iaas/instances/detail/?id=${p.vm}`}
+                              className="ml-1 text-brand-indigo-600 hover:underline"
+                              title="인스턴스 상세로 이동"
+                            >
+                              → {p.vm}
+                            </Link>
+                          ) : (
+                            <span className="ml-1 text-brand-indigo-600">→ {p.vm}</span>
+                          )
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant={p.status === "ACTIVE" ? "success" : "secondary"} className="text-[10px]">
