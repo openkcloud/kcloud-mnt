@@ -19,7 +19,8 @@ IAAS_QUEUE = "okc-iaas"   # IAAS 워커: OpenStack 작업
 # ── 시간·재시도 기준(임시값 — 논의 후 조정) ───────────────────────────
 POLL_SECONDS = 1                          # 상태 확인 간격 — 사이에 지나간 단계는 시작·완료가 같은 시각(화면 '1초 미만')
 WATCH_MAX = timedelta(seconds=60)         # 상태 확인 작업 1회 최대 점유시간(상태가 바뀌면 바로 돌아옴)
-VOLUME_READY_MAX = timedelta(minutes=5)   # 부팅 볼륨 준비 최대
+VOLUME_READY_MAX = timedelta(minutes=5)   # 부팅 볼륨 준비 대기 1회 최대
+VOLUME_READY_TRIES = 2                    # 부팅 볼륨 준비 대기 횟수 — 1회를 넘겨도 Cinder 는 계속 만들고 있어 한 번 더 기다린다
 BUILD_MAX = timedelta(minutes=5)          # 스케줄링 ~ ACTIVE 최대
 WORKFLOW_MAX = timedelta(minutes=30)      # 워크플로 전체 최대(넘으면 실패로 기록)
 QUEUE_WAIT_MAX = timedelta(minutes=5)     # 큐에서 기다리는 최대 — 시작 자리 대기(예약)·IAAS 작업 대기 모두. 넘으면 실패
@@ -65,6 +66,7 @@ class VmProvision:
         self.cur = -1  # 진행 중인 상세 단계 위치(plan 인덱스)
         self.plan: list[dict] = []
         self.res: dict = {}  # 이번 회차가 만든 자원(볼륨·서버·FIP) — 실패하면 정리하고, 정리 못 한 것만 티켓 result 에 남긴다
+        self.volume_creating = False  # 부팅 볼륨 준비 시간 초과 — 아직 만드는 중이라 Cinder 가 지우지 못한다(직접 정리)
         try:
             plan = await self._admit()
             if plan is None:  # 시작 전 취소 — 신청은 이전 상태로 되돌렸다
@@ -116,9 +118,17 @@ class VmProvision:
         volume_id = await self._iaas("iaas.create_boot_volume", inp["projectId"], self.volume_name, inp["volumeGb"],
                                      inp["imageId"], retry=NO_RETRY)
         self.res["volumeId"] = volume_id
-        deadline = (workflow.now() + VOLUME_READY_MAX).timestamp()  # 조회 오류로 재시도돼도 처음 기준을 지킨다
-        await self._iaas("iaas.wait_volume", inp["projectId"], volume_id, deadline,
-                         timeout=VOLUME_READY_MAX + timedelta(seconds=30), heartbeat=HEARTBEAT)
+        # 준비 대기 — VOLUME_READY_MAX 씩 VOLUME_READY_TRIES 번. 그 안에 준비되면 다음 단계, error 면 IAAS 작업이 지우고 실패.
+        # 다 넘기면 실패 — 만드는 중인 볼륨은 Cinder 가 지우지 못하므로 정리하지 않고 직접 정리로 남긴다
+        for _ in range(VOLUME_READY_TRIES):
+            deadline = (workflow.now() + VOLUME_READY_MAX).timestamp()  # 조회 오류로 재시도돼도 처음 기준을 지킨다
+            status = await self._iaas("iaas.wait_volume", inp["projectId"], volume_id, deadline,
+                                      timeout=VOLUME_READY_MAX + timedelta(seconds=30), heartbeat=HEARTBEAT)
+            if status is None:  # 준비됨
+                break
+        else:
+            self.volume_creating = True
+            raise ApplicationError("볼륨 생성 시간이 초과되었습니다. 관리자에게 문의하세요", non_retryable=True)
         await self._go("send_request", {"create_boot_volume": f"{self.volume_name} · {inp['volumeGb']}GB"})
 
         # VM 생성 요청(1회) — 실패하면 IAAS 작업이 부팅 볼륨을 지운다.
@@ -177,6 +187,8 @@ class VmProvision:
         """실패한 회차가 만든 자원 정리 → 실패 사유에 덧붙일 문구. 다 정리하면 남은 자원 기록을 비운다."""
         if not self.res:
             return ""
+        if self.volume_creating:  # 부팅 볼륨만 만든 단계 — 지울 수 없으니 기다리지 않고 남긴다(결과에 볼륨 ID 기록)
+            return f" — 부팅 볼륨 직접 정리 필요(volumeId={self.res['volumeId']})"
         deadline = (workflow.now() + CLEANUP_MAX).timestamp()
         try:
             done = await self._iaas("iaas.cleanup", self.inp["projectId"], self.res, deadline,

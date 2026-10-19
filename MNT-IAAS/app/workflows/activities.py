@@ -53,14 +53,18 @@ def create_boot_volume(project_id: str, name: str, size_gb: int, image_id: str) 
 
 
 @activity.defn(name="iaas.wait_volume")
-def wait_volume(project_id: str, volume_id: str, deadline: float) -> None:
+def wait_volume(project_id: str, volume_id: str, deadline: float) -> str | None:
     """볼륨이 available 이 될 때까지 대기. deadline(epoch 초)은 워크플로가 정한 절대 시각.
-    error·시간 초과면 볼륨을 지우고 실패."""
+    준비되면 None. deadline 까지 준비되지 않으면 그때 상태를 돌려준다 — 아직 만드는 중이라 지우지 않는다
+    (더 기다릴지는 워크플로가 정함). error 면 볼륨을 지우고 실패."""
     try:
         servers._wait_volume_available(project_id, volume_id, timeout=max(0.0, deadline - time.time()),
                                        tick=activity.heartbeat)
+    except servers.VolumeTimeout as e:
+        return e.status
     except servers.VolumeNotReady as e:
         raise _fail(f"부팅 볼륨 준비 실패: {e}" + servers._discard_volume(volume_id))
+    return None
 
 
 @activity.defn(name="iaas.create_server")
