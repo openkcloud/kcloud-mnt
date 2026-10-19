@@ -9,6 +9,10 @@ from openstack.config import loader as _loader  # noqa: F401 (사이드이펙트
 
 from .config import settings
 
+# 시간 제한을 따로 주지 않은 요청(토큰 발급·버전 확인)의 최대 대기(초). 없으면 Keystone 이 요청을 받고 응답하지 않을 때
+# 토큰 잠금을 쥔 채 끝없이 기다려, 같은 연결을 쓰는 요청(IAAS 워커 슬롯 포함)이 모두 멈춘다. API 호출은 각자 timeout 을 준다
+DEFAULT_TIMEOUT = 10
+
 _conn: "openstack.connection.Connection | None" = None
 _proj_conns: "dict[str, openstack.connection.Connection]" = {}
 
@@ -26,6 +30,7 @@ def get_conn() -> "openstack.connection.Connection":
             region_name=settings.os_region_name or None,
             identity_api_version="3",
             verify=not settings.os_insecure,
+            api_timeout=DEFAULT_TIMEOUT,
         )
     return _conn
 
@@ -45,6 +50,7 @@ def get_conn_for_project(project_id: str) -> "openstack.connection.Connection":
             region_name=settings.os_region_name or None,
             identity_api_version="3",
             verify=not settings.os_insecure,
+            api_timeout=DEFAULT_TIMEOUT,
         )
         _proj_conns[project_id] = conn
     return conn
@@ -58,7 +64,7 @@ def os_request(conn, url: str, method: str, **kwargs):
     새 연결로 보내면 이 경우가 생기지 않는다(추가 비용은 TLS 연결 1회)."""
     if method == "GET":
         return conn.session.request(url, method, connect_retries=1, **kwargs)
-    fresh = ks_session.Session(auth=conn.session.auth, verify=conn.session.verify)
+    fresh = ks_session.Session(auth=conn.session.auth, verify=conn.session.verify, timeout=conn.session.timeout)
     try:
         return fresh.request(url, method, connect_retries=0, **kwargs)
     finally:
