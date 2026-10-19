@@ -32,6 +32,8 @@ log = logging.getLogger(__name__)
 
 # 세션 상태 확인·로그아웃은 만료된 토큰도 받는다(서명이 맞고 이 시간 안이면) — 쉬던 탭이 상태를 물을 수 있게
 _EXPIRED_OK_SECONDS = 12 * 3600
+# Keycloak 요청(공개키·서비스 계정 토큰·세션 삭제)의 연결·응답 대기(초)
+_KC_TIMEOUT = 5
 
 SESSION_END_MESSAGES = {  # cmn_code(IAM_SESSION_END_REASON)
     "logout": "로그아웃 되었습니다.",
@@ -80,7 +82,7 @@ def _jwks_client() -> jwt.PyJWKClient:
     if _jwks is None:
         if not (settings.keycloak_issuer and settings.keycloak_jwks_url):
             raise AuthError(503, "AUTH_NOT_CONFIGURED", "인증 설정(KEYCLOAK_ISSUER·KEYCLOAK_JWKS_URL)이 없습니다.")
-        _jwks = jwt.PyJWKClient(settings.keycloak_jwks_url, cache_keys=True, lifespan=300, timeout=10)
+        _jwks = jwt.PyJWKClient(settings.keycloak_jwks_url, cache_keys=True, lifespan=300, timeout=_KC_TIMEOUT)
     return _jwks
 
 
@@ -250,7 +252,7 @@ def _service_token() -> str:
             return _svc["token"]
         data = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": settings.keycloak_client_id,
                                        "client_secret": settings.keycloak_client_secret}).encode()
-        with urllib.request.urlopen(_realm_url() + "/protocol/openid-connect/token", data, timeout=10) as r:
+        with urllib.request.urlopen(_realm_url() + "/protocol/openid-connect/token", data, timeout=_KC_TIMEOUT) as r:
             t = json.load(r)
         _svc.update(token=t["access_token"], exp=time.time() + float(t.get("expires_in", 60)))
         return _svc["token"]
@@ -262,7 +264,7 @@ def end_keycloak_session(sid: str) -> None:
     url = f"{server}/admin/realms/{realm}/sessions/{urllib.parse.quote(sid, safe='')}"
     try:
         req = urllib.request.Request(url, method="DELETE", headers={"Authorization": "Bearer " + _service_token()})
-        urllib.request.urlopen(req, timeout=10).close()
+        urllib.request.urlopen(req, timeout=_KC_TIMEOUT).close()
     except urllib.error.HTTPError as e:
         if e.code != 404:  # 이미 없는 세션은 정상
             log.warning("Keycloak 세션 삭제 실패 sid=%s: HTTP %s", sid, e.code)
