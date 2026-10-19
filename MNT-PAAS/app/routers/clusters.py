@@ -1,6 +1,7 @@
-"""서비스 클러스터(Magnum K8s) — 사용자 관점 조회 + kubeconfig 발급.
+"""서비스 클러스터(Magnum K8s) — 조회 + kubeconfig 발급 + 삭제(관리자).
 
-생성·삭제는 자원신청 → 관리자 승인 흐름(추후). 여기는 읽기 + kubeconfig.
+생성은 자원신청 → 관리자 승인 흐름(추후). 삭제는 관리 화면에서 관리자가 직접 수행한다
+(프론트 역할 게이팅 — 템플릿 CRUD 와 동일, 백엔드 인증 가드 없음).
 """
 from __future__ import annotations
 
@@ -77,6 +78,15 @@ def get_cluster(cluster_id: str):
         ],
     })
     return d
+
+
+@router.delete("/clusters/{cluster_id}")
+def delete_cluster(cluster_id: str):
+    """클러스터 삭제(관리자). Magnum DELETE 는 비동기 — 호출 후 DELETE_IN_PROGRESS 로 바뀐다."""
+    try:
+        return magnum.request("DELETE", f"/clusters/{cluster_id}")
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
 
 
 @router.get("/clusters/{cluster_id}/kubeconfig")
