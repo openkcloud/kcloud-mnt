@@ -126,6 +126,9 @@ export default function ProvidersPage() {
                 </div>
               </div>
             ))}
+            {!centers.data?.items.length && (
+              <div className="py-8 text-center text-sm text-muted-foreground">등록된 센터가 없습니다.</div>
+            )}
           </CardContent>
         </Card>
 
@@ -198,6 +201,9 @@ export default function ProvidersPage() {
                 </div>
               );
             })}
+            {!pools.data?.items.length && (
+              <div className="py-8 text-center text-sm text-muted-foreground">등록된 자원풀이 없습니다.</div>
+            )}
           </CardContent>
         </Card>
       </div>
