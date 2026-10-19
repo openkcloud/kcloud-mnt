@@ -12,13 +12,14 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError, TimeoutError as ActivityTimeout, TimeoutType
 
-from .vm_provision import CORE_QUEUE, DB_RETRY, END, HEARTBEAT, QUEUE_WAIT_MAX, QUERY_RETRY
+from .vm_provision import CORE_QUEUE, DB_RETRY, END, HEARTBEAT, QUERY_RETRY
 
 AINB_QUEUE = "okc-ainb"   # AINB 워커: Kubeflow 작업
 
 READY_MAX = timedelta(minutes=3)       # Profile 생성 ~ 네임스페이스 Active·자원 한도 적용 최대
 WORKFLOW_MAX = timedelta(minutes=10)   # 워크플로 전체 최대(넘으면 실패로 기록)
 CLEANUP_MAX = timedelta(minutes=1)
+QUEUE_WAIT_MAX = timedelta(minutes=2)  # AINB 작업이 큐에서 기다리는 최대 — 넘으면 AINB 워커가 없는 것으로 보고 실패
 
 
 def _reason(e: BaseException) -> str:
