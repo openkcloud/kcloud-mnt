@@ -3,7 +3,7 @@
  * 자원신청 티켓(VM · AI 워크스페이스) — MNT-CORE 연동(포털 DB). 신청자·처리자는 서버가 토큰으로 정한다(요청에 담지 않음).
  * 티켓 관련 호출은 MSW 목업으로 폴백하지 않는다 — 실패하면 오류를 보여준다(실제 티켓과 목업 데이터가 섞이지 않게).
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { coreFetch } from "@/lib/menu-api";
 import type { Org, ProvisionSpec, ProvisionStepsResp, ResourceRequest } from "@/lib/types";
 
@@ -101,13 +101,13 @@ export interface ProvisionTicketInput {
 }
 
 /** 프로비저닝 시작(승인 → 생성 중) · 재시도(실패 → 생성 중, 새 회차) — 서버가 승인 설정·VM 이름을 다시 확인한 뒤
- *  Temporal 워크플로를 시작. 시작되면 그 티켓의 진행 기록을 비워(이전 회차가 남아 보이지 않게) 새 회차부터 다시 받는다. */
+ *  Temporal 워크플로를 시작. 시작되면 그 티켓의 새 진행 기록을 받을 때까지 요청 중으로 둔다(refreshSteps). */
 export function useProvisionTicket() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...body }: ProvisionTicketInput) =>
       coreFetch<ResourceRequest>(`/tickets/${encodeURIComponent(id)}/provision`, { method: "POST", body: JSON.stringify(body) }),
-    onSuccess: (_data, { id }) => qc.resetQueries({ queryKey: ["tickets", "steps", id], exact: true }),
+    onSuccess: (_data, { id }) => refreshSteps(qc, id),
     onSettled: () => qc.invalidateQueries({ queryKey: ["tickets", "list"] }),
   });
 }
@@ -144,7 +144,7 @@ export interface ProvisionAiWorkspaceInput {
 }
 
 /** AI 워크스페이스 생성 시작(승인 → 생성 중) · 재시도(실패 → 생성 중, 새 회차) — Temporal 워크플로 시작.
- *  VM 과 같이 진행 기록을 비워 새 회차부터 다시 받는다. */
+ *  VM 과 같이 새 진행 기록을 받을 때까지 요청 중으로 둔다(refreshSteps). */
 export function useProvisionAiWorkspaceTicket() {
   const qc = useQueryClient();
   return useMutation({
@@ -153,22 +153,39 @@ export function useProvisionAiWorkspaceTicket() {
         method: "POST",
         body: JSON.stringify(body),
       }),
-    onSuccess: (_data, { id }) => qc.resetQueries({ queryKey: ["tickets", "steps", id], exact: true }),
+    onSuccess: (_data, { id }) => refreshSteps(qc, id),
     onSettled: () => qc.invalidateQueries({ queryKey: ["tickets", "list"] }),
   });
 }
 
-/** 프로비저닝 진행(최신 회차 단계·상세 단계) — 생성 중이면 1초마다 다시 조회.
- *  receivedAt = 응답을 받은 순간(performance.now) — now(DB 시각)와 짝지어 지금의 서버 시각을 추정한다. */
+/** VM 프로비저닝 시작 대기(예약) 취소 — 워크플로에 취소 신호만 보낸다(되돌려졌는지·그사이 시작했는지는 진행 조회로 확인). */
+export function useCancelProvisionQueue() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      coreFetch<{ accepted: boolean }>(`/tickets/${encodeURIComponent(id)}/provision/cancel`, { method: "POST" }),
+  });
+}
+
+/** 프로비저닝 진행 1회 조회 — receivedAt = 응답을 받은 순간(performance.now), now(DB 시각)와 짝지어 지금의 서버 시각을 추정한다. */
+async function fetchTicketSteps(id: string) {
+  const r = await coreFetch<ProvisionStepsResp>(`/tickets/${encodeURIComponent(id)}/steps`);
+  // now 를 주기 전 CORE 면 PC 시각으로 대신한다(배포 순서가 엇갈린 동안)
+  return { ...r, now: r.now ?? new Date().toISOString(), receivedAt: performance.now() };
+}
+
+/** 시작(재시도) 직후 그 티켓의 새 진행 기록을 받아 둔다 — 받을 때까지 요청 중(신청 상세는 '시작 중…', 진행 창은 이전 화면 그대로),
+ *  받은 뒤 진행 화면·시작 대기(예약) 모달로. 이미 나가 있는 조회는 이전 회차 응답일 수 있어 끊고, 방금 받은 기록이 있어도 새로 받는다. */
+async function refreshSteps(qc: QueryClient, id: string) {
+  await qc.cancelQueries({ queryKey: ["tickets", "steps", id], exact: true });
+  await qc.prefetchQuery({ queryKey: ["tickets", "steps", id], queryFn: () => fetchTicketSteps(id), staleTime: 0 });
+}
+
+/** 프로비저닝 진행(최신 회차 단계·상세 단계) — 생성 중이면 1초마다 다시 조회. */
 export function useTicketSteps(id: string | undefined) {
   return useQuery({
     queryKey: ["tickets", "steps", id],
     enabled: !!id,
-    queryFn: async () => {
-      const r = await coreFetch<ProvisionStepsResp>(`/tickets/${encodeURIComponent(id!)}/steps`);
-      // now 를 주기 전 CORE 면 PC 시각으로 대신한다(배포 순서가 엇갈린 동안)
-      return { ...r, now: r.now ?? new Date().toISOString(), receivedAt: performance.now() };
-    },
+    queryFn: () => fetchTicketSteps(id!),
     refetchInterval: (query) => (query.state.data?.status === "provisioning" ? 1000 : false),
   });
 }

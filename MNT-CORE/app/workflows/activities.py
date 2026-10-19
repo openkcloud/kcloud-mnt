@@ -8,13 +8,16 @@ from sqlalchemy import text
 from temporalio import activity
 
 from ..db import SessionLocal
+from . import provision_queue
 
 
 @activity.defn(name="core.init_steps")
-def init_steps(ticket_id: str, attempt: int, has_accelerator: bool, has_fip: bool) -> list[dict]:
+def init_steps(ticket_id: str, attempt: int, has_accelerator: bool, has_fip: bool,
+               limit: int | None = None) -> list[dict] | None:
     """회차의 단계 5개와 상세 단계를 waiting 으로 등록하고 진행 순서(plan)를 돌려준다 — 이미 등록돼 있으면 plan 만.
     단계·상세 단계와 순서는 공통코드(TKT_PROVISION_STEP_IAAS / TKT_PROVISION_SUBSTEP_IAAS) 기준.
-    가속기 없는 스펙은 bind_accelerator = skipped(상세 단계 없음), Floating IP 가 없으면 attach_fip 제외."""
+    가속기 없는 스펙은 bind_accelerator = skipped(상세 단계 없음), Floating IP 가 없으면 attach_fip 제외.
+    limit 이 있으면 시작 자리 확인 — 진행 중 + 앞서 기다리는 신청이 limit 이상이면 등록하지 않고 None(provision_queue)."""
     with SessionLocal() as db:
         steps = db.execute(text("""SELECT code FROM cmn_code
                                     WHERE group_code = 'TKT_PROVISION_STEP_IAAS' AND is_active
@@ -26,6 +29,11 @@ def init_steps(ticket_id: str, attempt: int, has_accelerator: bool, has_fip: boo
             text("SELECT 1 FROM tkt_provision_step WHERE request_id = :id AND attempt = :a LIMIT 1"),
             {"id": ticket_id, "a": attempt},
         ).first() is not None
+        if not registered and limit is not None:
+            db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": provision_queue.LOCK_KEY})  # 등록(커밋)까지 잡는다
+            if not provision_queue.has_room(db, ticket_id, limit):
+                db.rollback()
+                return None
         plan = []
         for seq, step in enumerate(steps, 1):
             skipped = step == "bind_accelerator" and not has_accelerator
@@ -127,4 +135,11 @@ def finish(ticket_id: str, status: str, result: dict | None, error: str | None) 
         db.commit()
 
 
-ALL = [init_steps, init_steps_ainb, update_steps, finish]
+@activity.defn(name="core.cancel_queued")
+def cancel_queued(ticket_id: str, workflow_id: str, prev: dict) -> None:
+    """시작 대기 중 취소 — 신청을 프로비저닝을 누르기 전 상태·값으로 되돌린다(이 회차가 아직 생성 중일 때만)."""
+    with SessionLocal() as db:
+        provision_queue.restore(db, ticket_id, workflow_id, prev)
+
+
+ALL = [init_steps, init_steps_ainb, update_steps, finish, cancel_queued]

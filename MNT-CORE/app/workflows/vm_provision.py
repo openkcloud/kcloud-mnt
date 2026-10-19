@@ -22,8 +22,13 @@ WATCH_MAX = timedelta(seconds=60)         # 상태 확인 작업 1회 최대 점
 VOLUME_READY_MAX = timedelta(minutes=5)   # 부팅 볼륨 준비 최대
 BUILD_MAX = timedelta(minutes=5)          # 스케줄링 ~ ACTIVE 최대
 WORKFLOW_MAX = timedelta(minutes=30)      # 워크플로 전체 최대(넘으면 실패로 기록)
-QUEUE_WAIT_MAX = timedelta(minutes=2)     # IAAS 작업이 큐에서 기다리는 최대 — 넘으면 IAAS 워커가 없는 것으로 보고 실패
+QUEUE_WAIT_MAX = timedelta(minutes=5)     # 큐에서 기다리는 최대 — 시작 자리 대기(예약)·IAAS 작업 대기 모두. 넘으면 실패
 CLEANUP_MAX = timedelta(minutes=3)        # 실패 후 자원 정리(VM·볼륨 삭제 완료까지) 최대
+RUN_MAX = QUEUE_WAIT_MAX + WORKFLOW_MAX + timedelta(minutes=5)  # 실행 제한(안전장치) — 시작 대기 + 진행 + 정리 여유
+# 동시에 진행하는 VM 프로비저닝 수 — VM 하나는 IAAS 작업을 한 번에 하나만 쓰므로 IAAS 워커 슬롯
+# (MNT-IAAS MAX_ACTIVITIES × 파드 수)과 같게 둔다. 넘는 신청은 시작 전에 자리를 기다린다(먼저 누른 순서)
+PROVISION_MAX = 8
+ADMIT_POLL = timedelta(seconds=2)         # 시작 자리가 났는지 다시 확인하는 간격
 HEARTBEAT = timedelta(seconds=30)         # 이 시간 동안 신호가 없으면 워커가 죽은 것으로 보고 다른 워커가 이어받음
 QUERY_RETRY = RetryPolicy(initial_interval=timedelta(seconds=1), backoff_coefficient=2,
                           maximum_interval=timedelta(seconds=30), maximum_attempts=5)  # 조회: 간격을 늘려 가며 최대 5회
@@ -46,6 +51,14 @@ def _reason(e: BaseException) -> str:
 
 @workflow.defn(name="VmProvision")
 class VmProvision:
+    def __init__(self) -> None:
+        self.cancel_requested = False  # 시작 대기 중 취소 신호 — run 보다 신호가 먼저 올 수 있어 여기서 만든다
+
+    @workflow.signal(name="cancel_queue")
+    def cancel_queue(self) -> None:
+        """시작 대기(예약) 취소 — 아직 시작 전이면 신청을 이전 상태로 되돌리고 끝낸다. 시작한 뒤에는 무시."""
+        self.cancel_requested = True
+
     @workflow.run
     async def run(self, inp: dict) -> dict:
         self.inp = inp
@@ -53,8 +66,10 @@ class VmProvision:
         self.plan: list[dict] = []
         self.res: dict = {}  # 이번 회차가 만든 자원(볼륨·서버·FIP) — 실패하면 정리하고, 정리 못 한 것만 티켓 result 에 남긴다
         try:
-            self.plan = await self._core("core.init_steps", inp["ticketId"], inp["attempt"], inp["hasAccelerator"],
-                                         bool(inp.get("floatingNetworkId")))
+            plan = await self._admit()
+            if plan is None:  # 시작 전 취소 — 신청은 이전 상태로 되돌렸다
+                return {"cancelled": True}
+            self.plan = plan
             result = await self._within(WORKFLOW_MAX, self._provision())
         except Exception as e:  # noqa: BLE001 — 어떤 실패든 진행 기록·티켓에 남긴다
             msg = _reason(e)
@@ -67,6 +82,25 @@ class VmProvision:
             raise ApplicationError(msg, non_retryable=True) from e
         await self._core("core.finish", inp["ticketId"], "completed", result, None)
         return result
+
+    async def _admit(self) -> list[dict] | None:
+        """시작 자리 대기(예약) — 진행 중 + 앞서 기다리는 신청이 PROVISION_MAX 보다 적으면 단계를 등록(= 시작)하고
+        진행 순서(plan)를 돌려준다. 기다리는 중 취소되면 신청을 이전 상태로 되돌리고 None. QUEUE_WAIT_MAX 안에 자리가 안 나면 실패."""
+        inp, until = self.inp, workflow.now() + QUEUE_WAIT_MAX
+        while not self.cancel_requested:
+            plan = await self._core("core.init_steps", inp["ticketId"], inp["attempt"], inp["hasAccelerator"],
+                                    bool(inp.get("floatingNetworkId")), PROVISION_MAX)
+            if plan is not None:
+                return plan
+            if workflow.now() >= until:
+                raise ApplicationError(f"{int(QUEUE_WAIT_MAX.total_seconds() // 60)}분 안에 시작하지 못했습니다 — 동시에 진행할 수 있는 "
+                                       f"VM 프로비저닝({PROVISION_MAX}건)이 모두 진행 중입니다. 다시 시도하세요")
+            try:
+                await workflow.wait_condition(lambda: self.cancel_requested, timeout=ADMIT_POLL)
+            except asyncio.TimeoutError:
+                pass
+        await self._core("core.cancel_queued", inp["ticketId"], workflow.info().workflow_id, inp["prev"])
+        return None
 
     async def _provision(self) -> dict:
         inp = self.inp
