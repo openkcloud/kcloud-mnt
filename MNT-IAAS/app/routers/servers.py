@@ -153,6 +153,14 @@ class VolumeNotReady(RuntimeError):
     """볼륨이 error 가 됐거나 제한 시간 안에 준비되지 않음 — 다시 확인해도 소용없는 실패(조회 오류와 구분)."""
 
 
+class VolumeTimeout(VolumeNotReady):
+    """제한 시간 안에 준비되지 않음 — Cinder 는 계속 만드는 중(status = 그때 상태, 예: downloading)."""
+
+    def __init__(self, timeout: float, status: str):
+        super().__init__(f"{round(timeout)}초 안에 준비되지 않음(status={status})")
+        self.status = status
+
+
 def _wait_volume_available(project_id: str, volume_id: str, *, timeout: float = 300, interval: int = 3, tick=None):
     """볼륨이 사용 가능(available)해질 때까지 대기 — 이미지 내려받기·변환(creating·downloading) 포함.
     tick 은 확인할 때마다 호출(워크플로 작업의 heartbeat)."""
@@ -164,7 +172,7 @@ def _wait_volume_available(project_id: str, volume_id: str, *, timeout: float = 
         if status == "error":
             raise VolumeNotReady("Cinder 볼륨 생성 오류(status=error)")
         if time.monotonic() > deadline:
-            raise VolumeNotReady(f"{round(timeout)}초 안에 준비되지 않음(status={status})")
+            raise VolumeTimeout(timeout, status)
         if tick:
             tick(status)
         time.sleep(interval)
