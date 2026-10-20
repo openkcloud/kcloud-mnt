@@ -71,6 +71,7 @@ CASES = [
     ("PATCH", "/images/i1", {"visibility": "public"}, D), ("DELETE", "/images/i1", None, D),
     # 플레이버
     ("GET", "/flavors", None, A), ("GET", "/device-profiles", None, A),
+    ("GET", f"/projects/{MINE}/flavors", None, A), ("GET", f"/projects/{OTHER}/flavors", None, D),
     ("GET", "/placement-preview?flavorId=f1&projectId=p1", None, D),
     ("POST", "/flavors", {"name": "f", "vcpus": 1, "ramMb": 512, "diskGb": 1}, D), ("DELETE", "/flavors/f1", None, D),
 ]

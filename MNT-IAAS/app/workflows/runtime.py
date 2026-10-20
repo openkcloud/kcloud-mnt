@@ -18,9 +18,11 @@ from . import activities
 NAMESPACE = "default"
 TASK_QUEUE = "okc-iaas"  # MNT-CORE 워크플로가 OpenStack 작업을 넣는 큐
 MAX_ACTIVITIES = 8  # 동시에 실행할 작업 수 = 스레드 수(넘치면 작업이 스레드를 기다리며 시간 제한을 못 지킨다)
-# 재기동(--reload·파드 교체) 때 실행 중인 작업이 끝나기를 기다리는 시간 — VM 생성 요청(최대 60초)이 중간에 끊겨
-# 만들어진 VM·볼륨을 놓치지 않게. 파드는 terminationGracePeriodSeconds 를 이보다 길게 둘 것
-GRACEFUL_SHUTDOWN = timedelta(seconds=90)
+# 재기동(--reload·파드 교체) 때 실행 중인 작업이 끝나기를 기다리는 시간 — 생성 요청이 중간에 끊겨 만들어진 VM·볼륨을
+# 놓치지 않게. 파드 기본 종료 유예(terminationGracePeriodSeconds 30초) 안에 끝나도록 25초 — 그 뒤에는 강제 종료된다.
+# 생성 요청은 보통 몇 초면 끝나고(Nova 요청 제한은 60초), 대기 작업(watch·wait·cleanup)은 끊겨도 하트비트가 끊기면
+# 다른 파드에서 다시 실행된다.
+GRACEFUL_SHUTDOWN = timedelta(seconds=25)
 log = logging.getLogger("uvicorn.error")
 
 

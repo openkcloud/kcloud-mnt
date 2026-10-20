@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..auth import require_admin
+from ..auth import project_member, require_admin
 from ..config import settings
 from ..openstack_client import get_conn, os_request
 from ..openstack_quota import get_project_quota
@@ -76,23 +76,47 @@ def _to_flavor(f: dict, accel: str | None, accelerators: list[dict] | None = Non
     }
 
 
-@router.get("/flavors")
-def list_flavors():
-    """플레이버 목록 + 가속기(device_profile) extra_spec + 가속기 종류(GPU/NPU)."""
+def _flavor_items(flavors: list[dict]) -> list[dict]:
+    """Nova 플레이버 → 화면 형식 + 가속기(device_profile) extra_spec + 가속기 종류(GPU/NPU)."""
     try:
         # 가속기 종류는 부가정보 — Cyborg 조회가 실패해도 플레이버 목록은 돌려준다
         dps = {d["name"]: _dp_accelerators(d.get("groups"))
                for d in _cyborg("GET", "/device_profiles").json().get("device_profiles", [])}
     except Exception:  # noqa: BLE001
         dps = None  # 조회 실패 — device-profile 이 없는지 알 수 없다
+    items = []
+    for f in flavors:
+        specs = _nova("GET", f"/flavors/{f['id']}/os-extra_specs").json().get("extra_specs", {})
+        dp = specs.get("accel:device_profile")
+        missing = bool(dp) and dps is not None and dp not in dps
+        items.append(_to_flavor(f, dp, (dps or {}).get(dp), missing))
+    return items
+
+
+@router.get("/flavors")
+def list_flavors():
+    """플레이버 목록 + 가속기(device_profile) extra_spec + 가속기 종류(GPU/NPU)."""
     try:
-        flavors = _nova("GET", "/flavors/detail").json()["flavors"]
-        items = []
-        for f in flavors:
-            specs = _nova("GET", f"/flavors/{f['id']}/os-extra_specs").json().get("extra_specs", {})
-            dp = specs.get("accel:device_profile")
-            missing = bool(dp) and dps is not None and dp not in dps
-            items.append(_to_flavor(f, dp, (dps or {}).get(dp), missing))
+        items = _flavor_items(_nova("GET", "/flavors/detail").json()["flavors"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"플레이버 조회 실패: {e}")
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/projects/{project_id}/flavors", dependencies=[Depends(project_member)])
+def list_project_flavors(project_id: str):
+    """프로젝트가 쓸 수 있는 플레이버 — public + 그 프로젝트에 접근이 허용된 비공개. VM·클러스터 신청용.
+    Nova 기본 조회는 공개만 주므로 is_public=None(관리자)으로 전부 받아 비공개는 접근 목록(os-flavor-access)으로 거른다."""
+    try:
+        usable = []
+        for f in _nova("GET", "/flavors/detail?is_public=None").json()["flavors"]:
+            if f.get("os-flavor-access:is_public", True):
+                usable.append(f)
+                continue
+            access = _nova("GET", f"/flavors/{f['id']}/os-flavor-access").json().get("flavor_access", [])
+            if any(a.get("tenant_id") == project_id for a in access):
+                usable.append(f)
+        items = _flavor_items(usable)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"플레이버 조회 실패: {e}")
     return {"items": items, "count": len(items)}
