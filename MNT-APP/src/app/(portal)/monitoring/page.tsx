@@ -35,10 +35,11 @@ import {
   useErrorLogs,
   useKpiTimeseries,
   useNodes,
+  useNodesTimeseries,
   useUtilTimeseries,
   type VendorMetrics,
   type NodeRow,
-  type UtilSeriesRow,
+  type UtilHeatmap,
 } from "@/lib/obs-api";
 
 
@@ -110,6 +111,7 @@ export default function MonitoringOverviewPage() {
   const { data: errorLogs } = useErrorLogs(4);
   const { data: kpiTs } = useKpiTimeseries();
   const { data: nodesData } = useNodes("mgmt");
+  const { data: nodesReadyTs } = useNodesTimeseries("mgmt");
   const { data: utilTs } = useUtilTimeseries();
   return (
     <div className="space-y-4">
@@ -120,7 +122,7 @@ export default function MonitoringOverviewPage() {
         <QueryValue label="쓰로틀링 횟수" value={ov?.throttle_events != null ? String(ov.throttle_events) : "—"} unit="회" color="rose" connected={!!ov} api="/api/v2/monitoring/throttling/timeseries (throttle_events)" />
         <QueryValue label="가속기 사용률" value={fmtN(ov?.accelerator_utilization_percent, 0)} unit="%" sparkData={kpiTs?.accel_util} color="violet" connected={!!ov} api="/api/v2/monitoring/accelerators/utilization(+/timeseries)" />
         <QueryValue label="서버 총 전력" value={ov?.total_power_watts != null ? (ov.total_power_watts / 1000).toFixed(2) : "—"} unit="kW" sparkData={kpiTs?.server_power} color="amber" connected={!!ov} api="/api/v2/monitoring/power/summary(+/timeseries)" />
-        <QueryValue label="정상 노드" value={ov?.nodes_ready != null ? `${ov.nodes_ready} / ${ov.nodes_total}` : "—"} unit="" color="sky" connected={!!ov} api="/api/v2/monitoring/overview (nodes.healthy/total)" />
+        <QueryValue label="정상 노드" value={ov?.nodes_ready != null ? `${ov.nodes_ready} / ${ov.nodes_total}` : "—"} unit="" sparkData={nodesReadyTs?.series} color="sky" connected={!!ov} api="/api/v2/monitoring/nodes/timeseries" />
       </div>
 
       {/* 가속기 3종 공통 지표 — 2차 워크샵 이노그리드 p.22~23 (CR-OBS-04) */}
@@ -209,16 +211,13 @@ export default function MonitoringOverviewPage() {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
-              가속기 사용률 추세 (벤더별)
-              <span className="flex items-center gap-1.5">
-                <InfoHint text={"원래 설계: 호스트×시각 히트맵(metrics/timeseries?by=hostname).\n그러나 API가 호스트별로 분리해 주지 않아(series 1개·라벨 빈값), 벤더별(gpu/furiosa/rebellions) 사용률 추세선으로 대체함.\n원천: /monitoring/metrics/timeseries"} />
-                <StatusTag connected={!!utilTs} api="/api/v2/monitoring/metrics/timeseries (gpu/furiosa/rebellions_utilization)" />
-              </span>
+              가속기 사용률 — 호스트 × 24시간
+              <StatusTag connected={!!utilTs} api="/api/v2/monitoring/metrics/timeseries?by=hostname (gpu/furiosa/rebellions_utilization)" />
             </CardTitle>
-            <CardDescription>gpu·furiosa·rebellions 사용률(%)을 시간축으로. (호스트별 격자는 API 분리 제공 시 전환)</CardDescription>
+            <CardDescription>호스트별 가속기 사용률(%)을 시각 격자로. 색이 진할수록 사용률이 높습니다.</CardDescription>
           </CardHeader>
           <CardContent>
-            <VendorUtilChart series={utilTs?.series ?? []} />
+            <UtilHeatmapGrid data={utilTs} />
           </CardContent>
         </Card>
       </div>
@@ -596,30 +595,56 @@ function HostMap({ nodes }: { nodes: NodeRow[] }) {
   );
 }
 
-// 히트맵 대체 형태 — 벤더별 사용률 추세선(by=hostname 미분리라 격자 대신).
-function VendorUtilChart({ series }: { series: UtilSeriesRow[] }) {
-  if (!series.length) {
+// 가속기 사용률 히트맵 — 호스트(행) × 시각(열). 색 농도로 사용률 표현(by=hostname 라벨 수신).
+function UtilHeatmapGrid({ data }: { data?: UtilHeatmap }) {
+  const hosts = data?.hosts ?? [];
+  const times = data?.times ?? [];
+  if (!hosts.length) {
     return <div className="py-6 text-center text-xs text-muted-foreground">데이터 없음</div>;
   }
+  const cellColor = (v: number | null) => {
+    if (v == null) return "bg-muted";
+    if (v >= 75) return "bg-rose-500";
+    if (v >= 40) return "bg-amber-400";
+    if (v > 0) return "bg-brand-mint-400";
+    return "bg-brand-mint-100";
+  };
+  const vendorLabel: Record<string, string> = { gpu: "L40S", furiosa: "RNGD", rebellions: "ATOM" };
   return (
-    <ChartContainer
-      config={{
-        gpu: { label: "L40S(GPU)", color: "var(--brand-indigo-500)" },
-        furiosa: { label: "RNGD(Furiosa)", color: "var(--brand-mint-500)" },
-        rebellions: { label: "ATOM(Rebellions)", color: "#f59e0b" },
-      }}
-      className="h-[220px] w-full"
-    >
-      <LineChart data={series}>
-        <CartesianGrid strokeDasharray="3 3" vertical={false} />
-        <XAxis dataKey="t" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} interval={3} />
-        <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-        <RTooltip content={<ChartTooltipContent />} />
-        <Line type="monotone" dataKey="gpu" stroke="var(--brand-indigo-500)" strokeWidth={2} dot={false} connectNulls />
-        <Line type="monotone" dataKey="furiosa" stroke="var(--brand-mint-500)" strokeWidth={2} dot={false} connectNulls />
-        <Line type="monotone" dataKey="rebellions" stroke="#f59e0b" strokeWidth={2} dot={false} connectNulls />
-      </LineChart>
-    </ChartContainer>
+    <div className="space-y-2">
+      <div className="overflow-x-auto">
+        <div className="min-w-[640px] space-y-1">
+          {hosts.map((h) => (
+            <div key={`${h.vendor}:${h.host}`} className="flex items-center gap-2">
+              <div className="flex w-52 shrink-0 items-center justify-end gap-1 truncate text-right font-mono text-[10px] text-muted-foreground" title={h.host}>
+                <span className="rounded bg-secondary px-1 py-0.5 text-[9px]">{vendorLabel[h.vendor] ?? h.vendor}</span>
+                <span className="truncate">{h.host}</span>
+              </div>
+              <div className="flex flex-1 gap-0.5">
+                {h.cells.map((v, i) => (
+                  <div
+                    key={i}
+                    className={cn("h-5 flex-1 rounded-sm", cellColor(v))}
+                    title={`${h.host} · ${times[i] ?? i} · ${v == null ? "—" : v + "%"}`}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center justify-between pl-[calc(13rem+0.5rem)] text-[10px] font-mono text-muted-foreground">
+        <span>{times[0] ?? ""}</span>
+        <span>{times[Math.floor(times.length / 2)] ?? ""}</span>
+        <span>{times[times.length - 1] ?? ""}</span>
+      </div>
+      <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1"><span className="size-2.5 rounded-sm bg-brand-mint-400" /> 낮음</span>
+        <span className="flex items-center gap-1"><span className="size-2.5 rounded-sm bg-amber-400" /> 중간</span>
+        <span className="flex items-center gap-1"><span className="size-2.5 rounded-sm bg-rose-500" /> 높음(≥75%)</span>
+        <span className="flex items-center gap-1"><span className="size-2.5 rounded-sm bg-muted" /> 값 없음</span>
+      </div>
+    </div>
   );
 }
 
