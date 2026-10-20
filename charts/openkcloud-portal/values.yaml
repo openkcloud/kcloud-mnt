@@ -78,6 +78,7 @@ backends:
       SERVICE_NAME: mnt-paas
       API_PREFIX: /api/paas
       CORS_ORIGINS: ""
+      CORE_API_BASE: http://mnt-core.openkcloud-mnt.svc.cluster.local   # PaaS API 인증(사용자·접근 클러스터 확인)
       # OpenStack(Magnum) — MNT-IAAS 와 동일 규칙: 클러스터 내부는 ingressgateway 443
       OS_AUTH_URL: https://keystone-api.openstack.internal/v3
       OS_PROJECT_NAME: admin
