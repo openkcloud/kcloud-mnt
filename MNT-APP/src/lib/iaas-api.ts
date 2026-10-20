@@ -14,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { IaasNetwork, ProvNetwork, SecurityGroup, Tenant } from "@/lib/types";
 import { usePollingInterval } from "@/lib/polling";
 import { ApiError, authFetch, readError } from "@/lib/http";
+import { coreFetch } from "@/lib/menu-api";
 
 const RAW = process.env.NEXT_PUBLIC_IAAS_API;
 export const IAAS_BASE = RAW === undefined ? "http://localhost:8001" : RAW;
@@ -62,12 +63,20 @@ export interface CreateProjectInput {
   quotaAcc?: number; // 비활성(-1) — OpenStack 미지원, 포털 DB 관리 예정
 }
 
-/** 프로젝트 생성 — MNT-IAAS가 Keystone 생성 + Nova/Cinder 쿼터 설정. */
+/** 프로젝트 생성 — MNT-IAAS가 Keystone 생성 + Nova/Cinder 쿼터 설정 → 포털 원장(iam_project)에 등록.
+ *  등록은 조직 미지정(org_id NULL). 생성 자체는 OpenStack 에 완료되므로 등록 실패는 경고만 남기고 통과. */
 export function useCreateProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: CreateProjectInput) =>
-      postJson<Tenant>(`${IAAS_BASE}/api/iaas/projects`, input),
+    mutationFn: async (input: CreateProjectInput) => {
+      const t = await postJson<Tenant>(`${IAAS_BASE}/api/iaas/projects`, input);
+      try {
+        await coreFetch(`/tickets/projects`, { method: "POST", body: JSON.stringify({ projectId: t.id }) });
+      } catch (e) {
+        console.warn("포털 프로젝트 등록 실패 — 자원신청 목록 반영이 지연될 수 있습니다:", e);
+      }
+      return t;
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-projects"] }),
   });
 }
