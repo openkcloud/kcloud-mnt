@@ -56,6 +56,20 @@ def my_projects(user: CurrentUser = Depends(current_user), db: Session = Depends
     return {"projectIds": member_project_ids(db, user.username)}
 
 
+@router.get("/projects/member-counts")
+def project_member_counts(user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    """프로젝트별 포털 멤버 수(iam_project_member) — 프로젝트 목록 '멤버' 컬럼용.
+    관리자는 전체, 사용자는 본인이 멤버인 프로젝트만."""
+    rows = db.execute(
+        text("SELECT project_id, COUNT(*) AS n FROM iam_project_member GROUP BY project_id"),
+    ).mappings().all()
+    counts = {r["project_id"]: r["n"] for r in rows}
+    if not user.is_admin:
+        allowed = set(member_project_ids(db, user.username))
+        counts = {k: v for k, v in counts.items() if k in allowed}
+    return {"counts": counts}
+
+
 @router.get("/projects/{project_id}/members")
 def list_members(project_id: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     """프로젝트 멤버 목록(+사용자 정보). 관리자 또는 그 프로젝트 멤버."""
