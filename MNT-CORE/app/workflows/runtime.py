@@ -15,6 +15,7 @@ from temporalio.worker import Worker
 from ..config import settings
 from . import activities
 from .ai_workspace_provision import WORKFLOW_MAX as AI_WORKSPACE_MAX, AiWorkspaceProvision
+from .kubernetes_provision import RUN_MAX as CLUSTER_RUN_MAX, KubernetesProvision
 from .vm_provision import CORE_QUEUE, RUN_MAX, VmProvision
 
 NAMESPACE = "default"
@@ -74,6 +75,21 @@ async def start_ai_workspace_provision(workflow_id: str, inp: dict) -> None:
         raise
 
 
+async def start_cluster_provision(workflow_id: str, inp: dict) -> None:
+    """서비스 클러스터 프로비저닝 워크플로 시작 — 중복·응답 유실 처리는 VM 과 같다(실행 중이면 시작된 것으로 본다)."""
+    client = await get_client()
+    try:
+        await client.start_workflow(KubernetesProvision.run, inp, id=workflow_id, task_queue=CORE_QUEUE,
+                                    execution_timeout=CLUSTER_RUN_MAX)
+    except Exception:
+        try:
+            if (await client.get_workflow_handle(workflow_id).describe()).status == WorkflowExecutionStatus.RUNNING:
+                return
+        except Exception:  # noqa: BLE001 — 정말 시작되지 않음
+            pass
+        raise
+
+
 async def run_worker():
     """CORE 워커 — 연결 실패·서버 재시작·네임스페이스 준비 전이면 5초 뒤 다시 시도(CORE API 기동은 막지 않음)."""
     with ThreadPoolExecutor(max_workers=MAX_ACTIVITIES) as pool:  # DB 기록 작업은 동기 함수 — 스레드에서 실행
@@ -81,7 +97,7 @@ async def run_worker():
             try:
                 client = await get_client()
                 log.info("Temporal 워커 시작: %s (큐 %s)", _target(), CORE_QUEUE)
-                await Worker(client, task_queue=CORE_QUEUE, workflows=[VmProvision, AiWorkspaceProvision],
+                await Worker(client, task_queue=CORE_QUEUE, workflows=[VmProvision, AiWorkspaceProvision, KubernetesProvision],
                              activities=activities.ALL,
                              activity_executor=pool, max_concurrent_activities=MAX_ACTIVITIES).run()
             except asyncio.CancelledError:

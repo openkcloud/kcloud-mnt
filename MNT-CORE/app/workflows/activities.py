@@ -1,11 +1,12 @@
 """CORE 워커가 실행하는 DB 기록 작업 — 진행 단계·상세 단계·티켓 상태(포털 DB 는 CORE 만 쓴다).
 
-워크플로(vm_provision)가 이름으로 부른다. 재시도돼도 결과가 같도록(멱등) 작성한다.
+워크플로(vm_provision·kubernetes_provision 등)가 이름으로 부른다. 재시도돼도 결과가 같도록(멱등) 작성한다.
 """
 import json
 
 from sqlalchemy import text
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from ..db import SessionLocal
 from . import provision_queue
@@ -85,6 +86,55 @@ def init_steps_ainb(ticket_id: str, attempt: int) -> list[dict]:
         return plan
 
 
+@activity.defn(name="core.init_steps_paas")
+def init_steps_paas(ticket_id: str, attempt: int) -> list[dict]:
+    """클러스터 회차의 단계·상세 단계를 waiting 으로 등록하고 진행 순서(plan)를 돌려준다 — 이미 등록돼 있으면 plan 만.
+    단계·상세 단계와 순서는 공통코드(TKT_PROVISION_STEP_PAAS / TKT_PROVISION_SUBSTEP_PAAS, db/paas_cluster_request.sql) 기준."""
+    with SessionLocal() as db:
+        steps = db.execute(text("""SELECT code FROM cmn_code
+                                    WHERE group_code = 'TKT_PROVISION_STEP_PAAS' AND is_active
+                                    ORDER BY sort_order""")).scalars().all()
+        subs = db.execute(text("""SELECT upper_code, code FROM cmn_code
+                                   WHERE group_code = 'TKT_PROVISION_SUBSTEP_PAAS' AND is_active
+                                   ORDER BY sort_order""")).all()
+        if not steps:
+            raise ApplicationError("클러스터 생성 단계 공통코드가 없습니다(db/paas_cluster_request.sql 적용 필요)",
+                                   non_retryable=True)
+        registered = db.execute(
+            text("SELECT 1 FROM tkt_provision_step WHERE request_id = :id AND attempt = :a LIMIT 1"),
+            {"id": ticket_id, "a": attempt},
+        ).first() is not None
+        plan = []
+        for seq, step in enumerate(steps, 1):
+            codes = [c for up, c in subs if up == step]
+            if not registered:
+                step_id = db.execute(
+                    text("""INSERT INTO tkt_provision_step (request_id, attempt, seq, step_code, step_group_code, status)
+                            VALUES (:id, :a, :seq, :code, 'TKT_PROVISION_STEP_PAAS', 'waiting') RETURNING id"""),
+                    {"id": ticket_id, "a": attempt, "seq": seq, "code": step},
+                ).scalar()
+                for i, code in enumerate(codes, 1):
+                    db.execute(text("""INSERT INTO tkt_provision_substep (step_id, seq, substep_code, substep_group_code)
+                                       VALUES (:s, :i, :c, 'TKT_PROVISION_SUBSTEP_PAAS')"""),
+                               {"s": step_id, "i": i, "c": code})
+            plan += [{"step": step, "sub": code} for code in codes]
+        db.commit()
+        return plan
+
+
+@activity.defn(name="core.grant_cluster_access")
+def grant_cluster_access(project_id: str, cluster_id: str) -> None:
+    """새 클러스터에 소유 프로젝트 접근 권한(전용 — namespace NULL) 등록 → 그 프로젝트 멤버가 포털에서 클러스터를 쓴다.
+    UNIQUE (project_id, cluster_id, namespace) 는 NULL 중복을 막지 못해 NOT EXISTS 로 멱등하게 넣는다."""
+    with SessionLocal() as db:
+        db.execute(text("""INSERT INTO paas_project_cluster (project_id, cluster_id, namespace)
+                           SELECT CAST(:p AS varchar), CAST(:c AS varchar), NULL
+                            WHERE NOT EXISTS (SELECT 1 FROM paas_project_cluster
+                                               WHERE project_id = :p AND cluster_id = :c AND namespace IS NULL)"""),
+                   {"p": project_id, "c": cluster_id})
+        db.commit()
+
+
 def _sets(change: dict, prefix: str, params: dict) -> list[str]:
     """변경 하나 → SET 절. 진행 중이 되면 시작 시각, 완료·실패면 종료 시각(이미 있으면 유지 — 재시도해도 같은 결과)."""
     sets = []
@@ -142,4 +192,4 @@ def cancel_queued(ticket_id: str, workflow_id: str, prev: dict) -> None:
         provision_queue.restore(db, ticket_id, workflow_id, prev)
 
 
-ALL = [init_steps, init_steps_ainb, update_steps, finish, cancel_queued]
+ALL = [init_steps, init_steps_ainb, init_steps_paas, update_steps, finish, cancel_queued, grant_cluster_access]

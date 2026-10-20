@@ -1,4 +1,4 @@
-"""자원신청 티켓(VM · AI 워크스페이스) — 신청 · 목록 · VM 이름 중복 확인 · 승인·반려 · 프로비저닝(Temporal 워크플로) · 진행 조회.
+"""자원신청 티켓(VM · AI 워크스페이스 · 서비스 클러스터) — 신청 · 목록 · 이름 중복 확인 · 승인·반려 · 프로비저닝(Temporal 워크플로) · 진행 조회.
 
 티켓 1건 = VM 1대. 신청자·처리자는 토큰(Keycloak)의 포털 사용자 — 요청 본문의 이름은 쓰지 않는다.
 OpenStack 값(프로젝트·플레이버·이미지·서버 이름)은 MNT-IAAS 라이브 조회로 확인하고,
@@ -7,6 +7,7 @@ OpenStack 값(프로젝트·플레이버·이미지·서버 이름)은 MNT-IAAS 
 import http.client
 import ipaddress
 import json
+import math
 import re
 import urllib.error
 import urllib.request
@@ -32,13 +33,13 @@ _REQUEST_ROLES = ["owner", "member"]  # 신청 가능한 프로젝트 멤버 역
 _MAX_VOLUME_GB = 500
 
 
-def _iaas(path: str, token: str):
-    """MNT-IAAS GET(JSON) — 요청한 사용자의 토큰을 그대로 넘긴다(IAAS 가 같은 기준으로 권한 판정).
+def _service_get(base: str, module: str, setting: str, what: str, path: str, token: str):
+    """다른 백엔드 GET(JSON) — 요청한 사용자의 토큰을 그대로 넘긴다(그 백엔드가 같은 기준으로 권한 판정).
     주소 미설정은 503, 권한 거부(401·403)는 그대로, 그 밖의 연결·응답 실패는 502."""
-    if not settings.iaas_api_base:
-        raise HTTPException(503, "MNT-IAAS 주소(IAAS_API_BASE)가 설정되지 않았습니다")
-    url = settings.iaas_api_base.rstrip("/") + "/api/iaas" + path
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    label = f"{what}({module})"
+    if not base:
+        raise HTTPException(503, f"{module} 주소({setting})가 설정되지 않았습니다")
+    req = urllib.request.Request(base + path, headers={"Authorization": f"Bearer {token}"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)
@@ -50,9 +51,21 @@ def _iaas(path: str, token: str):
             except ValueError:
                 detail = body
             raise HTTPException(e.code, detail)
-        raise HTTPException(502, f"OpenStack 조회(MNT-IAAS) 실패: {body[:300] or e}")
+        raise HTTPException(502, f"{label} 실패: {body[:300] or e}")
     except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ValueError) as e:
-        raise HTTPException(502, f"OpenStack 조회(MNT-IAAS) 실패: {e}")
+        raise HTTPException(502, f"{label} 실패: {e}")
+
+
+def _iaas(path: str, token: str):
+    """MNT-IAAS GET(JSON) — OpenStack 라이브 조회."""
+    base = settings.iaas_api_base and settings.iaas_api_base.rstrip("/") + "/api/iaas"
+    return _service_get(base, "MNT-IAAS", "IAAS_API_BASE", "OpenStack 조회", path, token)
+
+
+def _paas(path: str, token: str):
+    """MNT-PAAS GET(JSON) — Magnum(클러스터 템플릿·이름) 조회. PAAS 도 모든 API 에 토큰이 필요하다."""
+    base = settings.paas_api_base and settings.paas_api_base.rstrip("/") + "/api/paas"
+    return _service_get(base, "MNT-PAAS", "PAAS_API_BASE", "클러스터 조회", path, token)
 
 
 def _project_path(project_id: str) -> str:
@@ -230,7 +243,7 @@ class CreateTicketBody(BaseModel):
 @router.post("/tickets", status_code=201)
 def create_ticket(body: CreateTicketBody, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     """VM 자원신청(신청자 = 토큰 사용자). 저장 직전에 서버에서 다시 확인한다 — 멤버·역할, 이름 규칙·중복(DB+Nova),
-    플레이버(public·가속기 device-profile 있음)·이미지(프로젝트에서 사용 가능) 존재, 부팅 볼륨 범위, 키페어 소유."""
+    플레이버(프로젝트가 쓸 수 있는 것·가속기 device-profile 있음)·이미지(프로젝트에서 사용 가능) 존재, 부팅 볼륨 범위, 키페어 소유."""
     user_id = user.id
     _check_requestable(db, body.projectId, user)
     db.rollback()  # 확인용 조회 트랜잭션을 닫는다 — 아래 MNT-IAAS 호출 동안 커넥션을 잡지 않게
@@ -244,7 +257,8 @@ def create_ticket(body: CreateTicketBody, user: CurrentUser = Depends(current_us
                     if p["id"] == body.projectId and p.get("enabled", True)), None)
     if not project:
         raise HTTPException(400, "OpenStack 프로젝트를 찾을 수 없습니다")
-    flavor = next((f for f in _iaas("/flavors", user.token)["items"] if f["id"] == body.flavorId and f["isPublic"]), None)
+    flavor = next((f for f in _iaas(_project_path(body.projectId) + "/flavors", user.token)["items"]
+                   if f["id"] == body.flavorId), None)  # public + 이 프로젝트에 허용된 비공개
     if not flavor:
         raise HTTPException(400, "선택한 스펙(플레이버)을 찾을 수 없습니다")
     if flavor.get("deviceProfileMissing"):  # 가속기 device-profile 이 Cyborg 에 없으면 VM 을 만들 수 없다
@@ -734,6 +748,277 @@ def provision_ai_workspace_ticket(ticket_id: str, body: ProvisionAiWorkspaceBody
                     "spec": json.dumps(t["provision_spec"]) if t["provision_spec"] else None,
                     "res": json.dumps(t["result"]) if t["result"] else None})
         db.commit()
+        raise HTTPException(503, f"프로비저닝 워크플로를 시작하지 못했습니다: {e}")
+    return _to_item(db.execute(text(_SELECT + " WHERE r.id = :id"), {"id": ticket_id}).mappings().one())
+
+
+# ── 서비스 클러스터 신청(type cluster) — 새 클러스터 + 프로젝트 네임스페이스 + 접근 권한(전용) ─────────
+# 승인·반려는 VM 과 같은 PATCH, 프로비저닝은 아래 provision-cluster(Temporal KubernetesProvision).
+# 클러스터 이름은 모든 프로젝트에서 유일 — Magnum 클러스터(MNT-PAAS) + 진행 중 신청(대기·승인·생성 중·실패).
+
+_CLUSTER_NAME_RE = re.compile(r"^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$")  # MNT-PAAS 와 같은 규칙
+_CLUSTER_NAME_RULE = "클러스터 이름은 영문 소문자로 시작하고 소문자·숫자·하이픈(끝 제외)만, 40자 이내로 입력하세요."
+_CLUSTER_TICKET_TAKEN = "같은 이름으로 진행 중인 클러스터 신청이 있습니다."
+_CLUSTER_MASTER_COUNTS = (1, 3)
+_CLUSTER_MAX_WORKERS = 20  # Worker 0 은 애드온이 배치되지 않아 완성되지 않는다(2026-10-19 시험) — 최소 1
+
+
+def _cluster_ticket_taken(db: Session, name: str, exclude_id: str | None = None) -> bool:
+    return db.execute(
+        text("""SELECT 1 FROM tkt_request
+                 WHERE type = 'cluster' AND status IN ('pending', 'approved', 'provisioning', 'failed')
+                   AND request_spec->>'clusterName' = :n AND (CAST(:x AS text) IS NULL OR id <> :x)"""),
+        {"n": name, "x": exclude_id},
+    ).first() is not None
+
+
+def _cluster_name_reason(db: Session, name: str, token: str, exclude_id: str | None = None) -> str | None:
+    """클러스터 이름을 쓸 수 없는 사유(없으면 None) — 규칙 → Magnum 클러스터(MNT-PAAS, 모든 프로젝트) → 진행 중 신청.
+    MNT-PAAS 를 먼저 호출 — DB 조회 트랜잭션이 열린 채로 외부 호출을 기다리지 않게."""
+    if not _CLUSTER_NAME_RE.match(name):
+        return _CLUSTER_NAME_RULE
+    chk = _paas(f"/cluster-name-check?name={quote(name, safe='')}", token)
+    if not chk["available"]:
+        return chk["reason"]
+    return _CLUSTER_TICKET_TAKEN if _cluster_ticket_taken(db, name, exclude_id) else None
+
+
+def _namespace_name(project_name: str, project_id: str) -> str:
+    """클러스터의 프로젝트 네임스페이스 — AI 워크스페이스 이름 규칙(_workspace_name) + 쿠버네티스 예약 이름(default·kube-*) 제외.
+    신청 때 한 번 정해 request_spec.namespace 에 저장하고 다시 계산하지 않는다."""
+    name = _workspace_name(project_name, project_id)
+    return f"ws-{project_id.replace('-', '')[:8].lower()}" if name == "default" or name.startswith("kube-") else name
+
+
+def _cluster_flavors(project_id: str, master_id: str, worker_id: str, token: str) -> tuple[dict, dict]:
+    """Control Plane·Worker 플레이버 확인(프로젝트가 쓸 수 있는 것) — Control Plane 은 가속기 없음, Worker 는 device-profile 있음."""
+    flavors = {f["id"]: f for f in _iaas(_project_path(project_id) + "/flavors", token)["items"]}
+    master, worker = flavors.get(master_id), flavors.get(worker_id)
+    if not master or not worker:
+        raise HTTPException(400, "선택한 스펙(플레이버)을 찾을 수 없습니다")
+    if master.get("accelerator"):
+        raise HTTPException(400, "Control Plane 에는 가속기 스펙을 쓸 수 없습니다")
+    if worker.get("deviceProfileMissing"):
+        raise HTTPException(400, "연결된 디바이스 프로파일이 존재하지 않습니다")
+    return master, worker
+
+
+def _check_node_counts(master_count: int, node_count: int) -> None:
+    if master_count not in _CLUSTER_MASTER_COUNTS:
+        raise HTTPException(400, "Control Plane 수는 1 또는 3 이어야 합니다")
+    if not 1 <= node_count <= _CLUSTER_MAX_WORKERS:
+        raise HTTPException(400, f"Worker 수는 1 ~ {_CLUSTER_MAX_WORKERS} 이어야 합니다")
+
+
+def _cluster_template(template_id: str, token: str) -> dict:
+    """신청할 수 있는 템플릿(공개·숨김 아님)."""
+    t = next((x for x in _paas("/clustertemplates", token)["items"] if x["id"] == template_id), None)
+    if not t or not t.get("public") or t.get("hidden"):
+        raise HTTPException(400, "신청할 수 없는 클러스터 템플릿입니다")
+    return t
+
+
+@router.get("/tickets/cluster-name-check")
+def cluster_name_check(name: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    """클러스터 이름 사용 가능 여부(모든 프로젝트 기준)."""
+    reason = _cluster_name_reason(db, name, user.token)
+    return {"available": reason is None, "reason": reason}
+
+
+class CreateClusterBody(BaseModel):
+    projectId: str
+    clusterName: str
+    templateId: str
+    masterCount: int = 1
+    masterFlavorId: str
+    nodeCount: int = 1
+    flavorId: str                # Worker 플레이버 — 가속기는 이 플레이버의 device-profile
+    networkType: str             # 희망 망: internal(내부망) | external(인터넷망) — 실제 망·서브넷은 관리자가 프로비저닝 때
+    purpose: str = ""
+
+
+@router.post("/tickets/cluster", status_code=201)
+def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(current_user),
+                          db: Session = Depends(get_db)):
+    """서비스 클러스터 신청(신청자 = 토큰 사용자). 저장 직전에 서버에서 다시 확인한다 — 멤버·역할, 노드 수, 프로젝트,
+    이름 규칙·중복(Magnum + 진행 중 신청), 템플릿(공개·숨김 아님), 플레이버(프로젝트가 쓸 수 있는 것, Control Plane 가속기 없음)."""
+    _check_requestable(db, body.projectId, user)
+    db.rollback()  # 확인용 조회 트랜잭션을 닫는다 — 아래 외부 호출 동안 커넥션을 잡지 않게
+
+    if body.networkType not in ("internal", "external"):
+        raise HTTPException(400, "희망 네트워크는 internal 또는 external 이어야 합니다")
+    _check_node_counts(body.masterCount, body.nodeCount)
+    project = next((p for p in _iaas("/projects", user.token)["items"]
+                    if p["id"] == body.projectId and p.get("enabled", True)), None)
+    if not project:
+        raise HTTPException(400, "OpenStack 프로젝트를 찾을 수 없습니다")
+    if not _CLUSTER_NAME_RE.match(body.clusterName):
+        raise HTTPException(400, _CLUSTER_NAME_RULE)
+    chk = _paas(f"/cluster-name-check?name={quote(body.clusterName, safe='')}", user.token)
+    if not chk["available"]:
+        raise HTTPException(409, chk["reason"])
+    template = _cluster_template(body.templateId, user.token)
+    master, worker = _cluster_flavors(body.projectId, body.masterFlavorId, body.flavorId, user.token)
+
+    # 여기부터 저장까지 한 트랜잭션 — 외부 호출 없음. 같은 이름 동시 제출은 잠금으로 직렬화(커밋·롤백 시 해제)
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"tkt-cluster:{body.clusterName}"})
+    if _cluster_ticket_taken(db, body.clusterName):
+        raise HTTPException(409, _CLUSTER_TICKET_TAKEN)
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('tkt-request-no'))"))
+    day = db.execute(text("SELECT to_char(now() AT TIME ZONE 'Asia/Seoul', 'YYMMDD')")).scalar()
+    last = db.execute(
+        text("SELECT max(split_part(id, '-', 3)::int) FROM tkt_request WHERE id LIKE :p"),
+        {"p": f"req-{day}-%"},
+    ).scalar()
+    ticket_id = f"req-{day}-{(last or 0) + 1:03d}"
+
+    spec = {
+        "projectName": project["name"],
+        "clusterName": body.clusterName,
+        "templateId": template["id"],
+        "templateName": template["name"],
+        "kubeVersion": template.get("kubeVersion") or None,
+        "masterCount": body.masterCount,
+        "masterFlavorId": master["id"],
+        "masterFlavorName": master["name"],
+        "masterVcpu": master["vcpus"],
+        "masterRamGb": master["ramMb"] / 1024,
+        "nodeCount": body.nodeCount,
+        "flavorId": worker["id"],
+        "flavorName": worker["name"],
+        "vcpu": worker["vcpus"],
+        "ramGb": worker["ramMb"] / 1024,
+        "deviceProfile": worker["accelerator"],
+        "accelerators": worker.get("accelerators") or None,
+        "networkType": body.networkType,
+        "namespace": _namespace_name(project["name"], body.projectId),
+        "purpose": body.purpose.strip()[:300],
+    }
+    db.execute(
+        text("""INSERT INTO tkt_request (id, type, project_id, requested_by, request_spec)
+                VALUES (:id, 'cluster', :p, :u, CAST(:s AS jsonb))"""),
+        {"id": ticket_id, "p": body.projectId, "u": user.id,
+         "s": json.dumps({k: v for k, v in spec.items() if v is not None}, ensure_ascii=False)},
+    )
+    db.commit()
+    return _to_item(db.execute(text(_SELECT + " WHERE r.id = :id"), {"id": ticket_id}).mappings().one())
+
+
+class ProvisionClusterSpec(BaseModel):
+    networkId: str
+    subnetId: str
+    masterCount: int | None = None      # 비우면 신청 값 — 관리자가 조정할 수 있다
+    masterFlavorId: str | None = None
+    nodeCount: int | None = None
+    flavorId: str | None = None
+
+
+class ProvisionClusterBody(BaseModel):
+    expectedStatus: str | None = None  # 화면이 보고 있던 상태 — 다르면 409
+    provisionSpec: ProvisionClusterSpec
+
+
+def _quota_short(quota: dict, need: dict) -> list[str]:
+    """쿼터(IAAS get_project_quota 형식)가 모자란 항목 문구 — 쿼터 -1 은 무제한."""
+    short = []
+    for key, label, unit in (("instances", "VM", "대"), ("vcpu", "vCPU", ""), ("ramGb", "RAM", "GB")):
+        q, used = quota[key]["quota"], quota[key]["used"]
+        if q >= 0 and used + need[key] > q:
+            short.append(f"{label} 필요 {need[key]}{unit} · 남음 {max(q - used, 0)}{unit}")
+    return short
+
+
+@router.post("/tickets/{ticket_id}/provision-cluster")
+def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: CurrentUser = Depends(current_user),
+                             db: Session = Depends(get_db)):
+    """클러스터 프로비저닝 시작(관리자) — 승인(approved)된 클러스터 신청, 또는 실패(failed)한 신청의 재시도.
+    망·서브넷(프로젝트가 쓸 수 있는 망, DHCP 켜짐, API Floating IP 연결 가능)·플레이버·노드 수·이름·쿼터를 라이브 조회로
+    확인하고, 생성 중(provisioning)으로 바꾼 뒤 Temporal 워크플로를 새 회차로 시작한다. 시작에 실패하면 이전 상태·값으로 되돌린다."""
+    if not settings.temporal_api_base:
+        raise HTTPException(503, "Temporal 주소(TEMPORAL_API_BASE)가 설정되지 않았습니다")
+    admin_id = _admin_id(db, user.username, "프로비저닝은 관리자만 할 수 있습니다")
+    t = db.execute(text("""SELECT status, type, project_id, request_spec, provision_spec, result, error_message,
+                                  provisioning_by, provisioning_at, workflow_id
+                             FROM tkt_request WHERE id = :id"""),
+                   {"id": ticket_id}).mappings().first()
+    if t is None:
+        raise HTTPException(404, "신청을 찾을 수 없습니다")
+    if body.expectedStatus and body.expectedStatus != t["status"]:
+        raise HTTPException(409, "다른 관리자가 먼저 처리했습니다. 목록을 새로 고쳐 확인하세요")
+    if t["type"] != "cluster" or t["status"] not in ("approved", "failed"):
+        raise HTTPException(409, "승인되었거나 실패한 클러스터 신청만 프로비저닝(재시도)할 수 있습니다")
+    rs, ps, pid, token = t["request_spec"], body.provisionSpec, t["project_id"], user.token
+    db.rollback()  # 외부 확인 동안 커넥션을 잡지 않게
+
+    master_count = ps.masterCount or rs["masterCount"]
+    node_count = ps.nodeCount or rs["nodeCount"]
+    _check_node_counts(master_count, node_count)
+    template = _cluster_template(rs["templateId"], token)
+    floating = template.get("external_network_id")
+    if not floating:
+        raise HTTPException(400, "클러스터 템플릿에 외부 네트워크(API Floating IP 풀)가 없습니다")
+    master, worker = _cluster_flavors(pid, ps.masterFlavorId or rs["masterFlavorId"], ps.flavorId or rs["flavorId"], token)
+
+    # 망·서브넷 — 프로젝트가 쓸 수 있는 망(외부망 제외), DHCP 켜진 서브넷, 그 서브넷으로 API 에 Floating IP 를 붙일 수 있어야
+    net = next((n for n in _iaas(_project_path(pid) + "/networks", token)["items"]
+                if n["id"] == ps.networkId and n["kind"] != "external"), None)
+    if not net:
+        raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
+    subnet = next((s for s in _iaas(f"/networks/{quote(net['id'], safe='')}", token)["subnets"] if s["id"] == ps.subnetId),
+                  None)
+    if not subnet:
+        raise HTTPException(400, "서브넷이 고른 네트워크에 속하지 않습니다")
+    if not subnet["dhcp"]:
+        raise HTTPException(400, "DHCP 가 꺼진 서브넷에는 노드가 주소를 받지 못합니다")
+    chk = _iaas(f"/networks/{quote(net['id'], safe='')}/fip-reachable?floatingNetworkId={quote(floating, safe='')}"
+                f"&subnetId={quote(subnet['id'], safe='')}", token)
+    if not chk["reachable"]:
+        raise HTTPException(400, f"클러스터 API 에 Floating IP 를 붙일 수 없는 네트워크입니다\n{chk['reason']}")
+
+    # 쿼터 — 노드 VM 수·vCPU·RAM. 실행 때 워크플로가 다시 본다(그 사이 다른 VM 이 쓸 수 있다)
+    need = {"instances": master_count + node_count,
+            "vcpu": master_count * master["vcpus"] + node_count * worker["vcpus"],
+            "ramGb": math.ceil((master_count * master["ramMb"] + node_count * worker["ramMb"]) / 1024)}
+    quota = _iaas(f"/placement-preview?flavorId={quote(worker['id'], safe='')}&projectId={quote(pid, safe='')}", token)["quota"]
+    short = _quota_short(quota, need)
+    if short:
+        raise HTTPException(409, "프로젝트 쿼터가 부족합니다 — " + ", ".join(short))
+    reason = _cluster_name_reason(db, rs["clusterName"], token, exclude_id=ticket_id)  # 신청 뒤 같은 이름이 생겼을 수 있다
+    if reason:
+        raise HTTPException(409, reason)
+
+    spec = {"networkId": net["id"], "networkName": net["name"], "subnetId": subnet["id"], "subnetCidr": subnet["cidr"],
+            "floatingNetworkId": floating, "masterCount": master_count, "masterFlavorId": master["id"],
+            "masterFlavorName": master["name"], "nodeCount": node_count, "flavorId": worker["id"],
+            "flavorName": worker["name"]}
+    attempt = db.execute(text("SELECT coalesce(max(attempt), 0) + 1 FROM tkt_provision_step WHERE request_id = :id"),
+                         {"id": ticket_id}).scalar()
+    workflow_id = f"cluster-provision-{ticket_id}-{attempt}"
+    res = db.execute(
+        text("""UPDATE tkt_request
+                   SET status = 'provisioning', provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
+                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL
+                 WHERE id = :id AND status = :cur"""),
+        {"id": ticket_id, "spec": json.dumps(spec, ensure_ascii=False), "by": admin_id, "wf": workflow_id,
+         "cur": t["status"]},
+    )
+    if res.rowcount == 0:
+        db.rollback()
+        raise HTTPException(409, "다른 관리자가 먼저 처리했습니다. 목록을 새로 고쳐 확인하세요")
+    db.commit()
+
+    inp = {"ticketId": ticket_id, "attempt": attempt, "projectId": pid, "projectName": rs["projectName"],
+           "clusterName": rs["clusterName"], "templateId": rs["templateId"], "masterCount": master_count,
+           "masterFlavorId": master["id"], "nodeCount": node_count, "flavorId": worker["id"],
+           "networkId": net["id"], "subnetId": subnet["id"], "floatingNetworkId": floating,
+           "namespace": rs["namespace"], "need": need}
+    prev = {"status": t["status"], "provisionSpec": t["provision_spec"], "provisioningBy": t["provisioning_by"],
+            "provisioningAt": _iso(t["provisioning_at"]), "workflowId": t["workflow_id"],
+            "errorMessage": t["error_message"], "result": t["result"]}
+    try:
+        from_thread.run(runtime.start_cluster_provision, workflow_id, inp)  # 이벤트 루프의 Temporal 클라이언트로 시작
+    except Exception as e:  # noqa: BLE001 — 시작 실패면 이전 상태(승인·실패)와 값으로 되돌린다
+        provision_queue.restore(db, ticket_id, workflow_id, prev)
         raise HTTPException(503, f"프로비저닝 워크플로를 시작하지 못했습니다: {e}")
     return _to_item(db.execute(text(_SELECT + " WHERE r.id = :id"), {"id": ticket_id}).mappings().one())
 
