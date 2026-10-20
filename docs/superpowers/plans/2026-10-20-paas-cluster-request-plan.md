@@ -94,14 +94,14 @@
   `grant_cluster_access(projectId, clusterId)` — `WHERE NOT EXISTS (… namespace IS NULL)` 로 멱등.
 - `kubernetes_provision.py`(새) `KubernetesProvision`: 설계 3절 단계 순서.
   `check_name`(paas) → `check_quota`(iaas) → `check_network`(iaas) → `send_request`(paas, 재시도 없음) →
-  `create_control_plane`·`create_workers`(paas `watch_cluster` 반복, 생성 대기 45분) → `check_api` → `create_namespace` →
+  `create_control_plane`·`create_workers`(paas `watch_cluster` 반복, 생성 대기 45분) → `check_api`(paas) → `create_namespace` →
   `grant_access`(core) → 완료. 실패 시 이번 회차가 만든(또는 만들었을 수 있는) 클러스터를 `paas.delete_cluster` 로 정리(15분).
   시간 값은 설계 3절 임시 값.
 - `runtime.py`: `start_cluster_provision`, 워커에 `KubernetesProvision` 등록.
 
 **3-3. API (`app/routers/tickets.py`)**
 - `_paas(path, token)` — `_iaas` 와 같은 오류 처리.
-- `GET /tickets/cluster-name-check?projectId&name` → `{available, reason}` (규칙 → PAAS 이름 확인 → DB 진행 중 신청).
+- `GET /tickets/cluster-name-check?name` → `{available, reason}` (규칙 → PAAS 이름 확인 → DB 진행 중 신청, 모든 프로젝트 기준).
 - `POST /tickets/cluster` — `_check_requestable` → 프로젝트·템플릿(공개·숨김 아님)·플레이버(프로젝트 플레이버 API)·
   가속기 규칙·노드 수(Control Plane 1|3, Worker 1~20)·이름 → `request_spec`(설계 1절 키 + 희망 네트워크) 저장.
 - `POST /tickets/{id}/provision-cluster` — **토큰 사용자로 관리자 확인**(`_admin_id(db, user.username)`, VM 방식),

@@ -167,7 +167,8 @@ def test_AI_워크스페이스_신청자는_토큰_사용자(client, monkeypatch
 
 def test_디바이스_프로파일이_없는_스펙은_신청_불가(client, monkeypatch):
     flavor = {"id": "f", "name": "m1.large.2rngd", "isPublic": True, "accelerator": "dp-2rngd", "deviceProfileMissing": True}
-    fake = {"/projects": {"items": [{"id": PROJECT, "name": "okc_test_prj"}]}, "/flavors": {"items": [flavor]}}
+    fake = {"/projects": {"items": [{"id": PROJECT, "name": "okc_test_prj"}]},
+            f"/projects/{PROJECT}/flavors": {"items": [flavor]}}
     monkeypatch.setattr(tickets, "_iaas", lambda path, token: fake[path])
     body = {"projectId": PROJECT, "vmName": "vm-a", "flavorId": "f", "imageId": "i", "networkType": "internal"}
     r = client.post("/api/core/tickets", json=body, headers=bearer(make_token("admin")))
