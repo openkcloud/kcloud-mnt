@@ -8,7 +8,7 @@ import { coreFetch } from "@/lib/menu-api";
 import type { Org, ProvisionSpec, ProvisionStepsResp, ResourceRequest } from "@/lib/types";
 
 /** 신청할 수 있는 프로젝트 — 내가 owner·member 인 프로젝트(이름은 OpenStack 라이브). */
-export interface TicketProject { id: string; name: string; role: string; orgId: string; orgName: string }
+export interface TicketProject { id: string; name: string; role: string; orgId: string | null; orgName: string | null }
 export function useTicketProjects(username: string | undefined) {
   return useQuery({
     queryKey: ["tickets", "projects", username],
