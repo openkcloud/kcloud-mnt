@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import httpx
 from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 
@@ -273,6 +274,19 @@ def _mon_err(e: Exception) -> HTTPException:  # noqa: ANN001
     return HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
 
 
+def _passthrough(e: Exception) -> HTTPException:  # noqa: ANN001
+    """정책·채널 생성 등 — 업스트림 4xx(특히 422 detail.errors)를 상태코드·본문 그대로 전달.
+    그 외(연결 실패 등)는 502."""
+    if isinstance(e, httpx.HTTPStatusError):
+        try:
+            body = e.response.json() if e.response.content else None
+        except ValueError:
+            body = None
+        detail = body.get("detail", body) if isinstance(body, dict) else (body or str(e))
+        return HTTPException(status_code=e.response.status_code, detail=detail)
+    return HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+
+
 @router.get("/monitoring/alerts/active")
 def alerts_active():
     """현재 발생 중인 알람 — /alerts/active."""
@@ -306,7 +320,7 @@ def alerts_channel_create(body: dict = Body(...)):
     try:
         return monitor.request("POST", "/alerts/channels", json=body)
     except Exception as e:  # noqa: BLE001
-        raise _mon_err(e)
+        raise _passthrough(e)
 
 
 @router.patch("/monitoring/alerts/channels/{channel_id}")
@@ -344,11 +358,20 @@ def alerts_policy_detail(policy_id: str):
 
 @router.post("/monitoring/alerts/policies")
 def alerts_policy_create(body: dict = Body(...)):
-    """정책 생성 — 상위 API 개발 중일 수 있음(그 경우 Monitor 가 에러 반환)."""
+    """정책 생성 — 성공 201 {data}, 검증 실패 422 {detail:{errors}} 를 그대로 전달."""
     try:
         return monitor.request("POST", "/alerts/policies", json=body)
     except Exception as e:  # noqa: BLE001
-        raise _mon_err(e)
+        raise _passthrough(e)
+
+
+@router.post("/monitoring/alerts/policies/{policy_id}/preview")
+def alerts_policy_preview(policy_id: str, body: dict = Body(default={})):
+    """저장된 정책 미리 평가 — 현재 수집값 기준 조건 충족 여부."""
+    try:
+        return monitor.request("POST", f"/alerts/policies/{policy_id}/preview", json=body or {})
+    except Exception as e:  # noqa: BLE001
+        raise _passthrough(e)
 
 
 @router.patch("/monitoring/alerts/policies/{policy_id}")
@@ -366,6 +389,26 @@ def alerts_policy_delete(policy_id: str):
         return monitor.request("DELETE", f"/alerts/policies/{policy_id}")
     except Exception as e:  # noqa: BLE001
         raise _mon_err(e)
+
+
+# ── 정책 생성 폼 감시대상(selector) 옵션용 — Monitor v2 중개 ──
+@router.get("/monitoring/clusters/{cluster}/nodes/{node}/accelerators")
+def node_accelerators(cluster: str, node: str):
+    """노드의 가속기 카드 목록(acc_id) — selector '가속기 카드' 옵션."""
+    try:
+        return {"accelerators": monitor.get(f"/clusters/{cluster}/nodes/{node}/accelerators").get("data", [])}
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+
+
+@router.get("/monitoring/slo/services")
+def slo_services(cluster: str = Query(...)):
+    """클러스터의 LLM 모델 목록 — selector '모델' 옵션. 응답 ~4초, 데이터 없으면 warnings=[NO_DATA]."""
+    try:
+        d = monitor.get("/slo/services", params={"cluster": cluster})
+    except Exception as e:  # noqa: BLE001
+        raise _mon_err(e)
+    return {"items": d.get("items", []), "warnings": d.get("warnings", [])}
 
 
 @router.get("/monitoring/power/breakdown")
