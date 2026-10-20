@@ -208,7 +208,7 @@ export default function MonitoringOverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-2">
+        <Card className="self-start lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
               가속기 사용률 — 호스트 × 24시간
@@ -624,7 +624,7 @@ function UtilHeatmapGrid({ data }: { data?: UtilHeatmap }) {
                 {h.cells.map((v, i) => (
                   <div
                     key={i}
-                    className={cn("h-5 flex-1 rounded-sm", cellColor(v))}
+                    className={cn("h-7 flex-1 rounded-sm", cellColor(v))}
                     title={`${h.host} · ${times[i] ?? i} · ${v == null ? "—" : v + "%"}`}
                   />
                 ))}
