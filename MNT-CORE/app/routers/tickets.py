@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ..auth import CurrentUser, current_user
+from ..auth import CurrentUser, current_user, require_admin
 from ..config import settings
 from ..db import get_db
 from ..workflows import provision_queue, runtime
@@ -60,10 +60,11 @@ def _project_path(project_id: str) -> str:
 
 
 def _check_requestable(db: Session, project_id: str, user: CurrentUser) -> None:
-    """신청할 수 있는 프로젝트인지 — 조직이 할당된(iam_project) 프로젝트의 owner·member. 관리자는 조직이 할당된 모든 프로젝트."""
+    """신청할 수 있는 프로젝트인지 — 포털 원장(iam_project)에 등록된 프로젝트의 owner·member.
+    조직(org) 할당은 선택(없어도 됨). 관리자는 등록된 모든 프로젝트."""
     if user.is_admin:
         if not db.execute(text("SELECT 1 FROM iam_project WHERE project_id = :p"), {"p": project_id}).first():
-            raise HTTPException(403, "신청할 수 없는 프로젝트입니다 (조직이 할당되지 않은 프로젝트)")
+            raise HTTPException(403, "신청할 수 없는 프로젝트입니다 (포털에 등록되지 않은 프로젝트)")
         return
     role = db.execute(
         text("""SELECT pm.role FROM iam_project_member pm
@@ -157,12 +158,12 @@ def _to_item(r) -> dict:
 
 @router.get("/tickets/projects")
 def requestable_projects(user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
-    """신청할 수 있는 프로젝트 — 내가 owner·member 이고 조직이 할당된(iam_project) 프로젝트(관리자는 조직이 할당된 전부).
-    이름은 OpenStack 라이브 조회(없거나 비활성인 프로젝트는 제외)."""
+    """신청할 수 있는 프로젝트 — 내가 owner·member 인 포털 등록 프로젝트(관리자는 등록된 전부).
+    조직(org) 할당은 선택(LEFT JOIN — 없어도 포함). 이름은 OpenStack 라이브 조회(없거나 비활성은 제외)."""
     if user.is_admin:
         rows = db.execute(
             text("""SELECT p.project_id, 'admin' AS role, o.id AS org_id, o.name AS org_name
-                      FROM iam_project p JOIN iam_org o ON o.id = p.org_id"""),
+                      FROM iam_project p LEFT JOIN iam_org o ON o.id = p.org_id"""),
         ).mappings().all()
     else:
         rows = db.execute(
@@ -170,7 +171,7 @@ def requestable_projects(user: CurrentUser = Depends(current_user), db: Session 
                       FROM iam_project_member pm
                       JOIN iam_user u ON u.id = pm.user_id
                       JOIN iam_project p ON p.project_id = pm.project_id
-                      JOIN iam_org o ON o.id = p.org_id
+                      LEFT JOIN iam_org o ON o.id = p.org_id
                      WHERE u.username = :un AND pm.role = ANY(:roles)"""),
             {"un": user.username, "roles": _REQUEST_ROLES},
         ).mappings().all()
@@ -179,9 +180,27 @@ def requestable_projects(user: CurrentUser = Depends(current_user), db: Session 
     db.rollback()  # 조회 트랜잭션을 닫고 MNT-IAAS 를 호출한다(호출 동안 커넥션을 잡지 않게)
     live = {p["id"]: p for p in _iaas("/projects", user.token)["items"] if p.get("enabled", True)}
     items = [{"id": r["project_id"], "name": live[r["project_id"]]["name"], "role": r["role"],
-              "orgId": str(r["org_id"]), "orgName": r["org_name"]}
+              "orgId": str(r["org_id"]) if r["org_id"] is not None else None, "orgName": r["org_name"]}
              for r in rows if r["project_id"] in live]
     return {"items": sorted(items, key=lambda x: x["name"])}
+
+
+class RegisterProjectBody(BaseModel):
+    projectId: str
+
+
+@router.post("/tickets/projects", status_code=201, dependencies=[Depends(require_admin)])
+def register_project(body: RegisterProjectBody, db: Session = Depends(get_db)):
+    """프로젝트를 포털 원장(iam_project)에 등록(조직 미지정 = org_id NULL). 프로젝트 생성 직후 호출, 멱등."""
+    pid = body.projectId.strip()
+    if not pid:
+        raise HTTPException(400, "projectId 가 필요합니다")
+    db.execute(
+        text("INSERT INTO iam_project (project_id, org_id) VALUES (:p, NULL) ON CONFLICT (project_id) DO NOTHING"),
+        {"p": pid},
+    )
+    db.commit()
+    return {"projectId": pid}
 
 
 @router.get("/tickets/vm-name-check")
