@@ -5,6 +5,8 @@ Cluster Templates 화면과 동일 범위. 조회는 로그인 사용자(클러�
 """
 from __future__ import annotations
 
+import re
+
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException
 
@@ -43,8 +45,31 @@ _WRITABLE = [
 ]
 
 
+_kube_versions: dict[str, str] = {}  # 이미지 ID·이름 → K8s 버전(이미지 속성은 거의 안 바뀐다 — 프로세스 수명 캐시)
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _kube_version(image_id: str | None) -> str:
+    """템플릿 이미지의 Glance 속성 kube_version — 값 형식이 섞여 있어('1.36.2', 'v1.34.8') 앞의 v 를 뗀다.
+    템플릿 image_id 에는 이미지 이름이 들어 있기도 하다(Magnum 은 이름도 받는다). 조회 실패면 빈 값(다음 조회 때 다시 본다)."""
+    if not image_id:
+        return ""
+    if image_id not in _kube_versions:
+        try:
+            if _UUID.match(image_id):
+                img = magnum.service_get("glance", "image", "/v2", f"/images/{image_id}")
+            else:
+                found = magnum.service_get("glance", "image", "/v2", "/images", {"name": image_id}).get("images", [])
+                img = found[0] if found else {}
+        except Exception:  # noqa: BLE001 — 버전은 부가 정보
+            return ""
+        _kube_versions[image_id] = str(img.get("kube_version") or "").lstrip("v")
+    return _kube_versions[image_id]
+
+
 def _summary(t: dict) -> dict:
-    out = {"id": t["uuid"], "createdAt": t.get("created_at") or "", "updatedAt": t.get("updated_at") or ""}
+    out = {"id": t["uuid"], "createdAt": t.get("created_at") or "", "updatedAt": t.get("updated_at") or "",
+           "kubeVersion": _kube_version(t.get("image_id"))}
     for f in _FIELDS:
         out[f] = t.get(f)
     return out

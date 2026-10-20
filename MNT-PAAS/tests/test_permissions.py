@@ -17,6 +17,7 @@ CASES = [
     ("GET", f"/clusters/{MINE}", None, A), ("GET", f"/clusters/{OTHER}", None, D),
     ("DELETE", f"/clusters/{MINE}", None, D),                    # 삭제는 접근 권한이 있어도 관리자만
     ("GET", f"/clusters/{MINE}/kubeconfig", None, A), ("GET", f"/clusters/{OTHER}/kubeconfig", None, D),
+    ("GET", "/cluster-name-check?name=abc", None, A),            # 신청 화면 — 이름 사용 여부만
     # 템플릿 — 조회는 신청 화면용
     ("GET", "/clustertemplates", None, A), ("GET", "/clustertemplates/t1", None, A),
     ("POST", "/clustertemplates", {"name": "t"}, D),
@@ -65,7 +66,7 @@ def test_관리자는_모두_통과(method, path, body, expected):
 def test_모든_API가_시험표에_있음():
     """API 를 새로 추가하면 이 표에도 권한 규칙을 넣게 한다(경로 템플릿 {x} 를 한 마디로 맞춰 본다)."""
     import re
-    called = {(m, P + p) for m, p, *_ in CASES}
+    called = {(m, P + p.split("?")[0]) for m, p, *_ in CASES}
     missing = []
     for path, ops in main.app.openapi()["paths"].items():
         if path in ("/healthz", P + "/"):  # 상태 확인·서비스 이름 — 로그인 없이
