@@ -119,7 +119,7 @@ export default function MonitoringOverviewPage() {
       <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
         <QueryValue label="전력 효율" value={fmtN(ov?.power_efficiency_pct_per_watt, 2)} unit="%/W" sparkData={kpiTs?.power_efficiency} color="mint" connected={!!ov} api="/api/v2/monitoring/power/efficiency(+/timeseries)" />
         <QueryValue label="저장소 사용률" value={fmtN(ov?.storage_usage_percent, 1)} unit="%" sparkData={kpiTs?.storage} color="indigo" connected={!!ov} api="/api/v2/storage/ceph/capacity(+/timeseries)" />
-        <QueryValue label="쓰로틀링 횟수" value={ov?.throttle_events != null ? String(ov.throttle_events) : "—"} unit="회" color="rose" connected={!!ov} api="/api/v2/monitoring/throttling/timeseries (throttle_events)" />
+        <QueryValue label="쓰로틀링 횟수" value={ov?.throttle_events != null ? String(ov.throttle_events) : "—"} unit="회" sparkData={kpiTs?.throttle} color="rose" connected={!!ov} api="/api/v2/monitoring/throttling/timeseries (timeline.events)" />
         <QueryValue label="가속기 사용률" value={fmtN(ov?.accelerator_utilization_percent, 0)} unit="%" sparkData={kpiTs?.accel_util} color="violet" connected={!!ov} api="/api/v2/monitoring/accelerators/utilization(+/timeseries)" />
         <QueryValue label="서버 총 전력" value={ov?.total_power_watts != null ? (ov.total_power_watts / 1000).toFixed(2) : "—"} unit="kW" sparkData={kpiTs?.server_power} color="amber" connected={!!ov} api="/api/v2/monitoring/power/summary(+/timeseries)" />
         <QueryValue label="정상 노드" value={ov?.nodes_ready != null ? `${ov.nodes_ready} / ${ov.nodes_total}` : "—"} unit="" sparkData={nodesReadyTs?.series} color="sky" connected={!!ov} api="/api/v2/monitoring/nodes/timeseries" />

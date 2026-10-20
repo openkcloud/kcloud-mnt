@@ -215,6 +215,7 @@ export interface KpiTimeseries {
   storage: SparkPoint[];
   accel_util: SparkPoint[];
   server_power: SparkPoint[];
+  throttle: SparkPoint[];
 }
 export function useKpiTimeseries() {
   const pollMs = usePollingInterval((s) => s.intervalMs);

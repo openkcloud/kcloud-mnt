@@ -460,6 +460,7 @@ def kpi_timeseries(period: str = Query("24h"), step: str = Query("1h")):
     sto = safe("/storage/ceph/capacity/timeseries", period=period, step=step)
     acc = safe("/monitoring/accelerators/utilization/timeseries", period=period, step=step)
     pwr = safe("/monitoring/power/timeseries", period=period, step=step, aggregation="avg")
+    thr = safe("/monitoring/throttling/timeseries", period=period, step=step)
 
     server_vals = []
     for layer in pwr.get("layers", []):
@@ -467,11 +468,16 @@ def kpi_timeseries(period: str = Query("24h"), step: str = Query("1h")):
             server_vals = layer.get("values", [])
             break
 
+    # 쓰로틀링은 timeline[{time, events, ...}] 구조 → events 를 스파크라인 포인트로
+    throttle = [{"i": i, "v": e.get("events", 0)}
+                for i, e in enumerate(thr.get("timeline", []) or []) if isinstance(e, dict)]
+
     return {
         "power_efficiency": _series_points(first_values(eff)),
         "storage": _series_points(first_values(sto)),
         "accel_util": _series_points(first_values(acc)),
         "server_power": _series_points(server_vals),
+        "throttle": throttle,
     }
 
 
