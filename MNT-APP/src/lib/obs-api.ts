@@ -174,10 +174,11 @@ export interface NodeRow {
   power_watts: number | null;
   utilization_percent: number | null;
 }
-export function useNodes(cluster = "mgmt") {
+export function useNodes(cluster = "mgmt", enabled = true) {
   const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["obs-nodes", cluster],
+    enabled: enabled && !!cluster,
     queryFn: () => obsFetch<{ nodes: NodeRow[] }>(`/monitoring/nodes?cluster=${cluster}`),
     refetchInterval: pollMs || false,
   });
