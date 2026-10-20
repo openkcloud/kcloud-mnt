@@ -12,7 +12,7 @@ import threading
 
 import httpx
 
-from .openstack_client import magnum
+from .openstack_client import for_project, magnum
 
 _lock = threading.Lock()
 _clients: dict[str, httpx.Client] = {}
@@ -30,7 +30,9 @@ def issue_client_cert(cluster_id: str) -> tuple[str, str, str, str]:
     if not api_address:
         raise RuntimeError("클러스터 API 주소가 아직 없습니다(생성 중이거나 실패).")
 
-    ca_pem = magnum.get(f"/certificates/{cluster_id}")["pem"]
+    # 인증서는 클러스터 소유 프로젝트 스코프에서만 된다(조회는 admin 스코프로 됨)
+    owner = for_project(c["project_id"])
+    ca_pem = owner.get(f"/certificates/{cluster_id}")["pem"]
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     csr = (
@@ -41,7 +43,7 @@ def issue_client_cert(cluster_id: str) -> tuple[str, str, str, str]:
         ]))
         .sign(key, hashes.SHA256())
     )
-    cert_pem = magnum.request("POST", "/certificates", json={
+    cert_pem = owner.request("POST", "/certificates", json={
         "cluster_uuid": cluster_id,
         "csr": csr.public_bytes(serialization.Encoding.PEM).decode(),
     })["pem"]

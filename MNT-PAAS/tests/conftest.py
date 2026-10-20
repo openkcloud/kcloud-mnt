@@ -1,6 +1,7 @@
 """시험 환경 — Magnum·클러스터 K8s·MNT-CORE 를 부르지 않는다.
 
-- Magnum 호출(magnum.request)을 막는다. 클러스터 K8s 접속도 Magnum 인증서 발급을 거치므로 함께 막힌다.
+- Magnum 호출(모든 MagnumClient.request — 프로젝트 스코프 클라이언트 포함)을 막는다.
+  클러스터 K8s 접속도 Magnum 인증서 발급을 거치므로 함께 막힌다.
   권한을 통과한 요청은 Magnum·K8s 단계에서 502 등으로 끝나고 실제 자원은 바뀌지 않는다.
 - 요청 사용자(caller)는 fixture 로 사용자(gy.yang, c-mine 접근 권한)·관리자를 고른다.
 """
@@ -11,8 +12,8 @@ os.environ.update(OS_AUTH_URL="", CORE_API_BASE="http://core.test", CORS_ORIGINS
 import pytest  # noqa: E402 — 환경변수를 먼저 정한 뒤 앱을 불러온다
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import auth, k8s_client, main  # noqa: E402
-from app.openstack_client import magnum  # noqa: E402
+from app import auth, k8s_client, main, openstack_client  # noqa: E402
+from app.openstack_client import MagnumClient  # noqa: E402
 
 MINE, OTHER = "c-mine", "c-other"
 USER = auth.Caller("gy.yang", "user", frozenset({MINE}))
@@ -25,8 +26,9 @@ def _blocked(*_a, **_k):
 
 @pytest.fixture(autouse=True)
 def no_magnum(monkeypatch):
-    monkeypatch.setattr(magnum, "request", _blocked)
+    monkeypatch.setattr(MagnumClient, "request", _blocked)
     k8s_client._clients.clear()
+    openstack_client._project_clients.clear()
     auth._cache.clear()
     yield
     main.app.dependency_overrides.clear()

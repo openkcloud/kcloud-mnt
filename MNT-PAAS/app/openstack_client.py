@@ -22,7 +22,8 @@ _API_VERSION = {"OpenStack-API-Version": "container-infra latest"}
 
 
 class MagnumClient:
-    def __init__(self) -> None:
+    def __init__(self, project_id: str | None = None) -> None:
+        self._project_id = project_id  # None 이면 설정의 프로젝트(이름) 스코프
         self._token: str | None = None
         self._magnum_url: str | None = None  # catalog 모드에서 토큰과 함께 갱신
         self._exp: float = 0.0
@@ -43,7 +44,7 @@ class MagnumClient:
                             "password": settings.os_password,
                         }},
                     },
-                    "scope": {"project": {
+                    "scope": {"project": {"id": self._project_id} if self._project_id else {
                         "name": settings.os_project_name,
                         "domain": {"name": settings.os_project_domain_name},
                     }},
@@ -96,3 +97,17 @@ class MagnumClient:
 
 
 magnum = MagnumClient()
+
+_project_clients: dict[str, MagnumClient] = {}
+_project_lock = threading.Lock()
+
+
+def for_project(project_id: str) -> MagnumClient:
+    """특정 프로젝트로 스코프된 클라이언트(캐시). Magnum 인증서(CA 조회·CSR 서명)는 클러스터 소유 프로젝트
+    스코프에서만 된다(다른 프로젝트 스코프면 'Cluster could not be found'). MNT-IAAS get_conn_for_project 와 같은 전제:
+    서비스 계정이 해당 도메인에 inherited role 보유(모든 프로젝트 스코프 가능)."""
+    with _project_lock:
+        cli = _project_clients.get(project_id)
+        if cli is None:
+            cli = _project_clients[project_id] = MagnumClient(project_id)
+        return cli
