@@ -34,7 +34,7 @@ import { cn } from "@/lib/utils";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import {
   useProjectMembers, usePortalUsers, useAddProjectMember, useRemoveProjectMember, useMyProjectIds,
-  type ProjectMember,
+  useProjectMemberCounts, type ProjectMember,
 } from "@/lib/member-api";
 import {
   Table,
@@ -55,6 +55,7 @@ export default function ProjectsPage() {
   const isAdmin = useAuth((s) => s.user?.role === "admin");
   const myUsername = useAuth((s) => s.user?.username);
   const { data: myProjectIds } = useMyProjectIds(isAdmin ? undefined : myUsername); // 사용자는 멤버인 프로젝트만
+  const { data: memberCounts } = useProjectMemberCounts(); // 멤버 수 = 포털 DB(iam_project_member), OpenStack 아님
   const { data, isLoading } = useProjects() as {
     data: { items: Tenant[]; live: boolean } | undefined;
     isLoading: boolean;
@@ -133,7 +134,7 @@ export default function ProjectsPage() {
                   </Badge>
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1"><Users className="size-3.5" />{t.members}</span>
+                  <span className="flex items-center gap-1"><Users className="size-3.5" />{memberCounts?.[t.id] ?? 0}</span>
                 </TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   <Button variant="ghost" size="sm" onClick={() => setSelected(t)}>
