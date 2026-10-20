@@ -1,6 +1,6 @@
 # 서비스 클러스터 신청 (새 클러스터) — 설계 문서
 
-작성일: 2026-10-19 · 상태: **초안 (아래 '정해야 할 것' 확정 후 갱신)**
+작성일: 2026-10-19 · 갱신: 2026-10-20(다른 프로젝트 시험 결과) · 상태: **초안 (아래 '정해야 할 것' 확정 후 갱신)**
 대상 화면: 자원 신청 모달의 '서비스 클러스터 신청' 탭, `/ticket/requests` (자원 요청·신청 관리)
 
 ## 목표
@@ -33,12 +33,14 @@ Magnum 으로 클러스터를 만든 뒤 **프로젝트 네임스페이스**를 
 - 가속기: **Worker 에만** 붙인다. 사용자가 가속기(없음 또는 디바이스 프로파일)를 고르면 맞지 않는 Worker 플레이버는
   **비활성(흐리게 + 사유)** 처리 — VM 신청 템플릿 단계의 '스펙 디스크보다 커서 선택할 수 없습니다' 와 같은 방식.
   Control Plane 목록에서는 가속기 플레이버를 비활성 처리한다.
+- 네트워크: **VM 신청처럼 사용자가 희망 네트워크(내부망/인터넷망)를 고른다.** '공인 IP 희망' 은 두지 않는다(노드 공인 IP 미지원).
+  관리자는 프로비저닝 때 희망을 참고해 실제 망·서브넷을 고른다 — 어느 쪽이든 API 공인 IP 가 필요하므로 외부망 라우터에 연결된 망이어야 한다.
 
 ## 확인한 사실 (2026-10-19 실제 환경 조회)
 
 | 항목 | 내용 |
 |---|---|
-| Magnum 드라이버 | Cluster API(magnum-cluster-api). 기존 클러스터 생성 약 13분(`create_timeout` 60분) |
+| Magnum 드라이버 | Cluster API — `magnum_capi_helm`(magnum-conductor 로그). CAPI 객체는 관리 클러스터의 `magnum-{프로젝트 ID}` 네임스페이스. 기존 클러스터 생성 약 13분(`create_timeout` 60분) |
 | 기존 클러스터 | 2개, 모두 `admin` 프로젝트 소유 — 다른 프로젝트 소유 클러스터는 아직 없음 |
 | 템플릿 | 5개, 모두 `admin` 프로젝트의 public. 노드 플레이버가 가속기와 묶여 있음(`m1.large.rngd` 등) |
 | 플레이버 | VM 과 같은 Nova 플레이버(클러스터 전용 자원 없음). `m1.large.rngd` = `m1.large`(4 vCPU·8GB·80GB) + `accel:device_profile=dp-rngd`(Furiosa RNGD 1장), `m1.large.2rngd` = 2장 |
@@ -49,9 +51,12 @@ Magnum 으로 클러스터를 만든 뒤 **프로젝트 네임스페이스**를 
 | API 주소 | Cluster API 가 API LB 에 붙인 공인 IP(외부망 `public`, 예: `https://192.168.90.225:6443`) |
 | 가용 영역 | `az1` 하나. 기존 클러스터는 생성 때 라벨 `availability_zone=az1` 지정 |
 | PaaS 인증 | `MNT-PAAS` 의 Magnum 클라이언트는 `extadmin` 을 **`admin` 프로젝트로만** 스코프 → 지금 코드로는 신청 프로젝트 소유로 만들 수 없다 |
-| 시험 프로젝트 | `okc_test_prj`: 망 `my-network`(서브넷 2개 모두 외부 게이트웨이 없는 `my-router-internal` 에만 연결), `my-router-external`(외부 게이트웨이 있음, 연결된 서브넷 없음) → **지금은 이 망으로 클러스터 API 에 Floating IP 를 붙일 수 없다**. 쿼터 인스턴스 10(사용 2)·vCPU 20(사용 3)·RAM 50GB(사용 6GB) |
+| 시험 프로젝트 | `okc_test_prj`: 망 `my-network` 서브넷 2개(`10.0.0.0/24` DHCP 꺼짐, `10.0.1.0/24` DHCP 켜짐) 모두 `my-router-internal` 에 연결, 이 라우터에 외부 게이트웨이 추가(2026-10-19 사용자 정리). 쿼터 인스턴스 10(사용 2)·vCPU 20(사용 3)·RAM 50GB(사용 6GB) |
+| 서브넷 DHCP | **켜져 있어야 한다.** `okc-prj-test` 1차(`10.0.0.0/24`, DHCP 꺼짐)는 Control Plane VM 이 IPv4·메타데이터를 받지 못해(콘솔: 'Wait for Network to be Configured' 실패, 'No active metadata service found') 설치가 시작되지 않음 → API LB 대상 `ERROR`, Worker VM 은 만들어지지도 않고 75분간 `CREATE_IN_PROGRESS`. Magnum 은 이 서브넷을 거부하지 않는다 |
+| 노드 → OpenStack API | **노드가 Keystone(`https://keystone-api.openstack.internal/v3`, 서브넷 DNS 로 해석)에 닿아야 한다.** 클라우드 컨트롤러(OCCM)가 노드에 IP·providerID 를 넣고, calico 는 노드 InternalIP 로 동작한다(`nodeAddressAutodetectionV4: kubernetes: NodeInternalIP`). `okc-prj-test` 2·3차(`10.0.1.0/24`)는 노드 → DNS `192.168.90.253:53` 질의가 시간 초과 → OCCM 종료 → 노드 주소 없음 → calico 실패 → CAPI 가 'providerID 노드' 를 못 찾아 Control Plane 미완료. 관리자 망(`k8s-router`, 게이트웨이 호스트 `controller`)은 됨. 시험 망 노드(라우터 게이트웨이 호스트 `compute2`)에서 직접 시험: 물리 게이트웨이 `192.168.90.1` 은 ping 됨, **MetalLB VIP `192.168.90.253`(DNS)·`.252`(API 입구 istio)는 ping·UDP 53·TCP 443 모두 응답 없음** → 클러스터 기능이 아니라 테스트베드 망 구성 문제(원인 확인은 인프라 쪽) |
+| 다른 프로젝트 클러스터 | `admin` 스코프로 목록·상세·노드그룹 조회·**삭제** 가능(1차 삭제 76초, VM·API Floating IP·LB 남지 않음). 인증서 CA 조회·CSR 서명만 프로젝트 스코프 필요(4절 `issue_client_cert`). API Floating IP·LB 는 그 프로젝트 소유로 생긴다 |
 | API Floating IP | 클러스터 생성 직후 바로 붙는다 — `floating_ip_enabled=false` 로 요청해도 붙음(시험 클러스터 `okc-1node-test`: `192.168.90.237`). Cluster API 관리 클러스터가 이 주소로 접속하므로 끄면 생성이 실패한다(드라이버 문서) |
-| 생성 직후 조회 | 생성 요청 후 몇 초 동안 `GET /clusters/{id}` 가 404 또는 400 — 대기 작업은 처음 2분간 이를 견딘다 |
+| 생성 직후 조회 | 생성 요청 후 몇 초 동안 `GET /clusters/{id}` 가 404 또는 400 — 대기 작업은 처음 2분간 이를 견딘다. `api_address` 는 잠깐 `https://:0` 으로 보인 뒤 실제 주소가 된다(30~60초) — 호스트가 비면 '아직 없음'으로 본다 |
 | Worker 0 | **완성되지 않는다.** Magnum 은 요청을 받아들이고 K8s API 도 열리지만, Control Plane 노드(taint `node-role.kubernetes.io/control-plane:NoSchedule`)에 배치되지 못하는 애드온 2개(`kube-system/metrics-server`, `node-feature-discovery/node-feature-discovery-gc`)가 Pending 으로 남아 클러스터가 `CREATE_IN_PROGRESS` 에서 끝나지 않음(`okc-1node-test`, 포털 PaaS API 로 확인). 같은 템플릿 1+1(`okc-fip-test`)은 두 애드온 모두 Worker 에 떠서 정상 완료 → **Worker 최소 1** |
 | 노드 Floating IP | **지원 안 됨.** `okc-fip-test`(1+1, `floating_ip_enabled=true`)는 10분 15초에 완료됐지만 Control Plane·Worker VM 모두 Floating IP 없음 — API LB 에만 붙음. 이 드라이버는 `floating_ip_enabled` 를 노드에 적용하지 않는다 → 'Worker 공인 IP' 선택은 두지 않는다 |
 | 삭제 시간 | `okc-fip-test`(1+1) 삭제 요청 → 15초 뒤 `DELETE_IN_PROGRESS` → **91초에 사라짐**. `okc-1node-test`(생성 중에 삭제)는 60초에 `DELETE_COMPLETE` 가 잠깐 보인 뒤 76초에 사라짐 → 정리 대기는 404 와 `DELETE_COMPLETE` 를 모두 '삭제됨'으로 본다. 두 경우 모두 VM·API Floating IP·LB 남지 않음 |
@@ -78,10 +83,10 @@ Magnum 으로 클러스터를 만든 뒤 **프로젝트 네임스페이스**를 
 | Control Plane | 1 또는 3 · 플레이버(프로젝트가 쓸 수 있는 플레이버, 기본값 = 템플릿). 가속기 플레이버는 비활성 — 사유 'Control Plane 에는 가속기 스펙을 쓸 수 없습니다' |
 | 가속기 (Worker) | 없음 / 프로젝트 플레이버들에 달린 디바이스 프로파일(표시: 종류·개수, 예 'NPU · Furiosa × 1'). 기본값 = 템플릿 Worker 플레이버의 가속기 |
 | Worker | 1~20(0 은 애드온이 배치되지 않아 완성 안 됨 — 시험 확인) · 플레이버(같은 목록, 기본값 = 템플릿). 고른 가속기와 다른 플레이버는 비활성 — 사유 '가속기가 없는 스펙입니다' / '선택한 가속기(…)와 다른 스펙입니다'. 가속기를 바꿔 고른 플레이버가 비활성이 되면 선택을 비운다 |
+| 희망 네트워크 | 내부망 / 인터넷망 — VM 신청과 같은 선택지(`USER_NETWORKS`). 공인 IP 희망 토글은 없음 |
 | 용도 | 자유 입력(300자, AI 워크스페이스와 같음) |
 
 목업의 'Kubernetes 버전' 선택은 템플릿 선택으로 바뀐다(Magnum 에서 버전은 템플릿 이미지가 정한다).
-목업의 '내부망/인터넷망' 선택은 뺀다(정해야 할 것 2).
 
 **서버 확인 (`POST /tickets/cluster`)**: 멤버·역할(`_check_requestable`), 프로젝트(라이브), 이름 규칙·중복,
 템플릿 존재·공개, 플레이버 존재, 노드 수 범위. `request_spec` 에 저장:
@@ -94,6 +99,8 @@ flavorId, namespace, purpose` (+ 표시용 플레이버 이름·vCPU·RAM).
 - 프로비저닝 설정 (`POST /tickets/{id}/provision-cluster`, 승인·실패 상태, 토큰의 관리자):
   - **네트워크·서브넷 (필수)**: 프로젝트가 쓸 수 있는 망(소유 + 공유, 외부망 제외). 템플릿의 외부망으로
     공인 IP 를 붙일 수 있는지 IAAS `GET /networks/{id}/fip-reachable` 로 확인(VM 과 같은 확인 재사용).
+    서브넷은 **DHCP 켜진 것만** 고를 수 있다(꺼진 서브넷은 비활성 — 사유 'DHCP 가 꺼진 서브넷에는 노드가 주소를 받지 못합니다').
+    서버도 같은 조건을 확인한다(시험 확인 — 확인한 사실 '서브넷 DHCP').
   - 플레이버·가속기: 신청 화면과 같은 선택 UI(가속기 → 맞지 않는 Worker 플레이버 비활성)에 신청 값을 채워 보여 주고
     관리자가 정한다. 노드 수도 조정 가능. 서버도 같은 규칙(Control Plane 은 가속기 없음, Worker 는 고른 가속기와 일치)을 확인.
   - 이름 중복 재확인(이전 회차 클러스터가 아직 삭제 중이면 409).
@@ -116,6 +123,7 @@ flavorId, namespace, purpose` (+ 표시용 플레이버 이름·vCPU·RAM).
 | | 프로젝트 네임스페이스 `create_namespace` | 네임스페이스 이름 |
 | | 접근 권한 등록 `grant_access` | 프로젝트 이름 |
 
+- 네트워크 확인 = 서브넷 DHCP 켜짐 + `fip-reachable` 가능(프로비저닝 설정 뒤 망이 바뀌었을 수 있어 실행 때 다시 본다).
 - Control Plane 준비 = Control Plane 노드그룹 `CREATE_COMPLETE`. Worker 준비 = Nova 의 Worker VM(이름 `{stack_id}-default-worker-*`)
   `ACTIVE` 수(표시 'n/전체') + 클러스터 `CREATE_COMPLETE` — Worker 노드그룹 상태는 실제보다 먼저 완료로 바뀌어 쓰지 않는다(시험 확인).
 - 생성 요청은 재시도하지 않는다(응답 유실 시 중복 생성 위험 — VM 과 같음). 작업은 먼저 같은 이름의 클러스터가
@@ -147,7 +155,9 @@ flavorId, namespace, purpose` (+ 표시용 플레이버 이름·vCPU·RAM).
 - `main.py` 수명주기에서 워커 기동, `config.py` 에 `temporal_api_base`, `requirements.txt` 에 `temporalio==1.34.0`,
   `config.env.example`·`deploy/all.yaml` 에 `TEMPORAL_API_BASE`.
 - `routers/templates.py`: 템플릿 요약에 `kubeVersion`(이미지 `kube_version`) 추가.
-- `k8s_client.issue_client_cert`: 다른 프로젝트 클러스터면 그 프로젝트 스코프로 인증서 발급(확인 1 결과에 따라).
+- `k8s_client.issue_client_cert`: **클러스터 소유 프로젝트 스코프로 인증서 발급(필수)** — 2026-10-19 시험에서
+  다른 프로젝트 클러스터의 CA 조회(404)·CSR 서명(400)이 `admin` 스코프로는 'Cluster could not be found' 로 실패하고,
+  프로젝트 스코프로는 둘 다 성공. 목록·상세·노드그룹 조회는 `admin` 스코프로 된다. 소유 프로젝트는 `admin` 스코프 상세의 `project_id`.
 
 **MNT-CORE**
 - `routers/tickets.py`: `_paas()` 도우미(`PAAS_API_BASE`, `_ainb()` 와 같은 방식 — 설정은 이미 있음),
@@ -171,26 +181,27 @@ flavorId, namespace, purpose` (+ 표시용 플레이버 이름·vCPU·RAM).
 - `ticket/requests/page.tsx`: `cluster` 분기 — 목록 스펙 표시, 상세 모달 프로비저닝 설정(네트워크·서브넷, 노드 조정),
   진행 팝업(공통), 완료 카드 → `/paas/clusters`.
 
-## 5. 먼저 확인할 것 (구현 1단계 — 시험 클러스터 필요)
+## 5. 먼저 확인할 것 (구현 1단계)
 
-`okc_test_prj` 에 시험 클러스터를 하나 만들어 확인한다 — 템플릿 `ct-k8s-1.36.2-rngd-nodash-nogpu`,
-Control Plane 1 + Worker 1, Worker 플레이버만 `m1.large` 로 덮어씀(RNGD 여유 없음), 망 `my-network`.
+2026-10-19 `admin` 프로젝트 시험 클러스터 2개로 확인한 것: Worker 0 불가, 노드 Floating IP 미지원,
+노드그룹 상태로 Worker 진행 판정 불가, 생성·삭제 시간(확인한 사실 표 참고). 가용 영역 라벨은 기존 클러스터처럼
+`availability_zone=az1` 을 넣는다(PaaS 설정값, 기본 `az1`).
 
-1. **다른 프로젝트 클러스터를 `admin` 스코프로 다룰 수 있는지** — 목록·상세·삭제·인증서(CA 조회·CSR 서명).
-   인증서가 안 되면 기존 PaaS 화면(워크로드·kubeconfig)도 그 클러스터에서 깨지므로 프로젝트 스코프로 바꿔야 한다.
-2. `my-network` 서브넷이 외부망 라우터와 연결돼 공인 IP 가 붙는지(10-08 VM 시험 때는 불가였음).
-3. 가용 영역 라벨을 안 주면 어떻게 되는지(필요하면 PaaS 설정값으로 `az1` 지정).
-4. 생성 중 노드그룹 상태가 Control Plane → Worker 순서로 바뀌는지(진행 단계 표시 방식 결정).
+2026-10-19~20 `okc_test_prj` 소유 시험 클러스터 3회(`okc-prj-test`, 프로젝트 스코프 생성)로 확인한 것:
+1. **`admin` 스코프로 목록·상세·노드그룹 조회·삭제는 된다. 인증서(CA 조회·CSR 서명)는 안 된다** → `issue_client_cert`
+   프로젝트 스코프 필수(4절). 지금 배포된 포털 PaaS 화면도 이 클러스터에서 404 'Cluster could not be found'.
+2. 프로젝트 스코프 생성 시 API LB·Floating IP 는 그 프로젝트 소유로 생긴다.
+3. 서브넷 DHCP 가 꺼져 있으면 노드가 주소를 못 받아 설치가 시작되지 않는다(1차).
+4. 2·3차는 노드가 OpenStack API(MetalLB VIP `192.168.90.252`·DNS `.253`)에 닿지 못해 완료되지 않았다 — 라우터
+   외부 게이트웨이가 `compute2` 에 놓인 망. 테스트베드 망 구성 문제라 인프라 쪽에서 해결한다.
+
+남은 것: 인프라 해결 뒤 '다른 프로젝트 소유 클러스터 정상 완료'를 다시 시험한다(4차).
 
 ## 6. 정해야 할 것
 
-1. 사용자가 고르는 노드 항목 — 추천: 템플릿·Control Plane 수·Worker 수·Worker 플레이버(기본값 = 템플릿).
-   Control Plane 플레이버는 템플릿 값. 관리자는 프로비저닝 때 조정 가능.
-2. 네트워크 — 추천: 관리자가 프로비저닝 때 프로젝트 망·서브넷을 고른다(VM 과 같음).
-   대안: 망을 비운 템플릿을 따로 만들어 Cluster API 가 클러스터마다 망·라우터를 새로 만들게 한다(라우터 쿼터 소모).
-3. 시험 클러스터(5절) 구성과 누가 만들지.
-4. 워크플로 공용 코드 — 진행 기록·시간 제한·작업 호출이 `VmProvision`·`AiWorkspaceProvision` 에 복사돼 있다.
-   추천: 공용 모듈로 빼서 세 워크플로가 함께 쓴다.
+1. 테스트베드 망: tenant 라우터의 외부 게이트웨이가 어느 호스트에 놓여도 MetalLB VIP(OpenStack API·DNS)에 닿도록
+   인프라 구성 정리(지금 확인된 것은 `controller` 됨, `compute2` 안 됨). 정리 전까지 관리자 프로비저닝 화면에
+   '노드가 OpenStack API 에 닿는 망이어야 합니다' 안내 문구를 둔다(API 로 미리 확인할 방법 없음).
 
 ## 범위 밖
 
