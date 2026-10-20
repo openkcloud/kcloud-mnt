@@ -1,6 +1,6 @@
 # 서비스 클러스터 신청 (새 클러스터) — 설계 문서
 
-작성일: 2026-10-19 · 갱신: 2026-10-20(다른 프로젝트 시험 결과 — 6차 성공) · 상태: **초안 (아래 '정해야 할 것' 확정 후 갱신)**
+작성일: 2026-10-19 · 갱신: 2026-10-20(6차 시험 성공, 구현 계획 조사 반영) · 상태: **초안 (아래 '정해야 할 것' 확정 후 갱신)**
 대상 화면: 자원 신청 모달의 '서비스 클러스터 신청' 탭, `/ticket/requests` (자원 요청·신청 관리)
 
 ## 목표
@@ -25,8 +25,8 @@ Magnum 으로 클러스터를 만든 뒤 **프로젝트 네임스페이스**를 
   (대기·승인·생성 중·실패)과 중복 불가.
 - 시간 값: 3절의 임시 값으로 시작하고 VM 처럼 시험해 본 뒤 조정.
 - 워크플로: VM 처럼 Temporal 사용. `vm_provision.py` 를 참고해 `kubernetes_provision.py` 를 만든다.
-  재활용할 부분(진행 기록·시간 제한·작업 호출)은 별도 공통 파일로 분리해 `vm_provision.py`·
-  `ai_workspace_provision.py`·`kubernetes_provision.py` 가 함께 쓴다.
+  재활용할 부분(진행 기록·시간 제한·작업 호출)은 별도 공통 파일로 분리해 `vm_provision.py`·`kubernetes_provision.py` 가
+  함께 쓴다. **AI 워크스페이스 프로비저닝·MNT-AINB 는 이번 범위에서 제외**(2026-10-20) — `ai_workspace_provision.py` 는 그대로.
 - 플레이버: 사용자는 Control Plane·Worker 플레이버를 각각 **그 프로젝트가 쓸 수 있는 플레이버(public + 프로젝트에
   접근이 허용된 비공개)** 목록에서 고르고, **가속기도 고른다.** 관리자는 프로비저닝 때 신청 값을 보고 플레이버·가속기를 정한다.
 - **VM 신청도 같은 플레이버 목록(public + 프로젝트)** 으로 바꾼다 — 지금은 public 만.
@@ -104,7 +104,8 @@ flavorId, namespace, purpose` (+ 표시용 플레이버 이름·vCPU·RAM).
   - 플레이버·가속기: 신청 화면과 같은 선택 UI(가속기 → 맞지 않는 Worker 플레이버 비활성)에 신청 값을 채워 보여 주고
     관리자가 정한다. 노드 수도 조정 가능. 서버도 같은 규칙(Control Plane 은 가속기 없음, Worker 는 고른 가속기와 일치)을 확인.
   - 이름 중복 재확인(이전 회차 클러스터가 아직 삭제 중이면 409).
-  - 쿼터 사전 확인: 필요한 vCPU·RAM·인스턴스 수가 남은 쿼터 안인지(IAAS `get_project_quota` 재사용).
+  - 쿼터 사전 확인: 필요한 vCPU·RAM·인스턴스 수가 남은 쿼터 안인지 — VM 처럼 IAAS `/placement-preview` 의 `quota`
+    (CORE 에는 쿼터 조회가 없고, 인스턴스 수까지 주는 IAAS API 는 이것뿐). 실행 때 워크플로가 `iaas.check_quota` 로 다시 본다.
 - 워크플로 ID: `cluster-provision-{신청ID}-{회차}`. 시작 실패 시 이전 상태·값으로 되돌림(AI 워크스페이스와 같음).
 
 ## 3. 워크플로·진행 단계
@@ -113,14 +114,14 @@ flavorId, namespace, purpose` (+ 표시용 플레이버 이름·vCPU·RAM).
 
 | 단계 | 상세 단계 | 표시 값 |
 |---|---|---|
-| 신청 확인 `check_request` | 클러스터 이름 `check_name` | 이름 |
+| 클러스터 생성 가능 여부 확인중 `check_creatable` | 클러스터 이름 `check_name` | 이름 |
 | | 자원 쿼터 `check_quota` | VM 4대 · vCPU 16 · RAM 32GB |
 | | 네트워크 `check_network` | 망 이름 / 서브넷 CIDR |
 | 클러스터 생성 `create_cluster` | 생성 요청 전송 `send_request` | 클러스터 ID |
 | | Control Plane 준비 `create_control_plane` | 1/1 |
 | | Worker 준비 `create_workers` | 3/3 |
-| 사용 준비 `setup_cluster` | K8s API 연결 `check_api` | API 주소 |
-| | 프로젝트 네임스페이스 `create_namespace` | 네임스페이스 이름 |
+| | K8s API 연결 `check_api` | API 주소 |
+| 네임스페이스 및 접근 권한 `setup_cluster` | 프로젝트 네임스페이스 `create_namespace` | 네임스페이스 이름 |
 | | 접근 권한 등록 `grant_access` | 프로젝트 이름 |
 
 - 네트워크 확인 = 서브넷 DHCP 켜짐 + `fip-reachable` 가능(프로비저닝 설정 뒤 망이 바뀌었을 수 있어 실행 때 다시 본다).
@@ -132,7 +133,7 @@ flavorId, namespace, purpose` (+ 표시용 플레이버 이름·vCPU·RAM).
   `WHERE NOT EXISTS (... namespace IS NULL)` 로 넣는다.
 - 결과(`result`): `clusterId, clusterName, namespace, apiAddress`.
 
-**시간 (임시 값, VM 처럼 테스트 후 조정)**: 확인 간격 10초 · 생성 대기 최대 45분 · 사용 준비 5분 ·
+**시간 (임시 값, VM 처럼 테스트 후 조정)**: 확인 간격 10초 · 생성 대기 최대 45분 · K8s API 연결·네임스페이스 5분 ·
 전체 60분 · 실패 정리 대기 15분 · PaaS 작업 큐 대기 2분(넘으면 'PAAS 워커 없음').
 
 **실패 시 정리**: 이번 회차가 만든 클러스터를 Magnum DELETE 하고 사라질 때까지 기다린 뒤 티켓 '실패'.
@@ -146,32 +147,40 @@ flavorId, namespace, purpose` (+ 표시용 플레이버 이름·vCPU·RAM).
   응답 형식은 `/flavors` 와 같음(가속기·`deviceProfileMissing` 포함). 지금 `/flavors` 는 Nova 기본 조회라 비공개를
   아예 돌려주지 않는다 — 비공개는 `is_public=None` 으로 받아 플레이버 접근 목록(`os-flavor-access`)으로 거른다.
   VM·클러스터 신청이 함께 쓴다.
+- `workflows/activities.py`: `iaas.check_quota`(`get_project_quota` 로 인스턴스·vCPU·RAM 여유), `iaas.check_network`
+  (서브넷이 그 망 소속·DHCP 켜짐 + `fip_reachable`). 클러스터 워크플로의 `check_quota`·`check_network` 단계가 쓴다.
 
 **MNT-PAAS**
-- `openstack_client.py`: 프로젝트 ID 로 스코프한 Magnum 클라이언트(캐시) — IAAS `get_conn_for_project` 와 같은 방식.
-- `workflows/activities.py`(새): `paas.create_cluster`, `paas.wait_cluster`(하트비트, 단계별 반환),
-  `paas.create_namespace`(있으면 라벨만 확인 — 멱등), `paas.delete_cluster`(삭제 + 사라질 때까지 대기).
-- `workflows/runtime.py`(새): 워커(큐 `okc-paas`) — IAAS 워커처럼 재기동 때 실행 중 작업을 기다린다(생성 요청 끊김 방지).
+- `openstack_client.py`: 프로젝트 ID 로 스코프한 Magnum 클라이언트(캐시) — **완료(`e27fd5b`)**. 같은 토큰으로 Nova(Worker VM 수)·
+  Glance(이미지 `kube_version`)를 읽는 조회 도우미 추가.
+- `routers/clusters.py`: `GET /cluster-name-check?name=`(로그인) — 모든 클러스터 이름과 비교해 사용 가능 여부만 돌려준다
+  (`GET /clusters` 는 일반 사용자에게 접근 가능한 클러스터만 주므로 이름 중복 확인에 못 쓴다).
+- `workflows/activities.py`(새): `paas.check_name`, `paas.create_cluster`, `paas.watch_cluster`(바뀌면 즉시·아니면 최대 60초 뒤 반환,
+  하트비트), `paas.create_namespace`(있으면 라벨만 확인 — 멱등), `paas.delete_cluster`(ID 또는 이름으로 찾아 삭제 + 사라질 때까지 대기).
+- `workflows/runtime.py`(새): 워커(큐 `okc-paas`) — 재기동 때 실행 중 작업을 **25초** 기다린다(파드 기본 종료 유예 30초 안).
+  생성 요청은 몇 초면 끝나고, 대기 작업은 끊겨도 하트비트로 새 파드에서 다시 실행된다.
 - `main.py` 수명주기에서 워커 기동, `config.py` 에 `temporal_api_base`, `requirements.txt` 에 `temporalio==1.34.0`,
   `config.env.example`·`deploy/all.yaml` 에 `TEMPORAL_API_BASE`.
-- `routers/templates.py`: 템플릿 요약에 `kubeVersion`(이미지 `kube_version`) 추가.
+- `routers/templates.py`: 템플릿 요약에 `kubeVersion`(Glance 이미지 속성 `kube_version`, 이미지 ID 별 캐시) 추가.
 - `k8s_client.issue_client_cert`: **클러스터 소유 프로젝트 스코프로 인증서 발급(필수)** — 2026-10-19 시험에서
   다른 프로젝트 클러스터의 CA 조회(404)·CSR 서명(400)이 `admin` 스코프로는 'Cluster could not be found' 로 실패하고,
   프로젝트 스코프로는 둘 다 성공. 목록·상세·노드그룹 조회는 `admin` 스코프로 된다. 소유 프로젝트는 `admin` 스코프 상세의 `project_id`.
 
 **MNT-CORE**
-- `routers/tickets.py`: `_paas()` 도우미(`PAAS_API_BASE`, `_ainb()` 와 같은 방식 — 설정은 이미 있음),
+- `routers/tickets.py`: `_paas(path, token)` 도우미(`PAAS_API_BASE` — 설정은 이미 있음). **`_iaas()` 처럼 사용자 토큰을 넘긴다**
+  (PAAS 는 `465b4f4` 부터 모든 API 에 토큰 필요 — `_ainb()` 는 토큰을 안 보내므로 따르지 않는다). 프로비저닝 API 는 VM 처럼
+  토큰 사용자로 관리자를 확인한다,
   `GET /tickets/cluster-name-check`, `POST /tickets/cluster`, `POST /tickets/{id}/provision-cluster`.
   VM 신청(`create_ticket`)의 플레이버 확인도 `/flavors` + public 조건 → 프로젝트 플레이버 API 로 바꾼다.
 - `workflows/kubernetes_provision.py`(새): `KubernetesProvision` — `VmProvision` 구조(생성 요청 재시도 없음·상태 변화 감시·
   삭제 후 사라질 때까지 정리)를 따른다. 시작 대기열·가속기/FIP 건너뛰기·부팅 볼륨 재대기는 쓰지 않는다.
 - 워크플로 공통 파일(새): `VmProvision` 의 진행 기록(`_idx`·`_go`·`_set_values`·`_fail_current`)·시간 제한(`_within`)·
-  작업 호출(`_core`)·실패 사유(`_reason`)를 옮기고 `vm_provision.py`·`ai_workspace_provision.py` 가 이를 쓰도록 바꾼다
-  (동작·명령 순서 그대로 — 실행 중인 워크플로의 재실행 판정이 깨지지 않게). 실패 사유의 워커 이름(IAAS·AINB·PAAS)만 인자로.
-- `workflows/activities.py`: `core.init_steps_ainb` 본문을 그룹 인자로 공용화해 `core.init_steps_paas` 추가,
-  `core.grant_cluster_access` 추가.
+  작업 호출(`_core`)·실패 사유(`_reason`)를 옮기고 `vm_provision.py` 가 이를 쓰도록 바꾼다
+  (동작·명령 순서 그대로 — 실행 중인 워크플로의 재실행 판정이 깨지지 않게). 실패 사유의 워커 이름(IAAS·PAAS)만 인자로.
+- `workflows/activities.py`: `core.init_steps_paas`(그룹 `TKT_PROVISION_STEP_PAAS`·`TKT_PROVISION_SUBSTEP_PAAS` 명시,
+  `init_steps_ainb` 는 그대로), `core.grant_cluster_access` 추가.
 - `workflows/runtime.py`: `start_cluster_provision`, 워커에 워크플로 등록.
-- `db/paas_cluster_request.sql`(새): 단계 공통코드. `TKT_TYPE` 의 `cluster` 는 이미 있다.
+- `db/paas_cluster_request.sql`(새): 단계 공통코드. `TKT_TYPE` 의 `cluster` 는 이미 있다. 시험 DB(`tests/run_tests.sh`)에도 적용.
 
 **MNT-APP**
 - `resource-request-wizard.tsx` `ClusterRequestForm`: 목업 → 실연동(프로젝트·템플릿·플레이버·이름 확인·제출).
