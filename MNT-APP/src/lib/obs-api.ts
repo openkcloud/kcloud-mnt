@@ -183,17 +183,25 @@ export function useNodes(cluster = "mgmt") {
   });
 }
 
-export interface UtilSeriesRow {
-  t: string;
-  gpu?: number;
-  furiosa?: number;
-  rebellions?: number;
+export function useNodesTimeseries(cluster = "mgmt") {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-nodes-timeseries", cluster],
+    queryFn: () => obsFetch<{ series: { i: number; v: number }[] }>(`/monitoring/nodes/timeseries?cluster=${cluster}`),
+    refetchInterval: pollMs || false,
+  });
+}
+
+// 가속기 사용률 히트맵 — 호스트 × 시각(cells 는 times 인덱스와 정렬)
+export interface UtilHeatmap {
+  times: string[];
+  hosts: { host: string; vendor: string; cells: (number | null)[] }[];
 }
 export function useUtilTimeseries() {
   const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["obs-util-timeseries"],
-    queryFn: () => obsFetch<{ series: UtilSeriesRow[] }>(`/monitoring/util-timeseries`),
+    queryFn: () => obsFetch<UtilHeatmap>(`/monitoring/util-timeseries`),
     refetchInterval: pollMs || false,
   });
 }

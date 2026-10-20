@@ -496,36 +496,50 @@ def nodes(cluster: str = Query("mgmt")):
     }
 
 
+@router.get("/monitoring/nodes/timeseries")
+def nodes_timeseries(cluster: str = Query("mgmt"), period: str = Query("24h"), step: str = Query("1h")):
+    """정상 노드 추세(상단 '정상 노드' 카드 미니 스파크라인) — /monitoring/nodes/timeseries 중개.
+    series 중 ready/healthy 우선, 없으면 첫 series(total 등)."""
+    try:
+        d = monitor.get("/monitoring/nodes/timeseries",
+                        params={"cluster": cluster, "period": period, "step": step})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"monitor api error: {type(e).__name__}: {e}")
+    series = d.get("series", []) or []
+    pick = next((s for s in series if s.get("metric") in ("ready", "healthy")), None) or (series[0] if series else {})
+    return {"series": _series_points(pick.get("values", []))}
+
+
 @router.get("/monitoring/util-timeseries")
 def util_timeseries(period: str = Query("24h"), step: str = Query("1h")):
-    """벤더별 가속기 사용률 추세 — gpu/furiosa/rebellions_utilization (히트맵 대체).
-    metrics/timeseries 가 호스트별로 분리를 안 줘서, 벤더 metric 3종을 타임스탬프로 병합."""
+    """가속기 사용률 히트맵 — 호스트 × 시각. 벤더 metric 3종을 by=hostname 으로 조회해 호스트별 series 수집.
+    이노그리드가 Hostname/hostname/node 라벨을 hostname 으로 통합 → series[].metric.hostname."""
     metrics = {"gpu": "gpu_utilization", "furiosa": "furiosa_utilization", "rebellions": "rebellions_utilization"}
-    by_vendor: dict[str, list] = {}
-    for key, metric in metrics.items():
+    times: list[str] = []
+    hosts: list[dict] = []
+    for vendor, metric in metrics.items():
         try:
             resp = monitor.get(
                 "/monitoring/metrics/timeseries",
                 params={"metric": metric, "period": period, "step": step, "by": "hostname"},
             )
-        except Exception:  # noqa: BLE001
-            resp = {}
-        s = resp.get("series", [])
-        by_vendor[key] = s[0].get("values", []) if s else []
-
-    # 3개 metric을 각각 따로 호출하므로 타임스탬프가 어긋남 → 인덱스 기준으로 정렬 병합.
-    n = max((len(v) for v in by_vendor.values()), default=0)
-    rows = []
-    for i in range(n):
-        row: dict = {"t": ""}
-        for key, vals in by_vendor.items():
-            if i < len(vals) and isinstance(vals[i], (list, tuple)) and len(vals[i]) >= 2:
-                ts, val = vals[i][0], vals[i][1]
-                if not row["t"] and isinstance(ts, str):
-                    row["t"] = ts[11:16]
-                try:
-                    row[key] = round(float(val), 1)
-                except (TypeError, ValueError):
-                    pass
-        rows.append(row)
-    return {"series": rows}
+        except Exception:  # noqa: BLE001 — 해당 벤더 metric 부재 시 건너뜀
+            continue
+        for s in resp.get("series", []) or []:
+            host = (s.get("metric") or {}).get("hostname")
+            if not host:
+                continue
+            cells: list = []
+            labels: list[str] = []
+            for p in s.get("values", []) or []:
+                if isinstance(p, (list, tuple)) and len(p) >= 2:
+                    ts, val = p[0], p[1]
+                    labels.append(ts[11:16] if isinstance(ts, str) else "")
+                    try:
+                        cells.append(round(float(val), 1))
+                    except (TypeError, ValueError):
+                        cells.append(None)
+            if len(labels) > len(times):  # 가장 긴 series 의 시각을 공통 축으로
+                times = labels
+            hosts.append({"host": host, "vendor": vendor, "cells": cells})
+    return {"times": times, "hosts": hosts}
