@@ -26,6 +26,7 @@ class MagnumClient:
         self._project_id = project_id  # None 이면 설정의 프로젝트(이름) 스코프
         self._token: str | None = None
         self._magnum_url: str | None = None  # catalog 모드에서 토큰과 함께 갱신
+        self._catalog: dict[str, str] = {}  # catalog 모드: 서비스 종류 → public URL
         self._exp: float = 0.0
         self._lock = threading.Lock()
         self._client = httpx.Client(timeout=30, verify=not settings.os_insecure)
@@ -63,11 +64,9 @@ class MagnumClient:
             self._exp = time.time() + 50 * 60
 
         if settings.os_endpoint_mode == "catalog":
-            for svc in body.get("catalog", []):
-                if svc.get("type") in ("container-infra", "container_infra"):
-                    for ep in svc.get("endpoints", []):
-                        if ep.get("interface") == "public":
-                            self._magnum_url = ep["url"].rstrip("/")
+            self._catalog = {svc.get("type"): ep["url"].rstrip("/") for svc in body.get("catalog", [])
+                             for ep in svc.get("endpoints", []) if ep.get("interface") == "public"}
+            self._magnum_url = self._catalog.get("container-infra") or self._catalog.get("container_infra")
         else:
             base = settings.os_endpoint_template.format(service="magnum").rstrip("/")
             self._magnum_url = f"{base}/v1"
@@ -94,6 +93,23 @@ class MagnumClient:
 
     def get(self, path: str) -> dict:
         return self.request("GET", path)
+
+    def service_get(self, service: str, stype: str, ver: str, path: str, params: dict | None = None) -> dict:
+        """같은 토큰으로 다른 OpenStack 서비스 조회 — Nova(Worker VM 수)·Glance(이미지 kube_version).
+        override = 템플릿 + 버전(예: /v2.1), catalog = 카탈로그 주소(버전이 없으면 붙인다)."""
+        self._ensure_token()
+        if settings.os_endpoint_mode == "catalog":
+            base = self._catalog.get(stype, "")
+            base = base if base.endswith(ver) else base + ver
+        else:
+            base = settings.os_endpoint_template.format(service=service).rstrip("/") + ver
+        r = self._client.get(f"{base}{path}", headers={"X-Auth-Token": self._token}, params=params)
+        if r.status_code == 401:  # 토큰 조기 만료 → 1회 재로그인
+            with self._lock:
+                self._login()
+            r = self._client.get(f"{base}{path}", headers={"X-Auth-Token": self._token}, params=params)
+        r.raise_for_status()
+        return r.json()
 
 
 magnum = MagnumClient()

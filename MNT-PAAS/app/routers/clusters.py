@@ -1,11 +1,12 @@
 """서비스 클러스터(Magnum K8s) — 조회 + kubeconfig 발급 + 삭제(관리자).
 
-생성은 자원신청 → 관리자 승인 흐름(추후). 삭제는 관리 화면에서 관리자가 직접 수행한다.
+생성은 자원신청 → 관리자 승인 → 프로비저닝 워크플로(workflows/activities.py). 삭제는 관리 화면에서 관리자가 직접 수행한다.
 권한(auth.py): 목록은 관리자 전체·사용자는 접근 권한이 있는 클러스터만, 상세·kubeconfig 는 그 클러스터 접근 권한, 삭제는 관리자.
 """
 from __future__ import annotations
 
 import base64
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -36,6 +37,33 @@ def _summary(c: dict) -> dict:
         "apiAddress": c.get("api_address") or "",
         "createdAt": c.get("created_at") or "",
     }
+
+
+_NAME_RE = re.compile(r"^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$")
+NAME_RULE = "클러스터 이름은 영문 소문자로 시작하고 소문자·숫자·하이픈(끝 제외)만, 40자 이내로 입력하세요."
+NAME_TAKEN = "이미 사용 중인 클러스터 이름입니다."
+
+
+def name_rule_ok(name: str) -> bool:
+    return bool(_NAME_RE.match(name))
+
+
+def name_taken(name: str) -> bool:
+    """모든 클러스터(다른 프로젝트 포함 — 서비스 계정 admin 스코프)에 같은 이름이 있는지. 삭제 중인 것도 포함."""
+    return any(x["name"] == name for x in magnum.get("/clusters").get("clusters", []))
+
+
+@router.get("/cluster-name-check")
+def cluster_name_check(name: str):
+    """클러스터 이름 사용 가능 여부 — 신청 화면의 중복 확인. 이름 사용 여부만 돌려주므로 다른 프로젝트 정보는 드러나지 않는다.
+    (GET /clusters 는 일반 사용자에게 접근 가능한 클러스터만 줘서 중복 확인에 못 쓴다)"""
+    if not name_rule_ok(name):
+        return {"available": False, "reason": NAME_RULE}
+    try:
+        taken = name_taken(name)
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+    return {"available": not taken, "reason": NAME_TAKEN if taken else None}
 
 
 @router.get("/clusters")
