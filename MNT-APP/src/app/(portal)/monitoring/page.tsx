@@ -179,48 +179,47 @@ export default function MonitoringOverviewPage() {
       </Card>
       </ChangeMark>
 
-      {/* Hexagonal host map + Heatmap */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-1">
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between text-base">
-              호스트 맵
-              <span className="flex items-center gap-1.5">
-                <InfoHint text={"원래 설계: 노드별 사용률(utilization_percent) 색상.\n그러나 mgmt 물리노드는 사용률이 null(가속기가 서비스클러스터 VM에 존재)이라, 전력(power_watts) 기준으로 대체함.\n원천: /clusters/{c}/nodes"} />
-                <StatusTag connected={!!nodesData} api="/api/v2/clusters/{c}/nodes (power_watts)" />
-              </span>
-            </CardTitle>
-            <CardDescription>노드별 전력(power_watts) — 색상 = 전력 상대 부하</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <HostMap nodes={nodesData?.nodes ?? []} />
-            <div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground">
-              <div className="flex items-center gap-1">
-                <span className="size-2.5 rounded-sm bg-brand-mint-400" /> 전력 낮음
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="size-2.5 rounded-sm bg-amber-400" /> 중간
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="size-2.5 rounded-sm bg-rose-500" /> 높음 (최대 대비)
-              </div>
+      {/* 호스트 맵 — 전체 폭 한 줄 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between text-base">
+            호스트 맵
+            <span className="flex items-center gap-1.5">
+              <InfoHint text={"원래 설계: 노드별 사용률(utilization_percent) 색상.\n그러나 mgmt 물리노드는 사용률이 null(가속기가 서비스클러스터 VM에 존재)이라, 전력(power_watts) 기준으로 대체함.\n원천: /clusters/{c}/nodes"} />
+              <StatusTag connected={!!nodesData} api="/api/v2/clusters/{c}/nodes (power_watts)" />
+            </span>
+          </CardTitle>
+          <CardDescription>노드별 전력(power_watts) — 색상 = 전력 상대 부하</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <HostMap nodes={nodesData?.nodes ?? []} />
+          <div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-1">
+              <span className="size-2.5 rounded-sm bg-brand-mint-400" /> 전력 낮음
             </div>
-          </CardContent>
-        </Card>
+            <div className="flex items-center gap-1">
+              <span className="size-2.5 rounded-sm bg-amber-400" /> 중간
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="size-2.5 rounded-sm bg-rose-500" /> 높음 (최대 대비)
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
-        <Card className="self-start lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between text-base">
-              가속기 사용률 — 호스트 × 24시간
-              <StatusTag connected={!!utilTs} api="/api/v2/monitoring/metrics/timeseries?by=hostname (gpu/furiosa/rebellions_utilization)" />
-            </CardTitle>
-            <CardDescription>호스트별 가속기 사용률(%)을 시각 격자로. 색이 진할수록 사용률이 높습니다.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <UtilHeatmapGrid data={utilTs} />
-          </CardContent>
-        </Card>
-      </div>
+      {/* 가속기 사용률 히트맵 — 전체 폭 한 줄 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between text-base">
+            가속기 사용률 — 호스트 × 24시간
+            <StatusTag connected={!!utilTs} api="/api/v2/monitoring/metrics/timeseries?by=hostname (gpu/furiosa/rebellions_utilization)" />
+          </CardTitle>
+          <CardDescription>호스트별 가속기 사용률(%)을 시각 격자로. 색이 진할수록 사용률이 높습니다.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <UtilHeatmapGrid data={utilTs} />
+        </CardContent>
+      </Card>
 
       {/* Top lists */}
       <div className="grid gap-4 lg:grid-cols-2">
@@ -572,7 +571,7 @@ function HostMap({ nodes }: { nodes: NodeRow[] }) {
   }
   const maxW = Math.max(...nodes.map((n) => n.power_watts ?? 0), 1);
   return (
-    <div className="grid grid-cols-4 gap-1.5">
+    <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-8 lg:grid-cols-12">
       {nodes.map((n) => {
         const w = n.power_watts ?? 0;
         const pct = w / maxW;
