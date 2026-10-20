@@ -1,6 +1,6 @@
 # 서비스 클러스터 신청 (새 클러스터) — 설계 문서
 
-작성일: 2026-10-19 · 갱신: 2026-10-20(다른 프로젝트 시험 결과) · 상태: **초안 (아래 '정해야 할 것' 확정 후 갱신)**
+작성일: 2026-10-19 · 갱신: 2026-10-20(다른 프로젝트 시험 결과 — 6차 성공) · 상태: **초안 (아래 '정해야 할 것' 확정 후 갱신)**
 대상 화면: 자원 신청 모달의 '서비스 클러스터 신청' 탭, `/ticket/requests` (자원 요청·신청 관리)
 
 ## 목표
@@ -51,9 +51,9 @@ Magnum 으로 클러스터를 만든 뒤 **프로젝트 네임스페이스**를 
 | API 주소 | Cluster API 가 API LB 에 붙인 공인 IP(외부망 `public`, 예: `https://192.168.90.225:6443`) |
 | 가용 영역 | `az1` 하나. 기존 클러스터는 생성 때 라벨 `availability_zone=az1` 지정 |
 | PaaS 인증 | `MNT-PAAS` 의 Magnum 클라이언트는 `extadmin` 을 **`admin` 프로젝트로만** 스코프 → 지금 코드로는 신청 프로젝트 소유로 만들 수 없다 |
-| 시험 프로젝트 | `okc_test_prj`: 망 `my-network` 서브넷 2개(`10.0.0.0/24` DHCP 꺼짐, `10.0.1.0/24` DHCP 켜짐) 모두 `my-router-internal` 에 연결, 이 라우터에 외부 게이트웨이 추가(2026-10-19 사용자 정리). 쿼터 인스턴스 10(사용 2)·vCPU 20(사용 3)·RAM 50GB(사용 6GB) |
+| 시험 프로젝트 | `okc_test_prj`: 망 `my-network` 서브넷 2개(`10.0.0.0/24` DHCP 꺼짐, `10.0.1.0/24` DHCP 켜짐) 모두 `my-router-internal` 에 연결, 이 라우터에 외부 게이트웨이 추가(2026-10-19 사용자 정리). 6차 전 `10.0.1.0/24` 를 `my-router-external`(게이트웨이 호스트 `compute5`)로 옮김(2026-10-20). 쿼터 인스턴스 10(사용 2)·vCPU 20(사용 3)·RAM 50GB(사용 6GB) |
 | 서브넷 DHCP | **켜져 있어야 한다.** `okc-prj-test` 1차(`10.0.0.0/24`, DHCP 꺼짐)는 Control Plane VM 이 IPv4·메타데이터를 받지 못해(콘솔: 'Wait for Network to be Configured' 실패, 'No active metadata service found') 설치가 시작되지 않음 → API LB 대상 `ERROR`, Worker VM 은 만들어지지도 않고 75분간 `CREATE_IN_PROGRESS`. Magnum 은 이 서브넷을 거부하지 않는다 |
-| 노드 → OpenStack API | **노드가 Keystone(`https://keystone-api.openstack.internal/v3`, 서브넷 DNS 로 해석)에 닿아야 한다.** 클라우드 컨트롤러(OCCM)가 노드에 IP·providerID 를 넣고, calico 는 노드 InternalIP 로 동작한다(`nodeAddressAutodetectionV4: kubernetes: NodeInternalIP`). `okc-prj-test` 2·3차(`10.0.1.0/24`)는 노드 → DNS `192.168.90.253:53` 질의가 시간 초과 → OCCM 종료 → 노드 주소 없음 → calico 실패 → CAPI 가 'providerID 노드' 를 못 찾아 Control Plane 미완료. 관리자 망(`k8s-router`, 게이트웨이 호스트 `controller`)은 됨. 시험 망 노드(라우터 게이트웨이 호스트 `compute2`)에서 직접 시험: 물리 게이트웨이 `192.168.90.1` 은 ping 됨, **MetalLB VIP `192.168.90.253`(DNS)·`.252`(API 입구 istio)는 ping·UDP 53·TCP 443 모두 응답 없음** → 클러스터 기능이 아니라 테스트베드 망 구성 문제(원인 확인은 인프라 쪽) |
+| 노드 → OpenStack API | **노드가 Keystone(`https://keystone-api.openstack.internal/v3`, 서브넷 DNS 로 해석)에 닿아야 한다.** 클라우드 컨트롤러(OCCM)가 노드에 IP·providerID 를 넣고, calico 는 노드 InternalIP 로 동작한다(`nodeAddressAutodetectionV4: kubernetes: NodeInternalIP`). `okc-prj-test` 2·3차(`10.0.1.0/24`)는 노드 → DNS `192.168.90.253:53` 질의가 시간 초과 → OCCM 종료 → 노드 주소 없음 → calico 실패 → CAPI 가 'providerID 노드' 를 못 찾아 Control Plane 미완료. 관리자 망(`k8s-router`, 게이트웨이 호스트 `controller`)은 됨. 시험 망 노드(라우터 게이트웨이 호스트 `compute2`)에서 직접 시험: 물리 게이트웨이 `192.168.90.1` 은 ping 됨, **MetalLB VIP `192.168.90.253`(DNS)·`.252`(API 입구 istio)는 ping·UDP 53·TCP 443 모두 응답 없음** → 클러스터 기능이 아니라 테스트베드 망 구성 문제. OVN SB `mac_binding`(ip=`.253`)에 `controller`·`compute5` 게이트웨이는 VIP MAC 이 있고 `compute2` 게이트웨이만 없음(ARP 무응답). DNS 설정·앱 자격증명 역할(5차는 `admin` 포함)과는 무관. **6차는 같은 서브넷을 `compute5` 게이트웨이 라우터로 옮겨 정상 완료** |
 | 다른 프로젝트 클러스터 | `admin` 스코프로 목록·상세·노드그룹 조회·**삭제** 가능(1차 삭제 76초, VM·API Floating IP·LB 남지 않음). 인증서 CA 조회·CSR 서명만 프로젝트 스코프 필요(4절 `issue_client_cert`). API Floating IP·LB 는 그 프로젝트 소유로 생긴다 |
 | API Floating IP | 클러스터 생성 직후 바로 붙는다 — `floating_ip_enabled=false` 로 요청해도 붙음(시험 클러스터 `okc-1node-test`: `192.168.90.237`). Cluster API 관리 클러스터가 이 주소로 접속하므로 끄면 생성이 실패한다(드라이버 문서) |
 | 생성 직후 조회 | 생성 요청 후 몇 초 동안 `GET /clusters/{id}` 가 404 또는 400 — 대기 작업은 처음 2분간 이를 견딘다. `api_address` 는 잠깐 `https://:0` 으로 보인 뒤 실제 주소가 된다(30~60초) — 호스트가 비면 '아직 없음'으로 본다 |
@@ -187,20 +187,22 @@ flavorId, namespace, purpose` (+ 표시용 플레이버 이름·vCPU·RAM).
 노드그룹 상태로 Worker 진행 판정 불가, 생성·삭제 시간(확인한 사실 표 참고). 가용 영역 라벨은 기존 클러스터처럼
 `availability_zone=az1` 을 넣는다(PaaS 설정값, 기본 `az1`).
 
-2026-10-19~20 `okc_test_prj` 소유 시험 클러스터 3회(`okc-prj-test`, 프로젝트 스코프 생성)로 확인한 것:
+2026-10-19~20 `okc_test_prj` 소유 시험 클러스터 6회(`okc-prj-test`, 프로젝트 스코프 생성)로 확인한 것:
 1. **`admin` 스코프로 목록·상세·노드그룹 조회·삭제는 된다. 인증서(CA 조회·CSR 서명)는 안 된다** → `issue_client_cert`
    프로젝트 스코프 필수(4절). 지금 배포된 포털 PaaS 화면도 이 클러스터에서 404 'Cluster could not be found'.
 2. 프로젝트 스코프 생성 시 API LB·Floating IP 는 그 프로젝트 소유로 생긴다.
 3. 서브넷 DHCP 가 꺼져 있으면 노드가 주소를 못 받아 설치가 시작되지 않는다(1차).
 4. 2·3차는 노드가 OpenStack API(MetalLB VIP `192.168.90.252`·DNS `.253`)에 닿지 못해 완료되지 않았다 — 라우터
-   외부 게이트웨이가 `compute2` 에 놓인 망. 테스트베드 망 구성 문제라 인프라 쪽에서 해결한다.
-
-남은 것: 인프라 해결 뒤 '다른 프로젝트 소유 클러스터 정상 완료'를 다시 시험한다(4차).
+   외부 게이트웨이가 `compute2` 에 놓인 망. 5차(DNS `.253`, 역할 `admin` 포함)도 같은 곳에서 멈춤. 테스트베드 망 구성 문제라
+   인프라 쪽에서 해결한다(4차는 서브넷 DNS 가 잠시 `.212` 로 바뀌어 무효).
+5. **6차(게이트웨이 호스트 `compute5`)는 정상 완료** — Control Plane VM ACTIVE 3분 37초, Control Plane 노드그룹 완료
+   8분 41초, Worker VM ACTIVE 9분 11초, 클러스터 `CREATE_COMPLETE` **12분 14초**(`HEALTHY`). 다른 프로젝트 소유 클러스터도
+   망만 맞으면 끝까지 만들어진다. 바뀐 `issue_client_cert`(소유 프로젝트 스코프)로 CA 조회·인증서 발급 성공.
 
 ## 6. 정해야 할 것
 
 1. 테스트베드 망: tenant 라우터의 외부 게이트웨이가 어느 호스트에 놓여도 MetalLB VIP(OpenStack API·DNS)에 닿도록
-   인프라 구성 정리(지금 확인된 것은 `controller` 됨, `compute2` 안 됨). 정리 전까지 관리자 프로비저닝 화면에
+   인프라 구성 정리(지금 확인된 것은 `controller`·`compute5` 됨, `compute2` 안 됨, `compute1`·`compute6` 미확인). 정리 전까지 관리자 프로비저닝 화면에
    '노드가 OpenStack API 에 닿는 망이어야 합니다' 안내 문구를 둔다(API 로 미리 확인할 방법 없음).
 
 ## 범위 밖
