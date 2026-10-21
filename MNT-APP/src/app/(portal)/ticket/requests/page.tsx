@@ -29,6 +29,7 @@ import {
   Check,
   Circle,
   BrainCircuit,
+  Copy,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -164,8 +165,11 @@ function CopyCell({ value, label, className }: { value: string; label: string; c
         toast.success(`${label} 복사됨`, { description: value });
       }}
     >
-      {/* 칸 전체가 복사 영역 — 마우스를 올리면 값에 배경(테마 색 border: 라이트 #e2e8f0) */}
-      <span className="-mx-1.5 rounded-md px-1.5 py-1 transition-colors group-hover:bg-border">{value}</span>
+      {/* 칸 전체가 복사 영역 — 마우스를 올리면 값·아이콘에 배경(테마 색 border: 라이트 #e2e8f0) */}
+      <span className="-mx-1.5 rounded-md px-1.5 py-1 transition-colors group-hover:bg-border">
+        {value}
+        <Copy className="ml-1 inline-block size-3 align-[-2px] text-muted-foreground group-hover:text-primary" />
+      </span>
     </TableCell>
   );
 }
