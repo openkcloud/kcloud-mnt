@@ -261,6 +261,7 @@ export interface ClusterTemplate {
   master_lb_enabled: boolean;
   registry_enabled: boolean;
   labels: Record<string, string> | null;
+  kubeVersion?: string; // 이미지의 K8s 버전(Glance 속성 kube_version, 앞의 v 없이)
   createdAt: string;
   updatedAt: string;
 }
