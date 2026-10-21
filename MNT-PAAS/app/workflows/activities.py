@@ -126,11 +126,11 @@ def _console_problem(servers: list[dict]) -> dict | None:
 
 
 def _occm_problem(cluster_id: str) -> dict | None:
-    """클라우드 컨트롤러(OCCM)가 2번 이상 재시작했으면 직전 로그에서 OpenStack 연결 오류를 찾는다.
+    """클라우드 컨트롤러(OCCM, openstack-system 의 DaemonSet)가 2번 이상 재시작했으면 직전 로그에서 OpenStack 연결 오류를 찾는다.
     K8s API 에 닿지 않으면(로컬 개발 환경 등) 판단하지 않는다 — 진단은 보조 신호라 오류를 올리지 않는다."""
     try:
         cli = k8s(cluster_id)
-        r = cli.get("/api/v1/namespaces/kube-system/pods", timeout=5)
+        r = cli.get("/api/v1/namespaces/openstack-system/pods", timeout=5)
         r.raise_for_status()
         for pod in r.json().get("items", []):
             name = pod["metadata"]["name"]
@@ -139,7 +139,7 @@ def _occm_problem(cluster_id: str) -> dict | None:
             for c in (pod.get("status") or {}).get("containerStatuses") or []:
                 if c.get("restartCount", 0) < 2:
                     continue
-                log = cli.get(f"/api/v1/namespaces/kube-system/pods/{name}/log", timeout=5,
+                log = cli.get(f"/api/v1/namespaces/openstack-system/pods/{name}/log", timeout=5,
                               params={"container": c["name"], "previous": "true", "tailLines": 50}).text
                 hits = [line.strip() for line in log.splitlines() if _OCCM_UNREACHABLE.search(line)]
                 if hits:
