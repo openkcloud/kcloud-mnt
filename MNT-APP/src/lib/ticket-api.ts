@@ -19,7 +19,7 @@ export function useTicketProjects(username: string | undefined) {
   });
 }
 
-/** VM 이름 사용 가능 여부(같은 프로젝트의 기존 VM + 반려되지 않은 티켓). */
+/** VM 이름 사용 가능 여부(같은 프로젝트의 기존 VM + 진행 중 티켓 — 완료·반려 제외). */
 export function useVmNameCheck(projectId: string, name: string, enabled: boolean) {
   return useQuery({
     queryKey: ["tickets", "vm-name-check", projectId, name],
