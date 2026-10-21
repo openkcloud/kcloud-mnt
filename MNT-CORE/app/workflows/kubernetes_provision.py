@@ -121,7 +121,7 @@ class KubernetesProvision(ProvisionSteps):
             ("create_cp_vm", lambda s: s["cpActive"] >= m, lambda s: f"{s['cpActive']}/{m}"),
             ("init_control_plane", lambda s: s["workerVms"] > 0 or s["masterReady"], lambda s: None),
             ("create_workers", lambda s: s["workersActive"] >= n, lambda s: f"{s['workersActive']}/{n}"),
-            ("create_control_plane", lambda s: s["masterReady"], lambda s: f"{m}/{m}"),
+            ("create_control_plane", lambda s: s["masterReady"], lambda s: None),  # 노드를 세지 않는다(Control Plane 노드그룹 완료)
             ("finish_cluster", lambda s: s["status"] == "CREATE_COMPLETE", lambda s: None),
         ]
         done, note, seen, master_ready_at = 0, "", {}, None

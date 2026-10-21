@@ -161,7 +161,6 @@ async def _scenarios():
     assert sub_values("wf-ok") == {"check_name": "cl-wf-ok", "check_quota": "VM 3대 · vCPU 12 · RAM 24GB",
                                    "check_network": "my-network / 10.0.1.0/24", "send_request": "c-wf-ok",
                                    "prepare_api": API, "create_cp_vm": "1/1", "create_workers": "2/2",
-                                   "create_control_plane": "1/1",
                                    "check_api": "https://192.0.2.1:6443", "create_namespace": "okc-test-prj",
                                    "grant_access": "okc_test_prj"}
 
