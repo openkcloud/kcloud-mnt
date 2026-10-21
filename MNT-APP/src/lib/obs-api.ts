@@ -22,7 +22,7 @@ export interface VendorMetrics {
   temperature_celsius: number;
   power_watts: number;
   utilization_percent: number;
-  memory_used_bytes: number;
+  memory_used_bytes: number | null;
   memory_total_bytes: number | null;
   healthy_count: number;
   // 파생 교체(2026-10): 전력모드/캡 · Throttling
@@ -347,6 +347,8 @@ export interface AlertPolicy {
   name: string;
   description: string;
   kind: "resource" | "log" | "slo" | string;
+  // 조건 컬럼은 conditions[] 를 파싱해 조합(최상위 metric/op/threshold/window_min/for_min 는 레거시 — 참조 금지)
+  conditions?: PolicyCondition[];
   metric: string;
   op: string;
   threshold: number;
