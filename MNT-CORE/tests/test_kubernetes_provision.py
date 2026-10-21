@@ -106,7 +106,8 @@ async def _scenarios():
         return {"ticketId": tid, "attempt": 1, "projectId": "p-1", "projectName": "okc_test_prj",
                 "clusterName": f"cl-{tid}", "templateId": "t-1", "masterCount": 1, "masterFlavorId": "m1.large",
                 "nodeCount": 2, "flavorId": "m1.large", "networkId": "net-1", "subnetId": "sub-1",
-                "floatingNetworkId": "pub", "namespace": "okc-test-prj", "need": {"instances": 3, "vcpu": 12, "ramGb": 24}}
+                "floatingNetworkId": "pub", "publicKey": "ssh-ed25519 AAAA u@h", "namespace": "okc-test-prj",
+                "need": {"instances": 3, "vcpu": 12, "ramGb": 24}}
 
     async with await WorkflowEnvironment.start_local(dev_server_existing_path=shutil.which("temporal")) as env:
         with ThreadPoolExecutor(4) as pool:
@@ -142,6 +143,7 @@ async def _scenarios():
     assert ("namespace", "wf-ok", "c-wf-ok", "okc-test-prj", "p-1", "okc_test_prj") in calls
     create = next(c for c in calls if c[:2] == ("create", "wf-ok"))
     assert create[2] == "p-1" and create[3]["name"] == "cl-wf-ok" and create[3]["subnetId"] == "sub-1"
+    assert create[3]["publicKey"] == "ssh-ed25519 AAAA u@h"  # 신청자 키 — PAAS 가 클러스터 키페어로 등록
     assert sub_values("wf-ok") == {"check_name": "cl-wf-ok", "check_quota": "VM 3대 · vCPU 12 · RAM 24GB",
                                    "check_network": "my-network / 10.0.1.0/24", "send_request": "c-wf-ok",
                                    "create_control_plane": "1/1", "create_workers": "2/2",
