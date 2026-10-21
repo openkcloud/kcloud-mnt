@@ -195,7 +195,7 @@ export interface ClusterNodeConfig {
   accel: string;           // 직접 선택 값 — 없음 = ""
   nodeCount: number;
   flavorId: string;        // 직접 선택 값
-  keypairId: string;       // 직접 선택 값 — 본인 SSH 키(iam_ssh_key.id)
+  keypairId: string;       // 직접 선택 값 — 본인 SSH 키(iam_ssh_key.id), 관리자는 OpenStack 키페어 이름
 }
 
 export const EMPTY_NODE_CONFIG: ClusterNodeConfig = {
@@ -630,7 +630,7 @@ export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onC
           </div>
         )}
 
-        {/* 키페어 표 — 직접 선택은 본인 SSH 키, 템플릿 값은 템플릿 키페어 한 줄 */}
+        {/* 키페어 표 — 직접 선택은 본인 SSH 키(관리자는 OpenStack 키페어), 템플릿 값은 템플릿 키페어 한 줄 */}
         {role === "key" && (
           <div className="flex flex-col overflow-hidden rounded-[10px] border border-border">
             <div className={cn(KEY_COLS, "border-b border-border bg-secondary/50 py-[9px] text-xs text-muted-foreground")}>

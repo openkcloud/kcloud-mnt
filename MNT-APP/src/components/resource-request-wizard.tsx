@@ -34,12 +34,12 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { accKindClass, cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
-import { useProjectFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
+import { useNovaKeypairs, useProjectFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
 import { useClusterTemplates } from "@/lib/paas-api";
 import {
   useClusterNameCheck, useCreateClusterTicket, useCreateTicket, useTicketProjects, useVmNameCheck,
 } from "@/lib/ticket-api";
-import { useSshKeys } from "@/lib/sshkey-api";
+import { useSshKeys, type SshKey } from "@/lib/sshkey-api";
 import { WorkspaceRequestForm } from "@/components/workspace-requests";
 import {
   ClusterNodeConfigPanel, EMPTY_NODE_CONFIG, effectiveNodes, nodeConfigMissing, nodeTotals, nodesValid,
@@ -160,9 +160,23 @@ type ClusterStepKey = typeof CLUSTER_STEPS[number]["key"];
 const CLUSTER_NAME_RE = /^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$/;
 const PURPOSE_MAX = 300;
 
+// 신청 키페어 목록 — 사용자 = 본인 SSH 키(포털 DB), 관리자 = OpenStack(Nova) 키페어(식별자가 이름이라 id 에 이름).
+// 제출 때 사용자는 keypairId, 관리자는 novaKeypair 로 보낸다.
+function useRequestKeypairs() {
+  const user = useAuth((s) => s.user);
+  const isAdmin = user?.role === "admin";
+  const mine = useSshKeys(isAdmin ? undefined : user?.username);
+  const nova = useNovaKeypairs(isAdmin);
+  if (!isAdmin) return { isAdmin, data: mine.data, isLoading: mine.isLoading, error: mine.error };
+  const data = nova.data?.map((k): SshKey => ({
+    id: k.name, name: k.name, publicKey: k.publicKey, fingerprint: k.fingerprint, createdAt: "", vmCount: 0,
+  }));
+  return { isAdmin, data, isLoading: nova.isLoading, error: nova.error };
+}
+
 // ── 가상머신 신청 탭 ──────────────────────────────────────────
 // 탭이 바뀌거나 모달이 닫히면 언마운트되므로 입력값은 자동으로 초기화된다.
-// 프로젝트 = 포털 DB(멤버십) + OpenStack 이름, 스펙·템플릿 = OpenStack 라이브, 키페어 = 포털 DB(본인 키)
+// 프로젝트 = 포털 DB(멤버십) + OpenStack 이름, 스펙·템플릿 = OpenStack 라이브, 키페어 = 포털 DB(본인 키) · 관리자는 OpenStack
 // 티켓 관련 조회·제출은 목업으로 폴백하지 않는다 — 실패하면 오류를 보여준다.
 function VmRequestForm({ onDone }: { onDone: () => void }) {
   const user = useAuth((s) => s.user);
@@ -205,8 +219,8 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
   const needVolume = !!selectedFlavor && selectedFlavor.diskGb === 0;
   const minVolume = Math.max(1, selectedImage?.minVolumeGb ?? 1);
 
-  // 키페어 — 신청자 본인 키만 (iam_ssh_key.owner = username)
-  const { data: myKeypairs = [] } = useSshKeys(user?.username);
+  // 키페어 — 사용자는 본인 키만(iam_ssh_key.owner = username), 관리자는 OpenStack(Nova) 키페어
+  const { isAdmin, data: myKeypairs = [] } = useRequestKeypairs();
 
   function handleNetworkSelect(id: string) {
     setNetwork(id);
@@ -272,7 +286,8 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
         flavorId: flv.id, // Nova 생성 시 flavorRef
         imageId: img.id,
         volumeGb: needVolume ? volumeGb : undefined,
-        keypairId: myKeypairs.find((k) => k.name === keypair)?.id,
+        keypairId: isAdmin ? undefined : myKeypairs.find((k) => k.name === keypair)?.id,
+        novaKeypair: isAdmin && keypair ? keypair : undefined, // 관리자는 OpenStack 키페어 이름
       },
       {
         onSuccess: () => {
@@ -753,7 +768,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const [network, setNetwork] = React.useState("");
 
   const { data: flavors = [], isLoading: flavorLoading, error: flavorError } = useProjectFlavors(project || undefined);
-  const { data: myKeypairs = [], isLoading: keyLoading, error: keyError } = useSshKeys(user?.username);
+  const { isAdmin, data: myKeypairs = [], isLoading: keyLoading, error: keyError } = useRequestKeypairs();
   const templates = allTemplates.filter((t) => t.public && !t.hidden);
 
   // 이름 형식 검사 후 입력이 멈추면(0.4초) 중복 확인 — 모든 프로젝트의 클러스터 + 진행 중 신청
@@ -810,7 +825,9 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
         masterFlavorId: nodes.masterFlavorId,
         nodeCount: nodes.nodeCount,
         flavorId: nodes.flavorId,
-        keypairId: nodeCfg.source.key === "custom" ? nodeCfg.keypairId : undefined, // 없으면 템플릿 키페어
+        // 직접 선택 — 사용자는 본인 키(id), 관리자는 OpenStack 키페어(이름). 없으면 템플릿 키페어
+        keypairId: nodeCfg.source.key === "custom" && !isAdmin ? nodeCfg.keypairId : undefined,
+        novaKeypair: nodeCfg.source.key === "custom" && isAdmin ? nodeCfg.keypairId : undefined,
         networkType: network,
         purpose: purpose.trim(),
       },

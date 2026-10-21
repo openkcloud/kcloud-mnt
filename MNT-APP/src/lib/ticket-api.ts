@@ -82,6 +82,7 @@ export interface CreateTicketInput {
   imageId: string;
   volumeGb?: number;
   keypairId?: string;
+  novaKeypair?: string;    // 관리자만 — OpenStack(Nova) 키페어 이름
 }
 
 /** VM 자원신청 — 서버가 멤버·이름·스펙·이미지·볼륨·키페어를 다시 확인한 뒤 저장. */
@@ -181,6 +182,7 @@ export interface CreateClusterTicketInput {
   flavorId: string;        // Worker 플레이버 — 가속기는 이 플레이버의 device-profile
   networkType: string;     // 희망 망 internal | external — 실제 망·서브넷은 관리자가 프로비저닝 때
   keypairId?: string;      // 본인 SSH 키(iam_ssh_key.id) — 없으면 템플릿 키페어
+  novaKeypair?: string;    // 관리자만 — OpenStack(Nova) 키페어 이름
   purpose: string;
 }
 

@@ -752,9 +752,10 @@ export function useDeleteDeviceProfile() {
 
 // Nova keypair(클러스터 노드 SSH·인프라, 관리자). 사용자 포털 DB SSH키와 별개 자원.
 export interface NovaKeypair { name: string; fingerprint: string; publicKey: string; type: string }
-export function useNovaKeypairs() {
+export function useNovaKeypairs(enabled = true) {
   return useQuery({
     queryKey: ["iaas-nova-keypairs"],
+    enabled,
     queryFn: async (): Promise<NovaKeypair[]> =>
       (await fetchJson<{ items: NovaKeypair[] }>(`${IAAS_BASE}/api/iaas/keypairs`)).items,
     staleTime: 60 * 1000, retry: 0,
