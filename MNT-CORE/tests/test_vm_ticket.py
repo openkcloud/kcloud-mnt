@@ -1,8 +1,10 @@
-"""VM 신청 — 이름 중복 확인(가짜 MNT-IAAS Nova 이름 조회)."""
+"""VM 신청 — 이름 중복 확인(가짜 MNT-IAAS Nova 이름 조회) · 관리자 OpenStack 키페어."""
 import pytest
-from conftest import PROJECT, bearer, make_token, sql
+from conftest import PROJECT, add_member, bearer, make_token, sql
 
+from app.config import settings
 from app.routers import tickets
+from app.workflows import runtime
 
 ADMIN = bearer(make_token("admin"))
 
@@ -44,3 +46,67 @@ def test_VM_이름_확인_Nova_에_있으면_중복(client, nova):
     _vm_ticket("completed")
     assert _check(client) == {"available": False, "reason": tickets._SERVER_NAME_TAKEN}
     assert _check(client, "test-other")["available"] is True
+
+
+# ── 관리자 OpenStack(Nova) 키페어 ─────────────────────────────────
+
+VM_BODY = {"projectId": PROJECT, "vmName": "test-vm-key", "flavorId": "f", "imageId": "i", "networkType": "internal",
+           "novaKeypair": "gy-yang-pub"}
+
+
+@pytest.fixture
+def iaas_vm(monkeypatch):
+    """VM 신청 확인용 MNT-IAAS(프로젝트·플레이버·이미지·VM 이름·Nova 키페어) — Nova 키페어 목록을 돌려준다(바꿔 가며 시험)."""
+    keypairs = [{"name": "gy-yang-pub", "publicKey": "ssh-ed25519 AAAA nova@h"}]
+    fake = {"/projects": {"items": [{"id": PROJECT, "name": "okc_test_prj"}]},
+            f"/projects/{PROJECT}/flavors": {"items": [{"id": "f", "name": "m1.small", "vcpus": 1, "ramMb": 1024,
+                                                        "diskGb": 10, "accelerator": None}]},
+            f"/projects/{PROJECT}/images": {"items": [{"id": "i", "name": "ubuntu", "minDisk": 1, "minVolumeGb": 1,
+                                                       "cloudInit": True}]}}
+
+    def iaas(path, token):
+        if "/server-names?name=" in path:
+            return {"names": []}
+        return {"items": keypairs} if path == "/keypairs" else fake[path]
+
+    monkeypatch.setattr(tickets, "_iaas", iaas)
+    yield keypairs
+    sql("DELETE FROM tkt_request WHERE type = 'vm' AND request_spec->>'vmName' = 'test-vm-key'")
+
+
+def test_VM_신청_OpenStack_키페어는_관리자만(client, iaas_vm):
+    add_member("ek.lee")
+    r = client.post("/api/core/tickets", json=VM_BODY, headers=bearer(make_token()))
+    assert (r.status_code, r.json()["detail"]) == (403, "OpenStack 키페어는 관리자만 지정할 수 있습니다")
+    r = client.post("/api/core/tickets", json={**VM_BODY, "novaKeypair": "nope"}, headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (400, "OpenStack 키페어를 찾을 수 없습니다")
+    r = client.post("/api/core/tickets", json=VM_BODY, headers=ADMIN)
+    assert r.status_code == 201, r.text
+    t = r.json()
+    assert (t["novaKeypair"], t["keypairName"], "keypairId" in t) == ("gy-yang-pub", "gy-yang-pub", False)
+
+
+def test_VM_프로비저닝_OpenStack_키페어(client, iaas_vm, monkeypatch):
+    started = []
+
+    async def start(workflow_id, inp):
+        started.append(inp)
+
+    monkeypatch.setattr(settings, "temporal_api_base", "temporal.test:7233")
+    monkeypatch.setattr(runtime, "start_vm_provision", start)
+    monkeypatch.setattr(tickets, "_verified_provision_spec", lambda *a, **k: {
+        "networkId": "net-1", "networkName": "net", "networkKind": "internal", "securityGroups": []})
+    sql("""INSERT INTO tkt_request (id, type, status, project_id, requested_by, request_spec)
+           SELECT 'req-990101-402', 'vm', 'approved', :p, id, CAST(:s AS jsonb) FROM iam_user WHERE username = 'admin'""",
+        p=PROJECT, s='{"vmName": "test-vm-key", "flavorId": "f", "imageId": "i", "diskGb": 10, '
+                     '"novaKeypair": "gy-yang-pub", "keypairName": "gy-yang-pub"}')
+    body = {"provisionSpec": {"networkId": "net-1"}}
+    r = client.post("/api/core/tickets/req-990101-402/provision", json=body, headers=ADMIN)
+    assert r.status_code == 200, r.text
+    assert (started[0]["publicKey"], started[0]["keypairLabel"]) == ("ssh-ed25519 AAAA nova@h", "gy-yang-pub")
+    # 신청 뒤 Nova 에서 지웠으면 시작하지 않는다
+    sql("UPDATE tkt_request SET status = 'failed' WHERE id = 'req-990101-402'")
+    iaas_vm.clear()
+    r = client.post("/api/core/tickets/req-990101-402/provision", json=body, headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (409, "신청한 키페어(gy-yang-pub)가 삭제되어 주입할 수 없습니다")
+    assert len(started) == 1
