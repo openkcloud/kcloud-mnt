@@ -39,10 +39,7 @@ import {
   useCancelProvisionQueue, useOrgs, useProvisionAiWorkspaceTicket, useProvisionClusterTicket, useProvisionTicket,
   useReviewTicket, useTickets, useTicketSteps, type ProvisionClusterInput,
 } from "@/lib/ticket-api";
-import {
-  useIpCheck, useNetwork, usePlacementPreview, useProjectFlavors, useProjectNetworks, useProjectSecurityGroups,
-  type FlavorSummary,
-} from "@/lib/iaas-api";
+import { useIpCheck, usePlacementPreview, useProjectNetworks, useProjectSecurityGroups } from "@/lib/iaas-api";
 import type { PlacementPreview } from "@/lib/iaas-api";
 import { PageHeader } from "@/components/page-header";
 import { Card } from "@/components/ui/card";
@@ -68,7 +65,7 @@ import { ResourceRequestWizard } from "@/components/resource-request-wizard";
 import {
   WorkspaceLimitFields, limitsBody, limitsOf, limitsOk, limitsText, toLimitsInput, type WorkspaceLimitsInput,
 } from "@/components/workspace-requests";
-import { ClusterNodeFields, nodesValid, type ClusterNodes } from "@/components/cluster-node-fields";
+import { ClusterReviewContent, isClusterReview, type ClusterProvisionValue } from "@/components/cluster-ticket-review";
 import { accKindClass, cn, formatDateTime } from "@/lib/utils";
 import type {
   ClusterProvisionSpec, ProvisionSpec, ProvisionStep, ProvisionStepsResp, ProvStepStatus, ResourceRequest, RequestStatus,
@@ -143,6 +140,8 @@ function toClusterProvisionBody(p: ClusterProvisionSpec): ProvisionClusterInput[
   return {
     networkId: p.networkId, subnetId: p.subnetId, masterCount: p.masterCount, masterFlavorId: p.masterFlavorId,
     nodeCount: p.nodeCount, flavorId: p.flavorId,
+    // 지난 회차에 넣은 키페어 — 기록이 있을 때만(없으면 서버가 신청 값을 쓴다)
+    ...("keypairId" in p ? { keypairId: p.keypairId ?? null, novaKeypair: p.novaKeypair ?? null } : {}),
   };
 }
 
@@ -475,138 +474,6 @@ function ProcessResult({ r }: { r: ResourceRequest }) {
   );
 }
 
-// 클러스터 프로비저닝 입력 — 망 · 서브넷(DHCP 켜진 것만) · 노드 구성 조정. 티켓 프로젝트 기준 라이브 조회.
-// API Floating IP 연결 가능 여부·쿼터·이름은 서버가 프로비저닝 요청 때 다시 확인한다(실패하면 사유가 오류로 온다).
-type ClusterProvisionValue = ProvisionClusterInput["provisionSpec"];
-
-function ClusterProvisionForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: ClusterProvisionValue | null) => void }) {
-  const { data: flavors = [], isLoading, error } = useProjectFlavors(r.projectId);
-  if (isLoading) return <Skeleton className="h-40" />;
-  if (error) return <p className="text-xs text-rose-500">스펙을 불러오지 못했습니다 ({error.message}).</p>;
-  return <ClusterProvisionFields r={r} flavors={flavors} onChange={onChange} />;
-}
-
-// 스펙 목록을 받은 뒤 그려 신청(재시도면 지난 회차) 값으로 채운다 — 가속기는 Worker 스펙의 것
-function ClusterProvisionFields({ r, flavors, onChange }: {
-  r: ResourceRequest; flavors: FlavorSummary[]; onChange: (spec: ClusterProvisionValue | null) => void;
-}) {
-  const { data: networks = [], isLoading: netLoading, error: netError } = useProjectNetworks(r.projectId);
-  const prev = clusterSpecOf(r);
-  const [networkId, setNetworkId] = React.useState(prev?.networkId ?? "");
-  const [subnetId, setSubnetId] = React.useState(prev?.subnetId ?? "");
-  const { data: netDetail, isLoading: subnetLoading } = useNetwork(networkId || undefined);
-  const [nodes, setNodes] = React.useState<ClusterNodes>(() => {
-    const flavorId = prev?.flavorId ?? r.flavorId ?? "";
-    return {
-      masterCount: prev?.masterCount ?? r.masterCount ?? 1,
-      masterFlavorId: prev?.masterFlavorId ?? r.masterFlavorId ?? "",
-      accel: flavors.find((f) => f.id === flavorId)?.accelerator ?? "",
-      nodeCount: prev?.nodeCount ?? r.nodeCount ?? 1,
-      flavorId,
-    };
-  });
-
-  const nodeNets = networks.filter((n) => n.kind !== "external"); // 노드는 내부·공유망 — API 공인 IP 는 템플릿 외부망에서
-  const subnets = netDetail?.id === networkId ? netDetail.subnets : [];
-  const subnet = subnets.find((s) => s.id === subnetId);
-
-  React.useEffect(() => {
-    if (!networkId || !subnet?.dhcp || !nodesValid(nodes)) return onChange(null);
-    onChange({
-      networkId, subnetId: subnet.id, masterCount: nodes.masterCount, masterFlavorId: nodes.masterFlavorId,
-      nodeCount: nodes.nodeCount, flavorId: nodes.flavorId,
-    });
-  }, [networkId, subnet, nodes, onChange]);
-
-  return (
-    <div className="space-y-3 rounded-xl border border-brand-indigo-200 bg-brand-indigo-50/30 p-3.5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold">
-          <Network className="size-3.5 text-brand-indigo-600" /> 프로비저닝 설정
-        </div>
-        <span className="text-[11px] text-muted-foreground">사용자 희망: <NetworkWish r={r} /></span>
-      </div>
-
-      {/* 네트워크 */}
-      <div className="space-y-1.5">
-        <div className="text-xs font-medium">네트워크 <span className="text-rose-500">*</span></div>
-        {netLoading ? <Skeleton className="h-16" /> : netError ? (
-          <p className="text-xs text-rose-500">네트워크를 불러오지 못했습니다 ({netError.message}).</p>
-        ) : (
-          <div className="grid gap-1.5">
-            {nodeNets.map((n) => (
-              <button
-                key={n.id}
-                type="button"
-                onClick={() => { setNetworkId(n.id); setSubnetId(""); }}
-                className={cn(
-                  "flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
-                  networkId === n.id ? "bg-brand-indigo-50 ring-2 ring-primary" : "bg-background hover:bg-secondary/40",
-                )}
-              >
-                {networkId === n.id
-                  ? <CircleCheck className="size-4 shrink-0 text-primary" />
-                  : <Circle className="size-4 shrink-0 text-muted-foreground/40" />}
-                <Wifi className="size-4 shrink-0 text-sky-600" />
-                <span className={cn("flex-1 font-mono text-sm", networkId === n.id && "font-semibold text-brand-indigo-900")}>{n.name}</span>
-                <span className="font-mono text-[11px] text-muted-foreground">{n.cidr}</span>
-              </button>
-            ))}
-            {nodeNets.length === 0 && <p className="text-xs text-rose-500">이 프로젝트에서 노드를 붙일 네트워크가 없습니다.</p>}
-          </div>
-        )}
-      </div>
-
-      {/* 서브넷 — DHCP 가 꺼져 있으면 노드가 주소를 받지 못한다(2026-10-19 시험) */}
-      {networkId && (
-        <div className="space-y-1.5">
-          <div className="text-xs font-medium">서브넷 <span className="text-rose-500">*</span></div>
-          {subnetLoading ? <Skeleton className="h-10" /> : (
-            <div className="grid gap-1.5">
-              {subnets.map((sn) => (
-                <button
-                  key={sn.id}
-                  type="button"
-                  disabled={!sn.dhcp}
-                  onClick={() => setSubnetId(sn.id)}
-                  className={cn(
-                    "flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
-                    !sn.dhcp && "cursor-not-allowed opacity-50",
-                    subnetId === sn.id ? "bg-brand-indigo-50 ring-2 ring-primary" : sn.dhcp && "bg-background hover:bg-secondary/40",
-                  )}
-                >
-                  {subnetId === sn.id
-                    ? <CircleCheck className="size-4 shrink-0 text-primary" />
-                    : <Circle className="size-4 shrink-0 text-muted-foreground/40" />}
-                  <span className="flex-1">
-                    <span className="block font-mono text-sm">{sn.cidr} <span className="text-[11px] text-muted-foreground">{sn.name}</span></span>
-                    {!sn.dhcp && <span className="block text-[11px] text-amber-700">DHCP 가 꺼진 서브넷에는 노드가 주소를 받지 못합니다</span>}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
-        <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
-        <p className="text-[11px] text-amber-800">
-          노드가 OpenStack API(Keystone·DNS)에 닿는 망이어야 클러스터가 완료됩니다 — 미리 확인할 방법이 없어 검증된 망을 고르세요.
-          클러스터 API 공인 IP 는 템플릿 외부망에서 붙고, 연결 가능 여부는 프로비저닝 때 서버가 확인합니다.
-        </p>
-      </div>
-
-      {/* 노드 구성 — 신청 값으로 채워 두고 조정 */}
-      <div className="space-y-1.5">
-        <div className="text-xs font-medium">노드 구성 <span className="font-normal text-muted-foreground">(신청 값 — 조정 가능)</span></div>
-        <ClusterNodeFields flavors={flavors} value={nodes} onChange={setNodes} />
-      </div>
-    </div>
-  );
-}
-
-// IPv4 가 CIDR 범위 안의 호스트 주소인지 (네트워크·브로드캐스트 주소 제외)
 function ipInCidr(ip: string, cidr: string) {
   const toNum = (s: string) => {
     const parts = s.split(".");
@@ -1439,8 +1306,6 @@ function AdminView() {
   const [placement, setPlacement] = React.useState<PlacementState>({ ok: false, pin: null });
   // AI 워크스페이스 생성 시작 — 신청(또는 지난 회차) 한도로 채워 두고 조정할 수 있게 한다
   const [wsLimits, setWsLimits] = React.useState<WorkspaceLimitsInput | null>(null);
-  // 클러스터 프로비저닝 — 망·서브넷·노드 구성(신청 값으로 채워 조정)
-  const [clusterSpec, setClusterSpec] = React.useState<ProvisionClusterInput["provisionSpec"] | null>(null);
   const [sheetReq, setSheetReq] = React.useState<ResourceRequest | null>(null);
   const [sheetOpen, setSheetOpen] = React.useState(false);
 
@@ -1452,7 +1317,6 @@ function AdminView() {
     setSpec(null);
     setPlacement({ ok: false, pin: null });
     setWsLimits(r.type === "ai-workspace" ? toLimitsInput(limitsOf(r)) : null);
-    setClusterSpec(null);
     setDetailOpen(true);
   }
   function openSheet(r: ResourceRequest) {
@@ -1467,14 +1331,14 @@ function AdminView() {
   const failed = items.filter((r) => r.status === "failed").length;
   const rejected = items.filter((r) => r.status === "rejected").length;
 
-  async function review(action: "approve" | "reject") {
+  async function review(action: "approve" | "reject", reason = rejectReason) {
     if (!detail) return;
     const r = detail;
     try {
       await reviewMutation.mutateAsync({
         id: r.id,
         action,
-        reason: action === "reject" ? rejectReason.trim() : undefined,
+        reason: action === "reject" ? reason.trim() : undefined,
         expectedStatus: r.status,
       });
       setDetailOpen(false);
@@ -1491,7 +1355,7 @@ function AdminView() {
   // 승인(VM) → 생성 중: 승인 설정으로 Temporal 워크플로 시작 후 진행 시트를 연다
   // 승인(AI 워크스페이스) → 생성 중: 확정한 한도로 시작 / 승인(클러스터) → 생성 중: 망·서브넷·노드 구성으로 시작
   // (실패 → 재시도도 같은 경로)
-  async function provision() {
+  async function provision(clusterSpec?: ClusterProvisionValue) {
     if (!detail) return;
     const r = detail;
     const isWs = r.type === "ai-workspace";
@@ -1531,8 +1395,7 @@ function AdminView() {
   const isFailedVm = detail?.status === "failed" && detail.type === "vm";  // 실패 → 승인 설정 확인 후 재시도·반려
   const canProvisionVm = isApprovedVm || isFailedVm;
   const canProvisionWs = detail?.type === "ai-workspace" && (detail.status === "approved" || detail.status === "failed");
-  const canProvisionCluster = detail?.type === "cluster" && (detail.status === "approved" || detail.status === "failed");
-  const canProvision = canProvisionVm || canProvisionWs || canProvisionCluster;
+  const canProvision = canProvisionVm || canProvisionWs; // 클러스터 대기·승인·실패는 ClusterReviewContent(시안 1a·1b)
   const canProcess = isPending || canProvision;
 
   return (
@@ -1677,8 +1540,21 @@ function AdminView() {
       <ProvisioningSheet key={sheetReq?.id} req={sheetReq} open={sheetOpen} onClose={() => setSheetOpen(false)} canRetry />
 
       {/* 신청 상세 — 대기: 승인·반려 / 승인(VM): 승인 설정 후 프로비저닝·반려 / 실패(VM): 승인 설정 후 재시도·반려
-          / 승인·실패(AI 워크스페이스): 한도 확인·조정 후 생성 시작(재시도)·반려 */}
+          / 승인·실패(AI 워크스페이스): 한도 확인·조정 후 생성 시작(재시도)·반려
+          / 클러스터 대기·승인·실패: 시안 1a·1b(ClusterReviewContent) */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        {detail && isClusterReview(detail) ? (
+          <ClusterReviewContent
+            key={detail.id}
+            r={detail}
+            badge={<StatusBadge status={detail.status} />}
+            reviewing={reviewMutation.isPending}
+            provisioning={provisionClusterMutation.isPending}
+            onApprove={() => review("approve")}
+            onReject={(reason) => review("reject", reason)}
+            onProvision={(s) => provision(s)}
+          />
+        ) : (
         <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -1690,16 +1566,12 @@ function AdminView() {
                 : isFailedVm ? "승인 설정을 확인·수정해 재시도하거나 반려하세요. 실패한 회차가 만든 자원은 정리되었습니다."
                 : canProvisionWs && detail.status === "failed" ? "워크스페이스 한도를 확인·수정해 재시도하거나 반려하세요."
                 : canProvisionWs ? "워크스페이스 한도(vCPU·메모리·가속기·저장)를 확인·조정한 뒤 생성을 시작하거나 반려하세요."
-                : canProvisionCluster && detail.status === "failed"
-                  ? "프로비저닝 설정을 확인·수정해 재시도하거나 반려하세요. 실패한 회차의 클러스터는 삭제되었습니다(정리 실패면 실패 사유에 표시)."
-                : canProvisionCluster ? "노드를 붙일 네트워크·서브넷을 고르고 노드 구성을 확인·조정한 뒤 프로비저닝하거나 반려하세요."
                 : "신청 내용입니다."}
             </DialogDescription>
           </DialogHeader>
           {detail && <RequestDetailBody r={detail} />}
           {canProvisionVm && <PlacementCapacity key={`placement-${detail.id}`} r={detail} onState={setPlacement} />}
           {canProvisionVm && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
-          {canProvisionCluster && !rejecting && <ClusterProvisionForm key={detail.id} r={detail} onChange={setClusterSpec} />}
           {canProvisionWs && !rejecting && wsLimits && (
             <div className="space-y-2.5 rounded-xl border border-brand-indigo-200 bg-brand-indigo-50/30 p-3.5">
               <div className="flex items-center gap-1.5 text-xs font-semibold">
@@ -1747,18 +1619,13 @@ function AdminView() {
                     <Button onClick={() => review("approve")} disabled={reviewMutation.isPending}>
                       <CheckCircle2 className="size-3.5" /> 승인
                     </Button>
-                  ) : canProvisionCluster ? (
-                    <Button onClick={provision} disabled={!clusterSpec || provisionClusterMutation.isPending}>
-                      {detail.status === "failed" ? <RotateCcw className="size-3.5" /> : <Boxes className="size-3.5" />}
-                      {provisionClusterMutation.isPending ? "시작 중…" : detail.status === "failed" ? "재시도" : "프로비저닝"}
-                    </Button>
                   ) : canProvisionWs ? (
-                    <Button onClick={provision} disabled={!wsLimits || !limitsOk(wsLimits) || provisionWsMutation.isPending}>
+                    <Button onClick={() => provision()} disabled={!wsLimits || !limitsOk(wsLimits) || provisionWsMutation.isPending}>
                       {detail.status === "failed" ? <RotateCcw className="size-3.5" /> : <BrainCircuit className="size-3.5" />}
                       {provisionWsMutation.isPending ? "시작 중…" : detail.status === "failed" ? "재시도" : "생성 시작"}
                     </Button>
                   ) : (
-                    <Button onClick={provision} disabled={!spec || !placement.ok || placement.pin?.candidate === false || provisionMutation.isPending}>
+                    <Button onClick={() => provision()} disabled={!spec || !placement.ok || placement.pin?.candidate === false || provisionMutation.isPending}>
                       {isFailedVm ? <RotateCcw className="size-3.5" /> : <Server className="size-3.5" />}
                       {provisionMutation.isPending ? "시작 중…" : isFailedVm ? "재시도" : "프로비저닝"}
                     </Button>
@@ -1775,6 +1642,7 @@ function AdminView() {
             </DialogFooter>
           )}
         </DialogContent>
+        )}
       </Dialog>
 
       <ResourceRequestWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />

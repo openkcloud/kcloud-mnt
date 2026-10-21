@@ -34,7 +34,7 @@ def _clean_cluster_tickets():
 def fake(monkeypatch):
     """MNT-IAAS·MNT-PAAS 응답(바꿔 가며 시험) — 경로 앞부분으로 고른다."""
     state = {"taken": set(), "fip": {"reachable": True, "reason": None}, "quota": QUOTA, "paas": [], "iaas": [],
-             "keypairs": [{"name": "gy-yang-pub", "publicKey": "ssh-ed25519 AAAA nova@h"}]}
+             "keypairs": [{"name": "gy-yang-pub", "publicKey": "ssh-ed25519 AAAA nova@h", "fingerprint": "SHA256:nova"}]}
 
     def iaas(path, token):
         state["iaas"].append(path)
@@ -145,10 +145,10 @@ def test_클러스터_신청_OpenStack_키페어는_관리자만(client, fake):
 
 # ── 프로비저닝 ───────────────────────────────────────────────────
 
-def _cluster_ticket(tid="req-990101-301", status="approved"):
+def _cluster_ticket(tid="req-990101-301", status="approved", requester="admin"):
     sql("""INSERT INTO tkt_request (id, type, status, project_id, requested_by, request_spec)
-           SELECT :id, 'cluster', :st, :p, id, CAST(:spec AS jsonb) FROM iam_user WHERE username = 'admin'""",
-        id=tid, st=status, p=PROJECT,
+           SELECT :id, 'cluster', :st, :p, id, CAST(:spec AS jsonb) FROM iam_user WHERE username = :u""",
+        id=tid, st=status, p=PROJECT, u=requester,
         spec='{"projectName": "okc_test_prj", "clusterName": "test-cl", "templateId": "t1", "masterCount": 1, '
              '"masterFlavorId": "m1.large", "nodeCount": 2, "flavorId": "m1.rngd", "namespace": "okc-test-prj"}')
     return tid
@@ -225,6 +225,60 @@ def test_클러스터_프로비저닝_OpenStack_키페어(client, fake, started)
                     headers=ADMIN)
     assert (r.status_code, r.json()["detail"]) == (409, "신청한 키페어(gy-yang-pub)가 삭제되어 노드에 넣을 수 없습니다")
     assert len(started) == 1
+
+
+def test_신청자_키페어_목록(client, fake):
+    # 사용자 신청 = 그 사용자의 포털 SSH 키, 관리자 신청 = OpenStack 키페어(id = 이름)
+    key = _ssh_key("ek.lee")
+    _ssh_key("admin", "admin-key")
+    user_tid, admin_tid = _cluster_ticket("req-990101-302", requester="ek.lee"), _cluster_ticket()
+    r = client.get(f"/api/core/tickets/{user_tid}/keypairs", headers=ADMIN).json()
+    assert (r["kind"], [(k["id"], k["name"]) for k in r["items"]]) == ("ssh", [(str(key), "k1")])
+    r = client.get(f"/api/core/tickets/{admin_tid}/keypairs", headers=ADMIN).json()
+    assert (r["kind"], r["items"][0]["id"], r["items"][0]["fingerprint"]) == ("nova", "gy-yang-pub", "SHA256:nova")
+    assert client.get(f"/api/core/tickets/{user_tid}/keypairs", headers=bearer(make_token())).status_code == 403
+    assert client.get("/api/core/tickets/req-000000-000/keypairs", headers=ADMIN).status_code == 404
+
+
+def test_클러스터_프로비저닝_키페어_바꾸기(client, fake, started):
+    tid = _cluster_ticket(requester="ek.lee")
+    k1, k2, admin_key = _ssh_key("ek.lee"), _ssh_key("ek.lee", "k2"), _ssh_key("admin", "admin-key")
+    sql("""UPDATE tkt_request SET request_spec = request_spec || jsonb_build_object('keypairId', CAST(:k AS text),
+                                                                                    'keypairName', 'k1')
+            WHERE id = :id""", k=k1, id=tid)
+
+    def provision(**key):
+        return client.post(f"/api/core/tickets/{tid}/provision-cluster",
+                           json={"provisionSpec": {**PROVISION["provisionSpec"], **key}}, headers=ADMIN)
+
+    for key, detail in [({"keypairId": admin_key}, "신청자의 키페어가 아닙니다"),
+                        ({"novaKeypair": "gy-yang-pub"}, "OpenStack 키페어는 관리자가 신청한 클러스터에만 넣을 수 있습니다"),
+                        ({"keypairId": k2, "novaKeypair": "gy-yang-pub"}, "키페어는 하나만 지정할 수 있습니다")]:
+        r = provision(**key)
+        assert (r.status_code, r.json()["detail"]) == (400, detail)
+    assert provision(keypairId=k2).status_code == 200  # 신청자의 다른 키
+    assert started[0][1]["publicKey"] == "ssh-ed25519 AAAA ek.lee@h"
+    spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
+    assert (spec["keypairId"], spec["keypairName"], spec["novaKeypair"]) == (str(k2), "k2", None)
+    # 둘 다 null = 키페어를 넣지 않음(템플릿 키페어)
+    sql("UPDATE tkt_request SET status = 'approved' WHERE id = :id", id=tid)
+    assert provision(keypairId=None, novaKeypair=None).status_code == 200
+    assert started[1][1]["publicKey"] is None
+    spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
+    assert (spec["keypairId"], spec["keypairName"]) == (None, None)
+
+
+def test_클러스터_프로비저닝_OpenStack_키페어_바꾸기(client, fake, started):
+    tid = _cluster_ticket()  # 관리자 신청 — 템플릿 키페어로 신청했어도 OpenStack 키페어로 바꿀 수 있다
+    r = client.post(f"/api/core/tickets/{tid}/provision-cluster",
+                    json={"provisionSpec": {**PROVISION["provisionSpec"], "novaKeypair": "nope"}}, headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (400, "OpenStack 키페어를 찾을 수 없습니다")
+    r = client.post(f"/api/core/tickets/{tid}/provision-cluster",
+                    json={"provisionSpec": {**PROVISION["provisionSpec"], "novaKeypair": "gy-yang-pub"}}, headers=ADMIN)
+    assert r.status_code == 200
+    assert started[0][1]["publicKey"] == "ssh-ed25519 AAAA nova@h"
+    spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
+    assert (spec["novaKeypair"], spec["keypairName"], spec["keypairId"]) == ("gy-yang-pub", "gy-yang-pub", None)
 
 
 @pytest.mark.parametrize("spec,setup,status,detail", [

@@ -973,11 +973,44 @@ class ProvisionClusterSpec(BaseModel):
     masterFlavorId: str | None = None
     nodeCount: int | None = None
     flavorId: str | None = None
+    # 키페어 — 보내지 않으면 신청 값. 보내면 그 값: 신청자 키(사용자 = 포털 SSH 키 keypairId, 관리자 = OpenStack 키페어
+    # novaKeypair — 신청 때와 같은 기준), 둘 다 null = 키페어를 넣지 않음(템플릿 키페어)
+    keypairId: int | None = None
+    novaKeypair: str | None = None
 
 
 class ProvisionClusterBody(BaseModel):
     expectedStatus: str | None = None  # 화면이 보고 있던 상태 — 다르면 409
     provisionSpec: ProvisionClusterSpec
+
+
+def _requester(db: Session, user_id: int) -> tuple[str, bool]:
+    """신청자 username 과 관리자 여부 — 키페어 기준(사용자 = 포털 SSH 키, 관리자 = OpenStack 키페어)."""
+    row = db.execute(
+        text("""SELECT u.username, EXISTS (SELECT 1 FROM iam_user_role ur JOIN iam_role ro ON ro.id = ur.role_id
+                                            WHERE ur.user_id = u.id AND ro.code = 'admin') AS admin
+                  FROM iam_user u WHERE u.id = :id"""),
+        {"id": user_id},
+    ).mappings().one()
+    return row["username"], row["admin"]
+
+
+@router.get("/tickets/{ticket_id}/keypairs", dependencies=[Depends(require_admin)])
+def ticket_keypairs(ticket_id: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    """프로비저닝 때 고를 수 있는 신청자 키페어(관리자) — 신청자가 사용자면 포털 SSH 키, 관리자면 OpenStack(Nova) 키페어.
+    OpenStack 키페어는 식별자가 이름이라 id 에 이름을 넣는다. 템플릿 키페어는 화면이 템플릿에서 읽는다."""
+    requested_by = db.execute(text("SELECT requested_by FROM tkt_request WHERE id = :id"), {"id": ticket_id}).scalar()
+    if requested_by is None:
+        raise HTTPException(404, "신청을 찾을 수 없습니다")
+    username, admin = _requester(db, requested_by)
+    if admin:
+        db.rollback()  # MNT-IAAS 호출 동안 커넥션을 잡지 않게
+        return {"kind": "nova", "items": [{"id": k["name"], "name": k["name"], "fingerprint": k["fingerprint"],
+                                           "publicKey": k["publicKey"]} for k in _iaas("/keypairs", user.token)["items"]]}
+    rows = db.execute(text("SELECT id, name, public_key, fingerprint FROM iam_ssh_key WHERE owner = :o ORDER BY created_at DESC"),
+                      {"o": username}).mappings().all()
+    return {"kind": "ssh", "items": [{"id": str(r["id"]), "name": r["name"], "fingerprint": r["fingerprint"],
+                                      "publicKey": r["public_key"]} for r in rows]}
 
 
 def _quota_short(quota: dict, need: dict) -> list[str]:
@@ -1000,7 +1033,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
         raise HTTPException(503, "Temporal 주소(TEMPORAL_API_BASE)가 설정되지 않았습니다")
     admin_id = _admin_id(db, user.username, "프로비저닝은 관리자만 할 수 있습니다")
     t = db.execute(text("""SELECT status, type, project_id, request_spec, provision_spec, result, error_message,
-                                  provisioning_by, provisioning_at, workflow_id
+                                  provisioning_by, provisioning_at, workflow_id, requested_by
                              FROM tkt_request WHERE id = :id"""),
                    {"id": ticket_id}).mappings().first()
     if t is None:
@@ -1010,6 +1043,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     if t["type"] != "cluster" or t["status"] not in ("approved", "failed"):
         raise HTTPException(409, "승인되었거나 실패한 클러스터 신청만 프로비저닝(재시도)할 수 있습니다")
     rs, ps, pid, token = t["request_spec"], body.provisionSpec, t["project_id"], user.token
+    requester, requester_admin = _requester(db, t["requested_by"])
     db.rollback()  # 외부 확인 동안 커넥션을 잡지 않게
 
     master_count = ps.masterCount or rs["masterCount"]
@@ -1048,22 +1082,36 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     reason = _cluster_name_reason(db, rs["clusterName"], token, exclude_id=ticket_id)  # 신청 뒤 같은 이름이 생겼을 수 있다
     if reason:
         raise HTTPException(409, reason)
-    public_key = None  # 신청자 키 — 없으면 템플릿 키페어
-    if rs.get("novaKeypair"):  # 관리자가 고른 OpenStack 키페어 — 지금의 공개키를 클러스터 키페어로 넣는다
-        nova_key = _nova_keypair(rs["novaKeypair"], token)
+    # 키페어 — 관리자가 바꿨으면 그 값(신청자 키만), 아니면 신청 값. 둘 다 없으면 템플릿 키페어(public_key 없음)
+    changed = bool({"keypairId", "novaKeypair"} & ps.model_fields_set)
+    key_id = ps.keypairId if changed else (int(rs["keypairId"]) if rs.get("keypairId") else None)
+    nova_name = ps.novaKeypair if changed else rs.get("novaKeypair")
+    if key_id is not None and nova_name:
+        raise HTTPException(400, "키페어는 하나만 지정할 수 있습니다")
+    if changed and nova_name and not requester_admin:
+        raise HTTPException(400, "OpenStack 키페어는 관리자가 신청한 클러스터에만 넣을 수 있습니다")
+    public_key, key_name = None, None
+    if nova_name:  # OpenStack 키페어 — 지금의 공개키를 클러스터 키페어로 넣는다
+        nova_key = _nova_keypair(nova_name, token)
         if not nova_key:
-            raise HTTPException(409, f"신청한 키페어({rs['novaKeypair']})가 삭제되어 노드에 넣을 수 없습니다")
-        public_key = nova_key["publicKey"]
+            raise HTTPException(400 if changed else 409, "OpenStack 키페어를 찾을 수 없습니다" if changed
+                                else f"신청한 키페어({nova_name})가 삭제되어 노드에 넣을 수 없습니다")
+        public_key, key_name = nova_key["publicKey"], nova_name
+    if key_id is not None:  # 신청자의 포털 SSH 키
+        key = db.execute(text("SELECT name, public_key FROM iam_ssh_key WHERE id = :id AND owner = :o"),
+                         {"id": key_id, "o": requester}).mappings().first()
+        if key is None:
+            raise HTTPException(400 if changed else 409, "신청자의 키페어가 아닙니다" if changed
+                                else f"신청한 키페어({rs.get('keypairName')})가 삭제되어 노드에 넣을 수 없습니다")
+        public_key, key_name = key["public_key"], key["name"]
 
     spec = {"networkId": net["id"], "networkName": net["name"], "subnetId": subnet["id"], "subnetCidr": subnet["cidr"],
             "floatingNetworkId": floating, "masterCount": master_count, "masterFlavorId": master["id"],
             "masterFlavorName": master["name"], "nodeCount": node_count, "flavorId": worker["id"],
-            "flavorName": worker["name"]}
-    if rs.get("keypairId"):
-        public_key = db.execute(text("SELECT public_key FROM iam_ssh_key WHERE id = :id"),
-                                {"id": int(rs["keypairId"])}).scalar()
-        if public_key is None:
-            raise HTTPException(409, f"신청한 키페어({rs.get('keypairName')})가 삭제되어 노드에 넣을 수 없습니다")
+            "flavorName": worker["name"],
+            # 넣은 키페어(재시도·상세 표시) — 없으면 템플릿 키페어
+            "keypairId": str(key_id) if key_id is not None else None, "novaKeypair": nova_name or None,
+            "keypairName": key_name}
     attempt = db.execute(text("SELECT coalesce(max(attempt), 0) + 1 FROM tkt_provision_step WHERE request_id = :id"),
                          {"id": ticket_id}).scalar()
     workflow_id = f"cluster-provision-{ticket_id}-{attempt}"
