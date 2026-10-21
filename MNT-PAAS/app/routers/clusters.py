@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import re
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
@@ -51,6 +52,22 @@ def name_rule_ok(name: str) -> bool:
 def name_taken(name: str) -> bool:
     """모든 클러스터(다른 프로젝트 포함 — 서비스 계정 admin 스코프)에 같은 이름이 있는지. 삭제 중인 것도 포함."""
     return any(x["name"] == name for x in magnum.get("/clusters").get("clusters", []))
+
+
+KEYPAIR_PREFIX = "okc-cluster-"  # 신청자 SSH 공개키로 등록하는 Nova 키페어 — 클러스터마다 하나(클러스터 이름은 모든 프로젝트에서 유일)
+
+
+def cluster_keypair(name: str) -> str:
+    return KEYPAIR_PREFIX + name
+
+
+def delete_cluster_keypair(name: str) -> None:
+    """클러스터 키페어 정리(없거나 실패해도 그대로 — 남은 것은 같은 이름으로 다시 만들 때 새로 등록한다).
+    Nova 키페어는 사용자(서비스 계정) 소유라 토큰의 프로젝트 스코프와 관계없다."""
+    try:
+        magnum.service_request("DELETE", "nova", "compute", "/v2.1", f"/os-keypairs/{cluster_keypair(name)}")
+    except httpx.HTTPError:
+        pass
 
 
 @router.get("/cluster-name-check")
@@ -112,11 +129,15 @@ def get_cluster(cluster_id: str):
 
 @router.delete("/clusters/{cluster_id}", dependencies=[Depends(require_admin)])
 def delete_cluster(cluster_id: str):
-    """클러스터 삭제(관리자). Magnum DELETE 는 비동기 — 호출 후 DELETE_IN_PROGRESS 로 바뀐다."""
+    """클러스터 삭제(관리자). Magnum DELETE 는 비동기 — 호출 후 DELETE_IN_PROGRESS 로 바뀐다.
+    신청자 키로 만든 클러스터면 그 Nova 키페어도 지운다(이미 만든 VM 에 들어간 키에는 영향 없음)."""
     try:
-        return magnum.request("DELETE", f"/clusters/{cluster_id}")
+        name = magnum.get(f"/clusters/{cluster_id}")["name"]
+        res = magnum.request("DELETE", f"/clusters/{cluster_id}")
     except Exception as e:  # noqa: BLE001
         raise _err(e)
+    delete_cluster_keypair(name)
+    return res
 
 
 @router.get("/clusters/{cluster_id}/kubeconfig", dependencies=[Depends(cluster_member)])

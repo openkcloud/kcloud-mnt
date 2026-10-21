@@ -853,6 +853,7 @@ class CreateClusterBody(BaseModel):
     nodeCount: int = 1
     flavorId: str                # Worker 플레이버 — 가속기는 이 플레이버의 device-profile
     networkType: str             # 희망 망: internal(내부망) | external(인터넷망) — 실제 망·서브넷은 관리자가 프로비저닝 때
+    keypairId: int | None = None  # iam_ssh_key.id(본인 키) — 없으면 템플릿 키페어
     purpose: str = ""
 
 
@@ -860,7 +861,8 @@ class CreateClusterBody(BaseModel):
 def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(current_user),
                           db: Session = Depends(get_db)):
     """서비스 클러스터 신청(신청자 = 토큰 사용자). 저장 직전에 서버에서 다시 확인한다 — 멤버·역할, 노드 수, 프로젝트,
-    이름 규칙·중복(Magnum + 진행 중 신청), 템플릿(공개·숨김 아님), 플레이버(프로젝트가 쓸 수 있는 것, Control Plane 가속기 없음)."""
+    이름 규칙·중복(Magnum + 진행 중 신청), 템플릿(공개·숨김 아님), 플레이버(프로젝트가 쓸 수 있는 것, Control Plane 가속기 없음),
+    키페어(본인 키)."""
     _check_requestable(db, body.projectId, user)
     db.rollback()  # 확인용 조회 트랜잭션을 닫는다 — 아래 외부 호출 동안 커넥션을 잡지 않게
 
@@ -883,6 +885,14 @@ def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(c
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"tkt-cluster:{body.clusterName}"})
     if _cluster_ticket_taken(db, body.clusterName):
         raise HTTPException(409, _CLUSTER_TICKET_TAKEN)
+    keypair = None
+    if body.keypairId is not None:
+        keypair = db.execute(
+            text("SELECT id, name FROM iam_ssh_key WHERE id = :id AND owner = :o"),
+            {"id": body.keypairId, "o": user.username},
+        ).mappings().first()
+        if not keypair:
+            raise HTTPException(400, "본인 키페어가 아닙니다")
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext('tkt-request-no'))"))
     day = db.execute(text("SELECT to_char(now() AT TIME ZONE 'Asia/Seoul', 'YYMMDD')")).scalar()
     last = db.execute(
@@ -910,6 +920,8 @@ def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(c
         "deviceProfile": worker["accelerator"],
         "accelerators": worker.get("accelerators") or None,
         "networkType": body.networkType,
+        "keypairId": str(keypair["id"]) if keypair else None,
+        "keypairName": keypair["name"] if keypair else None,
         "namespace": _namespace_name(project["name"], body.projectId),
         "purpose": body.purpose.strip()[:300],
     }
@@ -1010,6 +1022,12 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
             "floatingNetworkId": floating, "masterCount": master_count, "masterFlavorId": master["id"],
             "masterFlavorName": master["name"], "nodeCount": node_count, "flavorId": worker["id"],
             "flavorName": worker["name"]}
+    public_key = None  # 신청자 키 — 없으면 템플릿 키페어
+    if rs.get("keypairId"):
+        public_key = db.execute(text("SELECT public_key FROM iam_ssh_key WHERE id = :id"),
+                                {"id": int(rs["keypairId"])}).scalar()
+        if public_key is None:
+            raise HTTPException(409, f"신청한 키페어({rs.get('keypairName')})가 삭제되어 노드에 넣을 수 없습니다")
     attempt = db.execute(text("SELECT coalesce(max(attempt), 0) + 1 FROM tkt_provision_step WHERE request_id = :id"),
                          {"id": ticket_id}).scalar()
     workflow_id = f"cluster-provision-{ticket_id}-{attempt}"
@@ -1029,7 +1047,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     inp = {"ticketId": ticket_id, "attempt": attempt, "projectId": pid, "projectName": rs["projectName"],
            "clusterName": rs["clusterName"], "templateId": rs["templateId"], "masterCount": master_count,
            "masterFlavorId": master["id"], "nodeCount": node_count, "flavorId": worker["id"],
-           "networkId": net["id"], "subnetId": subnet["id"], "floatingNetworkId": floating,
+           "networkId": net["id"], "subnetId": subnet["id"], "floatingNetworkId": floating, "publicKey": public_key,
            "namespace": rs["namespace"], "need": need}
     prev = {"status": t["status"], "provisionSpec": t["provision_spec"], "provisioningBy": t["provisioning_by"],
             "provisioningAt": _iso(t["provisioning_at"]), "workflowId": t["workflow_id"],

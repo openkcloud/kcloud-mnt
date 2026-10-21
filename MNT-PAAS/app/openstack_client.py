@@ -95,7 +95,12 @@ class MagnumClient:
         return self.request("GET", path)
 
     def service_get(self, service: str, stype: str, ver: str, path: str, params: dict | None = None) -> dict:
-        """같은 토큰으로 다른 OpenStack 서비스 조회 — Nova(Worker VM 수)·Glance(이미지 kube_version).
+        """같은 토큰으로 다른 OpenStack 서비스 조회 — Nova(Worker VM 수)·Glance(이미지 kube_version)."""
+        return self.service_request("GET", service, stype, ver, path, params)
+
+    def service_request(self, method: str, service: str, stype: str, ver: str, path: str,
+                        params: dict | None = None, json: dict | None = None) -> dict:
+        """같은 토큰으로 다른 OpenStack 서비스 호출 — 조회 + Nova 클러스터 키페어 등록·삭제.
         override = 템플릿 + 버전(예: /v2.1), catalog = 카탈로그 주소(버전이 없으면 붙인다)."""
         self._ensure_token()
         if settings.os_endpoint_mode == "catalog":
@@ -103,13 +108,14 @@ class MagnumClient:
             base = base if base.endswith(ver) else base + ver
         else:
             base = settings.os_endpoint_template.format(service=service).rstrip("/") + ver
-        r = self._client.get(f"{base}{path}", headers={"X-Auth-Token": self._token}, params=params)
+        url = f"{base}{path}"
+        r = self._client.request(method, url, headers={"X-Auth-Token": self._token}, params=params, json=json)
         if r.status_code == 401:  # 토큰 조기 만료 → 1회 재로그인
             with self._lock:
                 self._login()
-            r = self._client.get(f"{base}{path}", headers={"X-Auth-Token": self._token}, params=params)
+            r = self._client.request(method, url, headers={"X-Auth-Token": self._token}, params=params, json=json)
         r.raise_for_status()
-        return r.json()
+        return r.json() if r.content else {}
 
 
 magnum = MagnumClient()

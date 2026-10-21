@@ -1,7 +1,7 @@
 """클러스터 프로비저닝 작업(paas.*)·이름 확인 API·템플릿 K8s 버전 — 가짜 Magnum·Nova·K8s 로."""
 import httpx
 import pytest
-from conftest import USER, client_as
+from conftest import ADMIN, USER, client_as
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
@@ -27,6 +27,19 @@ def _magnum(monkeypatch, data: dict):
             raise v
         return v
     monkeypatch.setattr(magnum, "get", get)
+
+
+def _keypairs(monkeypatch, fail: Exception | None = None) -> list:
+    """Nova 키페어 등록·삭제 호출 기록(fail 이 있으면 등록 때 던진다)."""
+    calls = []
+
+    def service_request(method, service, stype, ver, path, params=None, json=None):
+        calls.append((method, path, json))
+        if method == "POST" and fail:
+            raise fail
+        return {}
+    monkeypatch.setattr(magnum, "service_request", service_request)
+    return calls
 
 
 # ── 이름 ─────────────────────────────────────────────────────────
@@ -70,12 +83,42 @@ def test_생성_요청은_소유_프로젝트_스코프로(monkeypatch):
             return {"uuid": "new-id"}
 
     monkeypatch.setattr(activities, "for_project", lambda pid: sent.setdefault("project", pid) and Owner())
+    kp = _keypairs(monkeypatch)
     assert activities.create_cluster("p1", SPEC) == "new-id"
     b = sent["body"]
     assert sent["project"] == "p1" and (sent["method"], sent["path"]) == ("POST", "/clusters")
     assert (b["cluster_template_id"], b["master_count"], b["node_count"]) == ("t1", 1, 2)
     assert (b["master_flavor_id"], b["flavor_id"], b["fixed_network"], b["fixed_subnet"]) == ("m1.large", "m1.xlarge", "net", "sub")
     assert b["master_lb_enabled"] is True and b["merge_labels"] is True and b["labels"]["availability_zone"] == "az1"
+    assert "keypair" not in b and kp == []  # 신청자 키가 없으면 템플릿 키페어
+
+
+def test_신청자_키는_클러스터_키페어로_등록해_넘김(monkeypatch):
+    sent = {}
+
+    class Owner:
+        def request(self, method, path, json=None):
+            sent["body"] = json
+            return {"uuid": "new-id"}
+
+    monkeypatch.setattr(activities, "for_project", lambda pid: Owner())
+    kp = _keypairs(monkeypatch)
+    assert activities.create_cluster("p1", {**SPEC, "publicKey": "ssh-ed25519 AAAA u@h"}) == "new-id"
+    assert sent["body"]["keypair"] == "okc-cluster-c"
+    assert kp == [("DELETE", "/os-keypairs/okc-cluster-c", None),  # 이전 회차가 남긴 것을 지우고 새로 등록
+                  ("POST", "/os-keypairs", {"keypair": {"name": "okc-cluster-c", "public_key": "ssh-ed25519 AAAA u@h"}})]
+
+
+def test_키페어_등록_거절이면_생성_요청을_보내지_않음(monkeypatch):
+    class Owner:
+        def request(self, *a, **k):
+            raise AssertionError("생성 요청을 보내면 안 됨")
+
+    monkeypatch.setattr(activities, "for_project", lambda pid: Owner())
+    _keypairs(monkeypatch, fail=_http_error(400, {"badRequest": {"message": "Keypair data is invalid", "code": 400}}))
+    with pytest.raises(ApplicationError) as e:
+        activities.create_cluster("p1", {**SPEC, "publicKey": "bad"})
+    assert e.value.non_retryable and str(e.value) == "노드 SSH 키페어 등록이 거절되었습니다: Keypair data is invalid"
 
 
 def test_생성_요청_거절은_재시도하지_않음(monkeypatch):
@@ -169,9 +212,11 @@ def test_삭제는_사라질_때까지_기다림(monkeypatch):
     monkeypatch.setattr(magnum, "request", lambda m, path, json=None: deleted.append((m, path)) or {})
     _magnum(monkeypatch, {"/clusters/c1": [{"status": "DELETE_IN_PROGRESS"}, {"status": "DELETE_COMPLETE"}]})
     monkeypatch.setattr(activities.time, "sleep", lambda s: None)
+    kp = _keypairs(monkeypatch)
     env = ActivityEnvironment()
     assert env.run(activities.delete_cluster, "p1", "c", "c1", 9e9) is True
     assert deleted == [("DELETE", "/clusters/c1")]
+    assert kp == [("DELETE", "/os-keypairs/okc-cluster-c", None)]  # 클러스터 키페어도 정리
 
 
 def test_삭제는_ID_가_없으면_그_프로젝트에서_이름으로(monkeypatch):
@@ -180,10 +225,21 @@ def test_삭제는_ID_가_없으면_그_프로젝트에서_이름으로(monkeypa
     _magnum(monkeypatch, {"/clusters": {"clusters": [{"uuid": "a", "name": "c"}, {"uuid": "b", "name": "c"}]},
                           "/clusters/a": [{"project_id": "p-other"}],
                           "/clusters/b": [{"project_id": "p1"}, _http_error(404)]})
+    kp = _keypairs(monkeypatch)
     assert activities.delete_cluster("p1", "c", None, 9e9) is True
     assert deleted == ["/clusters/b"]  # 다른 프로젝트의 같은 이름 클러스터는 건드리지 않는다
     _magnum(monkeypatch, {"/clusters": {"clusters": []}})
     assert activities.delete_cluster("p1", "c", None, 9e9) is False
+    assert len(kp) == 2  # 생성 요청 응답이 끊겨 클러스터가 없어도 키페어는 등록됐을 수 있다
+
+
+def test_삭제_API_는_클러스터_키페어도_정리(monkeypatch):
+    deleted = []
+    monkeypatch.setattr(magnum, "request", lambda m, path, json=None: deleted.append((m, path)) or {})
+    _magnum(monkeypatch, {"/clusters/c1": {"name": "c"}})
+    kp = _keypairs(monkeypatch)
+    assert client_as(ADMIN).delete(f"{P}/clusters/c1").status_code == 200
+    assert deleted == [("DELETE", "/clusters/c1")] and kp == [("DELETE", "/os-keypairs/okc-cluster-c", None)]
 
 
 def test_삭제_제한_시간_초과(monkeypatch):

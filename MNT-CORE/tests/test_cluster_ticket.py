@@ -107,6 +107,19 @@ def test_클러스터_신청_확인(client, fake, change, status, detail):
     assert (r.status_code, r.json()["detail"]) == (status, detail)
 
 
+def _ssh_key(owner: str, name: str = "k1") -> int:
+    return sql("""INSERT INTO iam_ssh_key (owner, name, public_key, fingerprint)
+                  VALUES (:o, :n, :k, 'SHA256:test') RETURNING id""", o=owner, n=name, k=f"ssh-ed25519 AAAA {owner}@h").scalar()
+
+
+def test_클러스터_신청_키페어는_본인_키만(client, fake):
+    mine, other = _ssh_key("admin"), _ssh_key("ek.lee")
+    r = client.post("/api/core/tickets/cluster", json={**BODY, "keypairId": other}, headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (400, "본인 키페어가 아닙니다")
+    t = client.post("/api/core/tickets/cluster", json={**BODY, "keypairId": mine}, headers=ADMIN).json()
+    assert (t["keypairId"], t["keypairName"]) == (str(mine), "k1")
+
+
 def test_네임스페이스_이름은_쿠버네티스_예약어를_피한다():
     pid = "4ee114f1-b9f1-423a-91bf-40dec2fd05fb"
     assert tickets._namespace_name("okc_test_prj", pid) == "okc-test-prj"
@@ -150,7 +163,8 @@ def test_클러스터_프로비저닝(client, fake, started):
     assert inp | {"need": None} == {
         "ticketId": tid, "attempt": 1, "projectId": PROJECT, "projectName": "okc_test_prj", "clusterName": "test-cl",
         "templateId": "t1", "masterCount": 1, "masterFlavorId": "m1.large", "nodeCount": 2, "flavorId": "m1.rngd",
-        "networkId": "net", "subnetId": "sub-on", "floatingNetworkId": "pub", "namespace": "okc-test-prj", "need": None}
+        "networkId": "net", "subnetId": "sub-on", "floatingNetworkId": "pub", "publicKey": None,  # 템플릿 키페어
+        "namespace": "okc-test-prj", "need": None}
     assert inp["need"] == {"instances": 3, "vcpu": 12, "ramGb": 24}
     assert any("subnetId=sub-on" in p for p in fake["iaas"])  # Floating IP 는 고른 서브넷 기준으로 판정
     spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
@@ -163,6 +177,23 @@ def test_클러스터_프로비저닝_노드_조정(client, fake, started):
     assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=body, headers=ADMIN).status_code == 200
     inp = started[0][1]
     assert (inp["nodeCount"], inp["flavorId"], inp["need"]) == (3, "m1.large", {"instances": 4, "vcpu": 16, "ramGb": 32})
+
+
+def test_클러스터_프로비저닝_신청자_키(client, fake, started):
+    tid = _cluster_ticket()
+    key = _ssh_key("admin")
+    sql("""UPDATE tkt_request SET request_spec = request_spec || jsonb_build_object('keypairId', CAST(:k AS text),
+                                                                                    'keypairName', 'k1')
+            WHERE id = :id""", k=key, id=tid)
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN).status_code == 200
+    assert started[0][1]["publicKey"] == "ssh-ed25519 AAAA admin@h"
+    # 신청 뒤 키를 지웠으면 시작하지 않는다
+    sql("UPDATE tkt_request SET status = 'failed' WHERE id = :id", id=tid)
+    sql("DELETE FROM iam_ssh_key WHERE id = :k", k=key)
+    r = client.post(f"/api/core/tickets/{tid}/provision-cluster", json={"provisionSpec": PROVISION["provisionSpec"]},
+                    headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (409, "신청한 키페어(k1)가 삭제되어 노드에 넣을 수 없습니다")
+    assert len(started) == 1
 
 
 @pytest.mark.parametrize("spec,setup,status,detail", [

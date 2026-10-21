@@ -16,7 +16,7 @@ from temporalio.exceptions import ApplicationError
 from ..config import settings
 from ..k8s_client import k8s_get, k8s_request
 from ..openstack_client import for_project, magnum
-from ..routers.clusters import NAME_RULE, NAME_TAKEN, name_rule_ok, name_taken
+from ..routers.clusters import NAME_RULE, NAME_TAKEN, cluster_keypair, delete_cluster_keypair, name_rule_ok, name_taken
 
 PROJECT_LABEL = "openkcloud.io/project-id"  # AI 워크스페이스 네임스페이스와 같은 키
 PROJECT_NAME_ANNOTATION = "openkcloud.io/project-name"
@@ -28,10 +28,11 @@ def _fail(msg: str) -> ApplicationError:
 
 
 def _detail(e: httpx.HTTPStatusError) -> str:
-    """Magnum 오류 본문의 메시지({"errors": [{"detail"}]})."""
+    """Magnum 오류 본문의 메시지({"errors": [{"detail"}]}) — Nova 는 {"badRequest": {"message"}}."""
     try:
         d = e.response.json()
-        return (d.get("errors") or [{}])[0].get("detail") or d.get("title") or e.response.text
+        return ((d.get("errors") or [{}])[0].get("detail") or d.get("title")
+                or next((v.get("message") for v in d.values() if isinstance(v, dict)), None) or e.response.text)
     except Exception:  # noqa: BLE001
         return e.response.text or f"HTTP {e.response.status_code}"
 
@@ -55,7 +56,8 @@ def check_name(name: str) -> str:
 @activity.defn(name="paas.create_cluster")
 def create_cluster(project_id: str, spec: dict) -> str:
     """클러스터 생성 요청(Magnum 1회, 소유 프로젝트 스코프 — API LB·Floating IP 도 그 프로젝트 소유로 생긴다) → 클러스터 ID.
-    spec: name·templateId·masterCount·masterFlavorId·nodeCount·flavorId·networkId·subnetId.
+    spec: name·templateId·masterCount·masterFlavorId·nodeCount·flavorId·networkId·subnetId·publicKey(없으면 템플릿 키페어).
+    신청자 SSH 공개키는 Nova 키페어(okc-cluster-{이름})로 등록해 넘긴다 — 이전 회차가 남긴 같은 이름은 지우고 새로 등록.
     본문은 2026-10-20 6차 시험(정상 완료)과 같다. 노드 Floating IP 는 이 드라이버가 지원하지 않아 끈다(API LB 에는 붙는다)."""
     body = {
         "name": spec["name"],
@@ -73,6 +75,14 @@ def create_cluster(project_id: str, spec: dict) -> str:
         "labels": {"availability_zone": settings.cluster_availability_zone,
                    "auto_scaling_enabled": "False", "auto_healing_enabled": "False"},
     }
+    if spec.get("publicKey"):
+        body["keypair"] = cluster_keypair(spec["name"])
+        delete_cluster_keypair(spec["name"])
+        try:
+            magnum.service_request("POST", "nova", "compute", "/v2.1", "/os-keypairs", json={
+                "keypair": {"name": body["keypair"], "public_key": spec["publicKey"]}})
+        except httpx.HTTPStatusError as e:
+            raise _fail(f"노드 SSH 키페어 등록이 거절되었습니다: {_detail(e)}")
     try:
         return for_project(project_id).request("POST", "/clusters", json=body)["uuid"]
     except httpx.HTTPStatusError as e:
@@ -151,7 +161,7 @@ def create_namespace(cluster_id: str, name: str, project_id: str, project_name: 
 def delete_cluster(project_id: str, name: str, cluster_id: str | None, deadline: float) -> bool:
     """실패한 회차의 클러스터 삭제 + 사라질 때까지 대기. deadline(epoch 초)은 워크플로가 정한 절대 시각.
     생성 요청 응답을 못 받았으면(cluster_id 없음) 그 프로젝트에서 이름으로 찾는다. 404·DELETE_COMPLETE 를 삭제됨으로 본다
-    (사라지기 전 DELETE_COMPLETE 가 잠깐 보인다 — 2026-10-19 시험). 지울 클러스터가 없었으면 False."""
+    (사라지기 전 DELETE_COMPLETE 가 잠깐 보인다 — 2026-10-19 시험). 클러스터 키페어도 지운다. 지울 클러스터가 없었으면 False."""
     ids = [cluster_id] if cluster_id else _same_name(name, project_id)
     for cid in ids:
         try:
@@ -177,6 +187,7 @@ def delete_cluster(project_id: str, name: str, cluster_id: str | None, deadline:
                 raise _fail("클러스터 삭제가 제한 시간 안에 끝나지 않았습니다 — 삭제 진행 중, 확인 필요")
             activity.heartbeat(status)
             time.sleep(10)
+    delete_cluster_keypair(name)
     return bool(ids)
 
 
