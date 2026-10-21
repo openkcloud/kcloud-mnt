@@ -667,6 +667,7 @@ _MAGNUM_SG_PREFIX = "k8s-cluster-magnum-"
 def list_project_networks(project_id: str):
     """승인 시 고를 네트워크 — 프로젝트 소유 + 공유 + 외부(external), Magnum 클러스터 네트워크 제외. kind: project|shared|external.
     공유는 전체 공유(shared) + 이 프로젝트에만 RBAC 로 공유된 것(관리자 조회 시 shared=false 로 보이므로 따로 확인).
+    shared = 이 프로젝트가 포트를 만들 수 있는 공유 망인지(외부망도 공유돼 있으면 노드를 바로 붙일 수 있다).
     cidr 는 서브넷 CIDR(여러 개면 ', ' 로 연결)."""
     try:
         nets = _neutron_get("/networks")["networks"]
@@ -687,6 +688,7 @@ def list_project_networks(project_id: str):
             kind = "shared"
         cidrs = [sn["cidr"] for sn in subnets if sn["network_id"] == n["id"]]
         items.append({"id": n["id"], "name": n.get("name") or n["id"], "kind": kind,
+                      "shared": bool(n.get("shared")) or n["id"] in shared_to_project,
                       "projectId": owner, "cidr": ", ".join(cidrs)})
     return {"items": items, "count": len(items)}
 

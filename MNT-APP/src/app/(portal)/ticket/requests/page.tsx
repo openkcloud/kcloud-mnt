@@ -141,7 +141,7 @@ function toClusterProvisionBody(p: ClusterProvisionSpec): ProvisionClusterInput[
     networkId: p.networkId, subnetId: p.subnetId, masterCount: p.masterCount, masterFlavorId: p.masterFlavorId,
     nodeCount: p.nodeCount, flavorId: p.flavorId,
     // 지난 회차에 넣은 키페어 — 기록이 있을 때만(없으면 서버가 신청 값을 쓴다)
-    ...("keypairId" in p ? { keypairId: p.keypairId ?? null, novaKeypair: p.novaKeypair ?? null } : {}),
+    ...("keypairName" in p ? { novaKeypair: p.keypairName ?? null } : {}),
   };
 }
 

@@ -18,9 +18,9 @@ import {
   SearchInput, Segment, SpecPicker, SwitchCard, TotalsBlock, accelText, accelTotal, keyIcon, keyType, masterFlavorBlock,
   nodeTotals, paginate, serverIcon, specLine, workerFlavorBlock, type KeyRow,
 } from "@/components/cluster-node-fields";
-import { useNetwork, useProjectFlavors, useProjectNetworks, type FlavorSummary } from "@/lib/iaas-api";
+import { useNetwork, useNovaKeypairs, useProjectFlavors, useProjectNetworks, type FlavorSummary, type NovaKeypair } from "@/lib/iaas-api";
 import { useClusterTemplate, type ClusterTemplate } from "@/lib/paas-api";
-import { useTicketKeypairs, type ProvisionClusterInput, type TicketKeypairs } from "@/lib/ticket-api";
+import type { ProvisionClusterInput } from "@/lib/ticket-api";
 import type { ClusterProvisionSpec, ResourceRequest } from "@/lib/types";
 import { accKindClass, cn, formatDateTime } from "@/lib/utils";
 
@@ -218,7 +218,7 @@ function ProvisionPanel({ r, onState, onPurpose }: {
   r: ResourceRequest; onState: (s: ProvisionPanelState) => void; onPurpose: () => void;
 }) {
   const flavorsQ = useProjectFlavors(r.projectId);
-  const keysQ = useTicketKeypairs(r.id);
+  const keysQ = useNovaKeypairs();
   const templateQ = useClusterTemplate(r.templateId ?? null);
   const loading = flavorsQ.isLoading || keysQ.isLoading || templateQ.isLoading;
   const error = flavorsQ.error ?? keysQ.error;
@@ -234,15 +234,15 @@ function ProvisionPanel({ r, onState, onPurpose }: {
 }
 
 function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: {
-  r: ResourceRequest; flavors: FlavorSummary[]; keys: TicketKeypairs; template?: ClusterTemplate;
+  r: ResourceRequest; flavors: FlavorSummary[]; keys: NovaKeypair[]; template?: ClusterTemplate;
   onState: (s: ProvisionPanelState) => void; onPurpose: () => void;
 }) {
   const networksQ = useProjectNetworks(r.projectId);
   const tplKey = template?.keypair_id || null;
-  // 신청 값 — 키페어는 신청자 키(사용자 id · 관리자 이름), 없으면 템플릿 키페어
+  // 신청 값 — 키페어는 이름(관리자 = OpenStack 키페어, 사용자 = 포털 SSH 키 — 같은 이름의 OpenStack 키페어를 쓴다), 없으면 템플릿 키페어
   const REQ = {
     cp: r.masterFlavorId ?? "", cpn: r.masterCount ?? 1, w: r.flavorId ?? "", wn: r.nodeCount ?? 1, accel: r.deviceProfile ?? "",
-    key: r.keypairId ?? r.novaKeypair ?? (tplKey ? TPL_KEY : null),
+    key: r.keypairName ?? (tplKey ? TPL_KEY : null),
   };
   const prev = r.status === "failed" ? (r.provisionSpec as unknown as ClusterProvisionSpec | undefined) : undefined;
 
@@ -250,7 +250,7 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
     const cp = prev?.masterFlavorId ?? REQ.cp;
     const w = prev?.flavorId ?? REQ.w;
     // 지난 회차 키페어 — 기록이 있을 때만(키페어를 바꿀 수 있게 되기 전 기록은 신청 값)
-    const key = prev && "keypairId" in prev ? prev.keypairId ?? prev.novaKeypair ?? (tplKey ? TPL_KEY : null) : REQ.key;
+    const key = prev && "keypairName" in prev ? prev.keypairName ?? (tplKey ? TPL_KEY : null) : REQ.key;
     return {
       role: "net", net: prev?.networkId ?? "", subnet: prev?.subnetId ?? "", autoNet: "",
       cpSrc: cp === REQ.cp ? "req" : "custom", cp, cpn: prev?.masterCount ?? REQ.cpn,
@@ -273,8 +273,8 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
   const reqCpF = flavors.find((f) => f.id === REQ.cp);
   const reqWF = flavors.find((f) => f.id === REQ.w);
 
-  // 망·서브넷 — 노드는 내부·공유망(외부망 제외). DHCP 꺼진 서브넷은 고를 수 없다
-  const nodeNets = (networksQ.data ?? []).filter((n) => n.kind !== "external");
+  // 망·서브넷 — 노드는 프로젝트·공유망, 외부망은 공유된 것만(API 는 Floating IP 없이 그 망 주소로). DHCP 꺼진 서브넷은 고를 수 없다
+  const nodeNets = (networksQ.data ?? []).filter((n) => n.kind !== "external" || n.shared);
   const net = nodeNets.find((n) => n.id === st.net);
   const { data: netDetail, isLoading: subnetLoading } = useNetwork(st.net || undefined);
   const subnets = netDetail?.id === st.net ? netDetail.subnets : [];
@@ -284,28 +284,28 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
   const netName = net?.name ?? (prev?.networkId === st.net ? prev?.networkName : undefined);
   const subnetCidr = subnet?.cidr ?? (prev?.subnetId === subnetId && subnetId ? prev?.subnetCidr : undefined);
 
-  // 키페어 행 — 신청자 키 + 템플릿 키페어
+  // 키페어 행 — OpenStack(Nova) 키페어(이름으로 찾아 그대로 넣는다 — 새로 만들지 않음) + 템플릿 키페어
   const keyRows: KeyRow[] = [
-    ...keys.items.map((k) => ({ id: k.id, name: k.name, fingerprint: k.fingerprint, type: keyType(k.publicKey) })),
+    ...keys.map((k) => ({ id: k.name, name: k.name, fingerprint: k.fingerprint, type: k.type || keyType(k.publicKey) })),
     ...(tplKey ? [{ id: TPL_KEY, name: tplKey, fingerprint: "템플릿 키페어", type: "ssh" }] : []),
   ];
-  const keyName = (k: string | null) => k === null ? "선택 안 함" : k === TPL_KEY ? tplKey ?? "—"
-    : keys.items.find((x) => x.id === k)?.name ?? (k === REQ.key ? r.keypairName ?? k : k);
+  const keyName = (k: string | null) => k === null ? "선택 안 함" : k === TPL_KEY ? tplKey ?? "—" : k;
   // 비웠을 때 실제로 들어가는 것 — 템플릿에 키페어가 있으면 Magnum 이 그것을 넣는다
   const keyNone = tplKey ? `템플릿 키페어(${tplKey})가 들어갑니다` : "노드에 SSH 키를 넣지 않습니다";
+  // 신청 키(특히 사용자 포털 SSH 키) 이름의 OpenStack 키페어가 없으면 넣을 수 없다 — 직접 선택으로 바꿔야 한다
+  const keyMissing = (k: string | null) => k !== null && k !== TPL_KEY && !keys.some((x) => x.name === k);
   const reqKeyRow: KeyRow | undefined = REQ.key === null ? undefined : keyRows.find((k) => k.id === REQ.key)
-    ?? { id: REQ.key, name: keyName(REQ.key), fingerprint: "찾을 수 없음 — 삭제되었을 수 있습니다", type: "—" };
+    ?? { id: REQ.key, name: REQ.key, fingerprint: "OpenStack 에 없음 — 직접 선택으로 다른 키페어를 고르세요", type: "—" };
 
   // 변경·완료
   const keyChanged = keyApplied !== REQ.key;
   const cpChanged = cp !== REQ.cp || st.cpn !== REQ.cpn;
   const wChanged = w !== REQ.w || st.wn !== REQ.wn || accel !== REQ.accel;
   const changes = [cp !== REQ.cp, st.cpn !== REQ.cpn, w !== REQ.w, st.wn !== REQ.wn, accel !== REQ.accel, keyChanged].filter(Boolean).length;
-  const missing = [!st.net && "네트워크", !!st.net && !subnet && "서브넷", !cpF && "Control Plane 스펙", !wF && "Worker 스펙"]
-    .filter((x): x is string => !!x);
+  const missing = [!st.net && "네트워크", !!st.net && !subnet && "서브넷", !cpF && "Control Plane 스펙", !wF && "Worker 스펙",
+    keyMissing(keyApplied) && "키페어(OpenStack 에 없음)"].filter((x): x is string => !!x);
   const ready = missing.length === 0;
-  const keyBody = keyApplied === null || keyApplied === TPL_KEY ? { keypairId: null, novaKeypair: null }
-    : keys.kind === "nova" ? { keypairId: null, novaKeypair: keyApplied } : { keypairId: keyApplied, novaKeypair: null };
+  const keyBody = { novaKeypair: keyApplied === null || keyApplied === TPL_KEY ? null : keyApplied };
   const spec: ClusterProvisionValue | null = ready
     ? { networkId: st.net, subnetId, masterCount: st.cpn, masterFlavorId: cp, nodeCount: st.wn, flavorId: w, ...(keyChanged ? keyBody : {}) }
     : null;
@@ -350,7 +350,8 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
           selected={role === "w"} onSelect={() => set({ role: "w" })} />
         <NodeCard className="gap-2 px-3.5 py-3" icon={keyIcon} title="키페어"
           tag={keyChanged ? <ChangedTag /> : <RefTag label="신청 값" />}
-          value={keyName(key)} line={key === null ? keyNone : undefined} was={keyChanged ? keyName(REQ.key) : undefined}
+          value={keyName(key)} line={key === null ? keyNone : keyMissing(key) ? "OpenStack 에 없음 — 직접 선택으로 바꾸세요" : undefined}
+          lineWarn={keyMissing(key)} was={keyChanged ? keyName(REQ.key) : undefined}
           selected={role === "key"} onSelect={() => set({ role: "key" })} />
         <TotalsBlock rows={[
           totalRow("VM", now ? `${now.vms}대` : undefined, req ? `${req.vms}대` : undefined),
@@ -398,6 +399,12 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
             </div>
             <NetworkPicker networks={nodeNets} loading={networksQ.isLoading} error={networksQ.error?.message} selected={st.net}
               onSelect={(id) => set({ net: id, subnet: id === st.net ? st.subnet : "", autoNet: id === st.net ? st.autoNet : id })} />
+            {net?.kind === "external" && (
+              <div className="flex gap-2 rounded-[10px] border border-[#f6dfa4] bg-[#fff8e6] px-3.5 py-3">
+                <AlertCircle className="mt-px size-3.5 flex-none text-[#b7791f]" />
+                <p className="text-xs text-[#7a4f06]">인터넷망으로 생성 시 노드가 외부에 그대로 노출됩니다.</p>
+              </div>
+            )}
             <div className="mt-1 text-[15px] font-semibold">서브넷<span className="ml-0.5 text-[#d92d20]">*</span></div>
             {!st.net ? (
               <div className="rounded-[10px] border-[1.5px] border-dashed border-border p-5 text-center text-[13px] text-muted-foreground">네트워크를 먼저 고르세요</div>
@@ -438,7 +445,7 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
             <PickerHeader
               title={{ cp: "Control Plane 스펙", w: "Worker 스펙", key: "키페어" }[role]}
               hint={src === "req" ? "신청 값을 사용합니다"
-                : { cp: "가속기 없는 스펙만 쓸 수 있습니다", w: "가속기를 고르면 맞는 스펙만 보입니다", key: "노드에 주입할 SSH 키페어 · 다시 누르면 선택 해제" }[role]}
+                : { cp: "가속기 없는 스펙만 쓸 수 있습니다", w: "가속기를 고르면 맞는 스펙만 보입니다", key: "노드에 넣을 OpenStack 키페어 · 다시 누르면 선택 해제" }[role]}
             >
               <Segment options={[["req", "신청 값"], ["custom", "직접 선택"]] as const} value={src}
                 onChange={(s) => set(s === "req" ? { [role === "cp" ? "cpSrc" : role === "w" ? "wSrc" : "keySrc"]: "req" } : toCustom(role))} />
@@ -466,7 +473,7 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
             ) : (
               <KeypairTable key="key-custom" rows={keyRows} selected={st.key} refId={REQ.key} refLabel="신청" nameCol="minmax(0,200px)" paged
                 onSelect={(id) => set({ key: st.key === id ? null : id })}
-                empty={keys.kind === "nova" ? "OpenStack 키페어가 없습니다" : "신청자가 등록한 SSH 키가 없습니다"} />
+                empty="OpenStack 키페어가 없습니다" />
             )}
           </>
         )}
@@ -475,9 +482,10 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
   );
 }
 
-/** 네트워크 표 — 검색 · 5개씩. 유형은 IAAS 의 실제 종류(프로젝트 소유 / 공유). */
+/** 네트워크 표 — 검색 · 5개씩. 유형: OpenStack 네트워크 external(router:external)이 Yes 면 인터넷망, 아니면 내부망.
+ *  이 프로젝트가 쓸 수 있도록 공유된 망(다른 프로젝트 망·공유 외부망)은 이름 옆에 '공유' 태그. */
 function NetworkPicker({ networks, loading, error, selected, onSelect }: {
-  networks: { id: string; name: string; kind: string; cidr: string }[];
+  networks: { id: string; name: string; kind: string; cidr: string; shared?: boolean }[];
   loading: boolean; error?: string; selected: string; onSelect: (id: string) => void;
 }) {
   const [query, setQuery] = React.useState("");
@@ -501,10 +509,15 @@ function NetworkPicker({ networks, loading, error, selected, onSelect }: {
               <div key={n.id} onClick={() => onSelect(n.id)}
                 className={cn(NET_COLS, "h-[46px] cursor-pointer border-b border-border/60 last:border-b-0", sel ? "bg-brand-indigo-50/60" : "hover:bg-secondary/40")}>
                 <Radio on={sel} />
-                <span className="truncate font-mono text-[13px] font-semibold">{n.name}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate font-mono text-[13px] font-semibold">{n.name}</span>
+                  {n.shared && <span className="flex-none rounded bg-violet-100 px-[5px] py-px text-[10px] font-semibold text-violet-800">공유</span>}
+                </span>
                 <span title={n.cidr} className="truncate font-mono text-[11px] text-muted-foreground">{n.cidr || "—"}</span>
-                <span className={cn("w-fit rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                  n.kind === "shared" ? "bg-violet-100 text-violet-800" : "bg-[#e3f1fb] text-[#1769aa]")}>{n.kind === "shared" ? "공유" : "프로젝트"}</span>
+                <span className={cn("w-fit whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                  n.kind === "external" ? "bg-[#fdf3dc] text-[#8a5a00]" : "bg-[#e3f1fb] text-[#1769aa]")}>
+                  {n.kind === "external" ? "인터넷망" : "내부망"}
+                </span>
               </div>
             );
           })}

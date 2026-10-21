@@ -29,15 +29,30 @@ def _magnum(monkeypatch, data: dict):
     monkeypatch.setattr(magnum, "get", get)
 
 
-def _keypairs(monkeypatch, fail: Exception | None = None) -> list:
-    """Nova 키페어 등록·삭제 호출 기록(fail 이 있으면 등록 때 던진다)."""
+FLAVOR_NAMES = {"f-uuid-m": "m1.large", "f-uuid-w": "m1.large.atomp"}  # Nova 플레이버 ID → 이름(그 밖은 404 = 이미 이름)
+KEYPAIRS = {"gy-yang-pub", "k8s-key"}  # Nova 에 있는 키페어(서비스 계정 소유)
+
+
+def _nova_lookup(monkeypatch) -> list:
+    """가짜 Nova 조회 — 플레이버(FLAVOR_NAMES)·키페어(KEYPAIRS). 그 밖의 호출은 기록만 한다(키페어를 만들거나 지우면 안 됨)."""
     calls = []
+
+    def service_get(service, stype, ver, path, params=None):
+        kind, _, ref = path.strip("/").partition("/")
+        if kind == "flavors":
+            if ref not in FLAVOR_NAMES:
+                raise _http_error(404)
+            return {"flavor": {"id": ref, "name": FLAVOR_NAMES[ref]}}
+        if kind == "os-keypairs":
+            if ref not in KEYPAIRS:
+                raise _http_error(404)
+            return {"keypair": {"name": ref}}
+        raise AssertionError(path)
 
     def service_request(method, service, stype, ver, path, params=None, json=None):
         calls.append((method, path, json))
-        if method == "POST" and fail:
-            raise fail
         return {}
+    monkeypatch.setattr(magnum, "service_get", service_get)
     monkeypatch.setattr(magnum, "service_request", service_request)
     return calls
 
@@ -83,17 +98,19 @@ def test_생성_요청은_소유_프로젝트_스코프로(monkeypatch):
             return {"uuid": "new-id"}
 
     monkeypatch.setattr(activities, "for_project", lambda pid: sent.setdefault("project", pid) and Owner())
-    kp = _keypairs(monkeypatch)
+    nova = _nova_lookup(monkeypatch)
     assert activities.create_cluster("p1", SPEC) == "new-id"
     b = sent["body"]
     assert sent["project"] == "p1" and (sent["method"], sent["path"]) == ("POST", "/clusters")
     assert (b["cluster_template_id"], b["master_count"], b["node_count"]) == ("t1", 1, 2)
     assert (b["master_flavor_id"], b["flavor_id"], b["fixed_network"], b["fixed_subnet"]) == ("m1.large", "m1.xlarge", "net", "sub")
     assert b["master_lb_enabled"] is True and b["merge_labels"] is True and b["labels"]["availability_zone"] == "az1"
-    assert "keypair" not in b and kp == []  # 신청자 키가 없으면 템플릿 키페어
+    assert "keypair" not in b and nova == []  # 키페어가 없으면 템플릿 키페어
+    assert "master_lb_floating_ip_enabled" not in b["labels"]  # 프로젝트 망 — API 에 Floating IP(템플릿 기본)
 
 
-def test_신청자_키는_클러스터_키페어로_등록해_넘김(monkeypatch):
+def test_플레이버는_이름으로_넘김(monkeypatch):
+    # CAPO 는 플레이버를 이름으로 찾는다 — ID 를 그대로 넘기면 Control Plane VM 을 못 만든다(2026-10-21 req-261021-004)
     sent = {}
 
     class Owner:
@@ -102,23 +119,50 @@ def test_신청자_키는_클러스터_키페어로_등록해_넘김(monkeypatch
             return {"uuid": "new-id"}
 
     monkeypatch.setattr(activities, "for_project", lambda pid: Owner())
-    kp = _keypairs(monkeypatch)
-    assert activities.create_cluster("p1", {**SPEC, "publicKey": "ssh-ed25519 AAAA u@h"}) == "new-id"
-    assert sent["body"]["keypair"] == "okc-cluster-c"
-    assert kp == [("DELETE", "/os-keypairs/okc-cluster-c", None),  # 이전 회차가 남긴 것을 지우고 새로 등록
-                  ("POST", "/os-keypairs", {"keypair": {"name": "okc-cluster-c", "public_key": "ssh-ed25519 AAAA u@h"}})]
+    _nova_lookup(monkeypatch)
+    assert activities.create_cluster("p1", {**SPEC, "masterFlavorId": "f-uuid-m", "flavorId": "f-uuid-w"}) == "new-id"
+    assert (sent["body"]["master_flavor_id"], sent["body"]["flavor_id"]) == ("m1.large", "m1.large.atomp")
 
 
-def test_키페어_등록_거절이면_생성_요청을_보내지_않음(monkeypatch):
+def test_공유_외부망이면_API_Floating_IP_를_끔(monkeypatch):
+    sent = {}
+
+    class Owner:
+        def request(self, method, path, json=None):
+            sent["body"] = json
+            return {"uuid": "new-id"}
+
+    monkeypatch.setattr(activities, "for_project", lambda pid: Owner())
+    _nova_lookup(monkeypatch)
+    assert activities.create_cluster("p1", {**SPEC, "externalNetwork": True}) == "new-id"
+    assert sent["body"]["labels"]["master_lb_floating_ip_enabled"] == "False"
+
+
+def test_키페어는_이름으로_찾아_그대로_넘김(monkeypatch):
+    sent = {}
+
+    class Owner:
+        def request(self, method, path, json=None):
+            sent["body"] = json
+            return {"uuid": "new-id"}
+
+    monkeypatch.setattr(activities, "for_project", lambda pid: Owner())
+    nova = _nova_lookup(monkeypatch)
+    assert activities.create_cluster("p1", {**SPEC, "keypair": "k8s-key"}) == "new-id"
+    assert sent["body"]["keypair"] == "k8s-key"
+    assert nova == []  # 키페어를 만들거나 지우지 않는다
+
+
+def test_없는_키페어면_생성_요청을_보내지_않음(monkeypatch):
     class Owner:
         def request(self, *a, **k):
             raise AssertionError("생성 요청을 보내면 안 됨")
 
     monkeypatch.setattr(activities, "for_project", lambda pid: Owner())
-    _keypairs(monkeypatch, fail=_http_error(400, {"badRequest": {"message": "Keypair data is invalid", "code": 400}}))
+    _nova_lookup(monkeypatch)
     with pytest.raises(ApplicationError) as e:
-        activities.create_cluster("p1", {**SPEC, "publicKey": "bad"})
-    assert e.value.non_retryable and str(e.value) == "노드 SSH 키페어 등록이 거절되었습니다: Keypair data is invalid"
+        activities.create_cluster("p1", {**SPEC, "keypair": "nope"})
+    assert e.value.non_retryable and str(e.value) == "키페어(nope)를 OpenStack 에서 찾을 수 없습니다"
 
 
 def test_생성_요청_거절은_재시도하지_않음(monkeypatch):
@@ -127,6 +171,7 @@ def test_생성_요청_거절은_재시도하지_않음(monkeypatch):
             raise _http_error(400, {"errors": [{"detail": "Quota exceeded"}]})
 
     monkeypatch.setattr(activities, "for_project", lambda pid: Owner())
+    _nova_lookup(monkeypatch)
     with pytest.raises(ApplicationError) as e:
         activities.create_cluster("p1", SPEC)
     assert e.value.non_retryable and str(e.value) == "클러스터 생성 요청이 거절되었습니다: Quota exceeded"
@@ -152,10 +197,12 @@ def _nova(monkeypatch, servers):
 
 def test_진행_상태(monkeypatch):
     _magnum(monkeypatch, _cluster(api="https://192.0.2.1:6443", master="CREATE_COMPLETE"))
-    sent = _nova(monkeypatch, [{"status": "ACTIVE"}, {"status": "BUILD"}])
+    sent = _nova(monkeypatch, [{"name": "st-1-control-plane-a", "status": "ACTIVE"},
+                               {"name": "st-1-default-worker-b", "status": "ACTIVE"}, {"name": "st-1-default-worker-c", "status": "BUILD"}])
     r = activities.watch_cluster("c1", "", 60, 1)  # last 와 다르면 바로 돌려준다
-    assert (r["masterReady"], r["workersActive"], r["apiAddress"]) == (True, 1, "https://192.0.2.1:6443")
-    assert sent["params"]["name"] == "^st\\-1-default-worker-"  # Worker 노드그룹 상태가 아니라 Worker VM 을 센다
+    assert (r["masterReady"], r["apiAddress"], r["problem"]) == (True, "https://192.0.2.1:6443", None)
+    assert (r["cpActive"], r["cpVms"], r["workersActive"], r["workerVms"]) == (1, 1, 1, 2)  # Worker 는 노드그룹 상태가 아니라 VM
+    assert sent["params"]["name"] == "^st\\-1-"
 
 
 def test_진행_상태_API_주소_임시값과_생성_직후_404(monkeypatch):
@@ -164,6 +211,63 @@ def test_진행_상태_API_주소_임시값과_생성_직후_404(monkeypatch):
     assert activities.watch_cluster("c1", "", 60, 1)["apiAddress"] == ""  # 'https://:0' 은 아직 없음
     _magnum(monkeypatch, {"/clusters/c1": _http_error(404), "/clusters/c1/nodegroups": {}})
     assert activities.watch_cluster("c1", "x", 60, 1)["status"] == ""
+
+
+def test_노드_VM_ERROR_는_바로_문제로(monkeypatch):
+    _magnum(monkeypatch, _cluster())
+    _nova(monkeypatch, [{"name": "st-1-control-plane-a", "status": "ACTIVE"},
+                        {"name": "st-1-default-worker-b", "status": "ERROR", "fault": {"message": "No valid host was found."}}])
+    p = activities.watch_cluster("c1", "", 60, 1)["problem"]
+    assert p == {"code": "vm_error", "message": "노드 VM 생성 실패(default-worker-b): No valid host was found."}
+
+
+def test_노드_콘솔에_네트워크_실패가_보이면_문제로(monkeypatch):
+    # Control Plane VM 은 떴는데 초기화 전(Worker VM 없음) — 콘솔에 IP·메타데이터 실패 문구(2026-10-19 1차 시험)
+    _magnum(monkeypatch, _cluster())
+    _nova(monkeypatch, [{"id": "v1", "name": "st-1-control-plane-a", "status": "ACTIVE"}])
+    out = "...\n[FAILED] Failed to start systemd-networkd-wait-online.service - Wait for Network to be Configured.\n..."
+    monkeypatch.setattr(magnum, "service_request", lambda m, svc, st, ver, path, params=None, json=None: {"output": out})
+    p = activities.watch_cluster("c1", "", 60, 1)["problem"]
+    assert p["code"] == "node_network" and "Wait for Network to be Configured" in p["message"]
+
+
+class _K8s:
+    """가짜 워크로드 K8s API — kube-system 파드 목록과 직전 로그."""
+    def __init__(self, restarts, log):
+        self.restarts, self.log = restarts, log
+
+    def get(self, path, params=None, timeout=None):
+        if path.endswith("/log"):
+            return httpx.Response(200, text=self.log, request=httpx.Request("GET", "http://k8s.test"))
+        pods = {"items": [{"metadata": {"name": "openstack-cloud-controller-manager-x"},
+                           "status": {"containerStatuses": [{"name": "occm", "restartCount": self.restarts}]}}]}
+        return httpx.Response(200, json=pods, request=httpx.Request("GET", "http://k8s.test"))
+
+
+@pytest.mark.parametrize("restarts,log,expected", [
+    (3, "E1 failed\nE2 lookup keystone-api.openstack.internal on 192.168.90.253:53: read udp 10.0.1.38: i/o timeout\n",
+     "클라우드 컨트롤러(OCCM)가 OpenStack API·DNS 에 닿지 못합니다 (E2 lookup keystone-api.openstack.internal on "
+     "192.168.90.253:53: read udp 10.0.1.38: i/o timeout)"),
+    (2, "panic: something else", "클라우드 컨트롤러(OCCM)가 계속 재시작합니다 (재시작 2회)"),
+    (1, "i/o timeout", None),  # 한 번 재시작은 부팅 중 일시 오류일 수 있어 보지 않는다
+])
+def test_클라우드_컨트롤러가_OpenStack_에_닿지_못하면_문제로(monkeypatch, restarts, log, expected):
+    # 2026-10-20 2~5차 시험(compute2 게이트웨이) — OCCM 이 Keystone 주소를 찾지 못해 계속 재시작
+    _magnum(monkeypatch, _cluster(api="https://192.0.2.1:6443"))
+    _nova(monkeypatch, [{"name": "st-1-control-plane-a", "status": "ACTIVE"}, {"name": "st-1-default-worker-b", "status": "BUILD"}])
+    monkeypatch.setattr(activities, "k8s", lambda cid: _K8s(restarts, log))
+    p = activities.watch_cluster("c1", "", 60, 1)["problem"]
+    assert (p and p["message"]) == expected
+
+
+def test_K8s_API_에_닿지_않으면_진단하지_않음(monkeypatch):
+    _magnum(monkeypatch, _cluster(api="https://192.0.2.1:6443"))
+    _nova(monkeypatch, [{"name": "st-1-control-plane-a", "status": "ACTIVE"}, {"name": "st-1-default-worker-b", "status": "BUILD"}])
+
+    def unreachable(cid):
+        raise httpx.ConnectTimeout("timed out")
+    monkeypatch.setattr(activities, "k8s", unreachable)
+    assert activities.watch_cluster("c1", "", 60, 1)["problem"] is None
 
 
 def test_진행_상태가_바뀔_때까지_기다림(monkeypatch):
@@ -175,7 +279,7 @@ def test_진행_상태가_바뀔_때까지_기다림(monkeypatch):
     beats = []
     env = ActivityEnvironment()
     env.on_heartbeat = lambda *d: beats.append(d)
-    r = env.run(activities.watch_cluster, "c1", "CREATE_IN_PROGRESS/False/0/", 60, 1)
+    r = env.run(activities.watch_cluster, "c1", "CREATE_IN_PROGRESS/False/0:0/0:0//", 60, 1)
     assert r["masterReady"] is True and len(beats) == 1
 
 
@@ -212,11 +316,11 @@ def test_삭제는_사라질_때까지_기다림(monkeypatch):
     monkeypatch.setattr(magnum, "request", lambda m, path, json=None: deleted.append((m, path)) or {})
     _magnum(monkeypatch, {"/clusters/c1": [{"status": "DELETE_IN_PROGRESS"}, {"status": "DELETE_COMPLETE"}]})
     monkeypatch.setattr(activities.time, "sleep", lambda s: None)
-    kp = _keypairs(monkeypatch)
+    nova = _nova_lookup(monkeypatch)
     env = ActivityEnvironment()
     assert env.run(activities.delete_cluster, "p1", "c", "c1", 9e9) is True
     assert deleted == [("DELETE", "/clusters/c1")]
-    assert kp == [("DELETE", "/os-keypairs/okc-cluster-c", None)]  # 클러스터 키페어도 정리
+    assert nova == []  # 키페어는 지우지 않는다(만든 적 없음 — 신청자·템플릿 키페어 그대로)
 
 
 def test_삭제는_ID_가_없으면_그_프로젝트에서_이름으로(monkeypatch):
@@ -225,21 +329,18 @@ def test_삭제는_ID_가_없으면_그_프로젝트에서_이름으로(monkeypa
     _magnum(monkeypatch, {"/clusters": {"clusters": [{"uuid": "a", "name": "c"}, {"uuid": "b", "name": "c"}]},
                           "/clusters/a": [{"project_id": "p-other"}],
                           "/clusters/b": [{"project_id": "p1"}, _http_error(404)]})
-    kp = _keypairs(monkeypatch)
     assert activities.delete_cluster("p1", "c", None, 9e9) is True
     assert deleted == ["/clusters/b"]  # 다른 프로젝트의 같은 이름 클러스터는 건드리지 않는다
     _magnum(monkeypatch, {"/clusters": {"clusters": []}})
     assert activities.delete_cluster("p1", "c", None, 9e9) is False
-    assert len(kp) == 2  # 생성 요청 응답이 끊겨 클러스터가 없어도 키페어는 등록됐을 수 있다
 
 
-def test_삭제_API_는_클러스터_키페어도_정리(monkeypatch):
+def test_삭제_API_는_키페어를_지우지_않음(monkeypatch):
     deleted = []
     monkeypatch.setattr(magnum, "request", lambda m, path, json=None: deleted.append((m, path)) or {})
-    _magnum(monkeypatch, {"/clusters/c1": {"name": "c"}})
-    kp = _keypairs(monkeypatch)
+    nova = _nova_lookup(monkeypatch)
     assert client_as(ADMIN).delete(f"{P}/clusters/c1").status_code == 200
-    assert deleted == [("DELETE", "/clusters/c1")] and kp == [("DELETE", "/os-keypairs/okc-cluster-c", None)]
+    assert deleted == [("DELETE", "/clusters/c1")] and nova == []
 
 
 def test_삭제_제한_시간_초과(monkeypatch):

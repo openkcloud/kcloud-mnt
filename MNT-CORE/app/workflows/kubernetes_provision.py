@@ -6,11 +6,11 @@ DB 기록은 CORE 큐의 작업으로 부른다.
 티켓을 '실패'로 마감한다 — 재시도는 새 회차로 처음부터. 시간 값은 임시값(시험 후 조정).
 이 파일은 Temporal 샌드박스에서 실행되므로 DB·HTTP 등 외부 모듈을 가져오지 않는다.
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError
 
 from .provision_base import END, HEARTBEAT, NO_RETRY, QUERY_RETRY, ProvisionSteps, reason
 
@@ -27,6 +27,43 @@ WORKFLOW_MAX = timedelta(minutes=60)      # 워크플로 전체 최대(넘으면
 QUEUE_WAIT_MAX = timedelta(minutes=2)     # PAAS·IAAS 작업이 큐에서 기다리는 최대 — 넘으면 '워커 없음'
 CLEANUP_MAX = timedelta(minutes=15)       # 실패 후 클러스터 삭제 완료까지 최대(시험: 76~91초)
 RUN_MAX = WORKFLOW_MAX + CLEANUP_MAX + timedelta(minutes=5)  # 실행 제한(안전장치) — 진행 + 정리 + 여유
+
+# ── 조기 실패 판정(45분까지 기다리지 않게) — 2026-10-21 기준, 시험 근거는 judge() ─────────────
+NO_VM_MAX = timedelta(minutes=5)          # 노드 VM 이 안 생기면 실패(시험: 요청 31초 뒤 생김)
+NO_VM_WARN = timedelta(minutes=2)         # 노드 VM 이 이만큼 안 생기면 '주의' 표시
+PROBLEM_MAX = {                           # PAAS 가 본 문제가 이만큼 계속되면 실패
+    "vm_error": timedelta(0),             # 노드 VM ERROR(용량·가속기 할당 등) — 바로
+    "node_network": timedelta(0),         # 노드 콘솔에 IP·메타데이터 실패 문구 — 바로(문구 자체가 확정)
+    "occm": timedelta(minutes=3),         # 클라우드 컨트롤러가 OpenStack API·DNS 에 닿지 못함(2번 이상 재시작)
+}
+
+
+def judge(s: dict, now: datetime, started: datetime, master_ready_at: datetime | None,
+          seen: dict[str, datetime]) -> tuple[str | None, str | None]:
+    """생성 중 조기 실패 판정 → (실패 사유, 주의 문구). 둘 다 없으면 정상. seen = 문제 종류별 처음 본 시각(갱신함).
+    근거(시험): ① 노드 VM 이 안 생김 — 2026-10-21 req-261021-004 1회차(플레이버 ID, CAPO 'no flavors were found'),
+    ② VM ERROR, ③ 노드가 IP·메타데이터를 못 받음 — 2026-10-19 1차(DHCP 꺼짐), ④ 클라우드 컨트롤러가 OpenStack API·DNS 에
+    못 닿음 — 2026-10-20 2~5차(compute2 게이트웨이). 성공 때는 Control Plane VM 이 요청 31초 뒤 생긴다."""
+    issues = []  # (실패 사유, 주의 문구, 시작 시각, 제한)
+    p = s.get("problem")
+    if p:
+        issues.append((p["message"], p["message"], seen.setdefault(p["code"], now), PROBLEM_MAX.get(p["code"], PROBLEM_MAX["occm"])))
+    for code in [c for c in seen if not p or c != p["code"]]:  # 사라진 문제는 다시 생기면 처음부터
+        seen.pop(code)
+    minutes = int(NO_VM_MAX.total_seconds() // 60)
+    if s["cpVms"] == 0:
+        issues.append((f"Control Plane VM 이 {minutes}분 안에 만들어지지 않았습니다 — OpenStack 이 노드 VM 생성을 거절했을 수 "
+                       "있습니다(플레이버·이미지·키페어·쿼터 확인)", "Control Plane VM 이 아직 만들어지지 않았습니다", started, NO_VM_MAX))
+    elif master_ready_at and s["workerVms"] == 0:
+        issues.append((f"Worker VM 이 {minutes}분 안에 만들어지지 않았습니다 — OpenStack 이 노드 VM 생성을 거절했을 수 "
+                       "있습니다(플레이버·가속기·쿼터 확인)", "Worker VM 이 아직 만들어지지 않았습니다", master_ready_at, NO_VM_MAX))
+    for fail, _, since, limit in issues:
+        if now - since >= limit:
+            return fail, None
+    for _, warn, since, limit in issues:
+        if limit != NO_VM_MAX or now - since >= NO_VM_WARN:
+            return None, f"주의: {warn} ({int((now - since).total_seconds() // 60)}분째)"
+    return None, None
 
 
 @workflow.defn(name="KubernetesProvision")
@@ -67,14 +104,27 @@ class KubernetesProvision(ProvisionSteps):
 
         # 생성 요청(1회) — 다시 보내면 중복 생성 위험. 응답이 끊기면 정리 때 이름으로 찾아 지운다
         self.requested = True
-        spec = {"name": inp["clusterName"], "publicKey": inp.get("publicKey"), **{k: inp[k] for k in (
+        spec = {"name": inp["clusterName"], "keypair": inp.get("keypair"),
+                "externalNetwork": inp.get("externalNetwork", False), **{k: inp[k] for k in (
             "templateId", "masterCount", "masterFlavorId", "nodeCount", "flavorId", "networkId", "subnetId")}}
         self.cluster_id = await self._paas("paas.create_cluster", inp["projectId"], spec, retry=NO_RETRY,
                                            timeout=timedelta(seconds=90))
-        await self._go("create_control_plane", {"send_request": self.cluster_id})
+        values = {"send_request": self.cluster_id}  # 끝난 상세 단계의 값
+        await self._go("prepare_api", values)
 
-        # 생성 대기 — Control Plane 노드그룹 완료 → Worker(Nova Worker VM ACTIVE 수) → CREATE_COMPLETE
-        masters, workers = f"{inp['masterCount']}/{inp['masterCount']}", inp["nodeCount"]
+        # 생성 대기 — 상세 단계를 실제 순서대로(시험 2026-10-21: API 0:30 · CP VM 4:30 · 초기화 6:35 · Worker VM 10:07 ·
+        # 노드 준비 10:37 · 완료 15:41). 앞 단계가 끝날 때 다음 조건이 이미 채워져 있으면 바로 넘어간다(Worker VM 과 노드 준비는
+        # 겹쳐 진행). 진행 중 문제가 보이면 그 단계에 '주의'를 남기고, 기준 시간 동안 계속되면 바로 실패한다(judge)
+        m, n = inp["masterCount"], inp["nodeCount"]
+        stages = [  # (상세 단계, 완료 조건, 완료 값)
+            ("prepare_api", lambda s: bool(s["apiAddress"]), lambda s: s["apiAddress"]),
+            ("create_cp_vm", lambda s: s["cpActive"] >= m, lambda s: f"{s['cpActive']}/{m}"),
+            ("init_control_plane", lambda s: s["workerVms"] > 0 or s["masterReady"], lambda s: None),
+            ("create_workers", lambda s: s["workersActive"] >= n, lambda s: f"{s['workersActive']}/{n}"),
+            ("create_control_plane", lambda s: s["masterReady"], lambda s: f"{m}/{m}"),
+            ("finish_cluster", lambda s: s["status"] == "CREATE_COMPLETE", lambda s: None),
+        ]
+        done, note, seen, master_ready_at = 0, "", {}, None
         started, until, last = workflow.now(), workflow.now() + CREATE_MAX, ""
         while True:
             left = until - workflow.now()
@@ -90,18 +140,34 @@ class KubernetesProvision(ProvisionSteps):
                 continue
             if s["status"].endswith("FAILED"):
                 raise ApplicationError(f"클러스터 생성 실패({s['status']}): {s['reason'] or '사유 없음'}")
+            if s["masterReady"] and master_ready_at is None:
+                master_ready_at = workflow.now()
+            moved = False
+            while done < len(stages) and stages[done][1](s):
+                values[stages[done][0]] = stages[done][2](s)
+                done, moved = done + 1, True
+            if moved:
+                await self._go(stages[done][0] if done < len(stages) else "check_api", values)
+                note = ""
             if s["status"] == "CREATE_COMPLETE":
                 break
-            if s["masterReady"]:
-                await self._go("create_workers", {"create_control_plane": masters})
-                await self._set_values({"create_workers": f"{s['workersActive']}/{workers}"})
-        await self._go("check_api", {"create_control_plane": masters, "create_workers": f"{workers}/{workers}"})
+            fail, warn = judge(s, workflow.now(), started, master_ready_at, seen)
+            if fail:
+                raise ApplicationError(fail)
+            if (warn or "") != note and 0 <= self.cur < len(self.plan):
+                note = warn or ""
+                await self._core("core.update_steps", inp["ticketId"], inp["attempt"],
+                                 [{"sub": self.plan[self.cur]["sub"], "value": warn}])
+        await self._go("check_api", values)
         return await self._within(SETUP_MAX, self._setup())
 
     async def _setup(self) -> dict:
         """K8s API 연결 → 프로젝트 네임스페이스 → 접근 권한(소유 프로젝트, 전용)."""
         inp = self.inp
-        api = await self._paas("paas.check_api", self.cluster_id)
+        try:
+            api = await self._paas("paas.check_api", self.cluster_id)
+        except ActivityError as e:  # 대개 포털(PAAS)이 클러스터 API 망에 닿지 않음 — 원래 오류는 원인으로 남긴다
+            raise ApplicationError("포털이 클러스터 K8s API 에 접근하지 못했습니다.") from e
         await self._go("create_namespace", {"check_api": api})
         namespace = await self._paas("paas.create_namespace", self.cluster_id, inp["namespace"], inp["projectId"],
                                      inp["projectName"])

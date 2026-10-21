@@ -205,24 +205,9 @@ export function useCreateClusterTicket() {
 export interface ProvisionClusterInput {
   id: string;
   expectedStatus: string;  // 화면이 보고 있던 상태 — 그사이 바뀌었으면 서버가 409
-  // 망·서브넷은 필수, 노드 구성·키페어는 빼면 신청 값 그대로. 키페어를 보내면 그 값(둘 다 null = 템플릿 키페어)
+  // 망·서브넷은 필수, 노드 구성·키페어는 빼면 신청 값 그대로. 키페어는 OpenStack 키페어 이름(null = 템플릿 키페어)
   provisionSpec: Pick<ClusterProvisionSpec, "networkId" | "subnetId">
-    & Partial<Pick<ClusterProvisionSpec, "masterCount" | "masterFlavorId" | "nodeCount" | "flavorId" | "keypairId" | "novaKeypair">>;
-}
-
-/** 프로비저닝 때 고를 수 있는 신청자 키페어(관리자) — 신청자가 사용자면 포털 SSH 키(ssh), 관리자면 OpenStack 키페어(nova, id = 이름). */
-export interface TicketKeypairs {
-  kind: "ssh" | "nova";
-  items: { id: string; name: string; fingerprint: string; publicKey: string }[];
-}
-
-export function useTicketKeypairs(ticketId: string | undefined) {
-  return useQuery({
-    queryKey: ["tickets", "keypairs", ticketId],
-    enabled: !!ticketId,
-    queryFn: () => coreFetch<TicketKeypairs>(`/tickets/${encodeURIComponent(ticketId!)}/keypairs`),
-    retry: 0,
-  });
+    & Partial<Pick<ClusterProvisionSpec, "masterCount" | "masterFlavorId" | "nodeCount" | "flavorId">> & { novaKeypair?: string | null };
 }
 
 /** 클러스터 프로비저닝 시작(승인 → 생성 중) · 재시도(실패 → 생성 중, 새 회차) — 서버가 망·서브넷(DHCP·Floating IP)·
