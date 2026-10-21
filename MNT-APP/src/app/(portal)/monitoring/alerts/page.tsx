@@ -84,11 +84,14 @@ function ChannelIcon({ type }: { type: string }) {
   const I = type === "email" ? Mail : type === "slack" ? MessageSquare : Webhook;
   return <I className="size-3.5 text-muted-foreground" />;
 }
-/** 조건 렌더 — 로그 기반은 window_min 포함(건수/5m >= 20), 그 외는 metric op threshold */
+/** 조건 렌더 — conditions[] 배열을 조합(최상위 레거시 metric/op/threshold 는 참조 금지).
+ *  각 조건 "metric op threshold" (+window_min 있으면 "/Nm"), 복합이면 AND 로 연결. */
 function ruleText(p: AlertPolicy) {
-  return p.kind === "log"
-    ? `건수/${p.window_min}m ${p.op} ${p.threshold}`
-    : `${p.metric} ${p.op} ${p.threshold}`;
+  const conds = p.conditions ?? [];
+  if (!conds.length) return "—";
+  return conds
+    .map((c) => `${c.metric} ${c.op} ${c.threshold ?? "—"}${c.window_min ? ` /${c.window_min}m` : ""}`)
+    .join(" AND ");
 }
 function targetText(selector: string) {
   return selector?.trim() ? selector : "전체";
@@ -237,7 +240,7 @@ export default function AlertsPage() {
                     <TableCell>
                       <div className="flex items-center gap-1">
                         {Object.keys(p.channels ?? {}).length === 0
-                          ? <span className="text-[11px] text-muted-foreground">종류 전체</span>
+                          ? <Badge variant="outline" className="text-[10px] text-muted-foreground">미지정</Badge>
                           : Object.keys(p.channels).map((t) => <ChannelIcon key={t} type={t} />)}
                       </div>
                     </TableCell>
