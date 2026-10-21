@@ -152,20 +152,20 @@ function toProvisionBody(spec: ProvisionSpec) {
   };
 }
 
-// 신청 ID — 누르면 복사(행 클릭의 상세 열기 대신)
-function RequestIdCell({ id }: { id: string }) {
+// 신청 ID · 자원 이름 — 누르면 복사(행 클릭의 상세 열기 대신)
+function CopyCell({ value, label, className }: { value: string; label: string; className?: string }) {
   return (
     <TableCell
-      title="클릭해서 신청 ID 복사"
-      className="group cursor-pointer whitespace-nowrap font-mono text-xs font-semibold hover:text-primary"
+      title={`클릭해서 ${label} 복사`}
+      className={cn("group cursor-pointer font-mono text-xs hover:text-primary", className)}
       onClick={(e) => {
         e.stopPropagation();
-        navigator.clipboard.writeText(id);
-        toast.success("신청 ID 복사됨", { description: id });
+        navigator.clipboard.writeText(value);
+        toast.success(`${label} 복사됨`, { description: value });
       }}
     >
-      {/* 칸 전체가 복사 영역 — 마우스를 올리면 ID 에 배경(테마 색 border: 라이트 #e2e8f0) */}
-      <span className="-mx-1.5 rounded-md px-1.5 py-1 transition-colors group-hover:bg-border">{id}</span>
+      {/* 칸 전체가 복사 영역 — 마우스를 올리면 값에 배경(테마 색 border: 라이트 #e2e8f0) */}
+      <span className="-mx-1.5 rounded-md px-1.5 py-1 transition-colors group-hover:bg-border">{value}</span>
     </TableCell>
   );
 }
@@ -1599,10 +1599,10 @@ function AdminView() {
                 const inProvision = IN_PROVISION.includes(r.status);
                 return (
                   <TableRow key={r.id} className="cursor-pointer" onClick={() => openDetail(r)}>
-                    <RequestIdCell id={r.id} />
+                    <CopyCell value={r.id} label="신청 ID" className="whitespace-nowrap font-semibold" />
                     <TableCell><TypeBadge type={r.type} /></TableCell>
                     <TableCell><ProjectRequesterCell r={r} /></TableCell>
-                    <TableCell className="font-mono text-xs">{nameOf(r)}</TableCell>
+                    <CopyCell value={nameOf(r)} label="자원 이름" />
                     <TableCell className="font-mono text-xs"><SpecCell r={r} /></TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
                     <TableCell><StatusBadge status={r.status} /></TableCell>
@@ -1859,10 +1859,10 @@ function UserView({ username }: { username: string }) {
             <TableBody>
               {items.map((r) => (
                 <TableRow key={r.id} className="cursor-pointer" onClick={() => { setDetail(r); setDetailOpen(true); }}>
-                  <RequestIdCell id={r.id} />
+                  <CopyCell value={r.id} label="신청 ID" className="whitespace-nowrap font-semibold" />
                   <TableCell><TypeBadge type={r.type} /></TableCell>
                   <TableCell><ProjectRequesterCell r={r} /></TableCell>
-                  <TableCell className="font-mono text-xs">{nameOf(r)}</TableCell>
+                  <CopyCell value={nameOf(r)} label="자원 이름" />
                   <TableCell className="font-mono text-xs"><SpecCell r={r} /></TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
                   <TableCell><StatusBadge status={r.status} /></TableCell>
