@@ -1,11 +1,11 @@
 "use client";
 /**
- * 자원신청 티켓(VM · AI 워크스페이스) — MNT-CORE 연동(포털 DB). 신청자·처리자는 서버가 토큰으로 정한다(요청에 담지 않음).
+ * 자원신청 티켓(VM · AI 워크스페이스 · 서비스 클러스터) — MNT-CORE 연동(포털 DB). 신청자·처리자는 서버가 토큰으로 정한다(요청에 담지 않음).
  * 티켓 관련 호출은 MSW 목업으로 폴백하지 않는다 — 실패하면 오류를 보여준다(실제 티켓과 목업 데이터가 섞이지 않게).
  */
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { coreFetch } from "@/lib/menu-api";
-import type { Org, ProvisionSpec, ProvisionStepsResp, ResourceRequest } from "@/lib/types";
+import type { ClusterProvisionSpec, Org, ProvisionSpec, ProvisionStepsResp, ResourceRequest } from "@/lib/types";
 
 /** 신청할 수 있는 프로젝트 — 내가 owner·member 인 프로젝트(이름은 OpenStack 라이브). */
 export interface TicketProject { id: string; name: string; role: string; orgId: string | null; orgName: string | null }
@@ -150,6 +150,65 @@ export function useProvisionAiWorkspaceTicket() {
   return useMutation({
     mutationFn: ({ id, ...body }: ProvisionAiWorkspaceInput) =>
       coreFetch<ResourceRequest>(`/tickets/${encodeURIComponent(id)}/provision-ai-workspace`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { id }) => refreshSteps(qc, id),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["tickets", "list"] }),
+  });
+}
+
+/** 클러스터 이름 사용 가능 여부(모든 프로젝트의 클러스터 + 진행 중 신청). */
+export function useClusterNameCheck(name: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["tickets", "cluster-name-check", name],
+    enabled,
+    queryFn: () =>
+      coreFetch<{ available: boolean; reason: string | null }>(
+        `/tickets/cluster-name-check?${new URLSearchParams({ name })}`,
+      ),
+    retry: 1,
+  });
+}
+
+export interface CreateClusterTicketInput {
+  projectId: string;
+  clusterName: string;
+  templateId: string;
+  masterCount: number;
+  masterFlavorId: string;
+  nodeCount: number;
+  flavorId: string;        // Worker 플레이버 — 가속기는 이 플레이버의 device-profile
+  networkType: string;     // 희망 망 internal | external — 실제 망·서브넷은 관리자가 프로비저닝 때
+  keypairId?: string;      // 본인 SSH 키(iam_ssh_key.id) — 없으면 템플릿 키페어
+  purpose: string;
+}
+
+/** 서비스 클러스터 신청 — 서버가 멤버·이름·템플릿·플레이버·노드 수를 다시 확인한 뒤 저장. */
+export function useCreateClusterTicket() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateClusterTicketInput) =>
+      coreFetch<ResourceRequest>(`/tickets/cluster`, { method: "POST", body: JSON.stringify(input) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tickets", "list"] }),
+  });
+}
+
+export interface ProvisionClusterInput {
+  id: string;
+  expectedStatus: string;  // 화면이 보고 있던 상태 — 그사이 바뀌었으면 서버가 409
+  // 망·서브넷은 필수, 노드 구성은 빼면 신청 값 그대로
+  provisionSpec: Pick<ClusterProvisionSpec, "networkId" | "subnetId">
+    & Partial<Pick<ClusterProvisionSpec, "masterCount" | "masterFlavorId" | "nodeCount" | "flavorId">>;
+}
+
+/** 클러스터 프로비저닝 시작(승인 → 생성 중) · 재시도(실패 → 생성 중, 새 회차) — 서버가 망·서브넷(DHCP·Floating IP)·
+ *  플레이버·쿼터·이름을 다시 확인한 뒤 Temporal 워크플로 시작. VM 과 같이 새 진행 기록을 받을 때까지 요청 중으로 둔다. */
+export function useProvisionClusterTicket() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: ProvisionClusterInput) =>
+      coreFetch<ResourceRequest>(`/tickets/${encodeURIComponent(id)}/provision-cluster`, {
         method: "POST",
         body: JSON.stringify(body),
       }),

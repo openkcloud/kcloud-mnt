@@ -501,12 +501,30 @@ export interface ProvisionSpec {
   host?: string;
 }
 
+// 클러스터 프로비저닝 입력 — 관리자가 고른 망·서브넷과 조정한 노드 구성(서버가 라이브 조회 값으로 채움)
+export interface ClusterProvisionSpec {
+  networkId: string;
+  networkName: string;
+  subnetId: string;
+  subnetCidr: string;
+  floatingNetworkId: string; // 템플릿의 외부망 — API Floating IP 풀
+  masterCount: number;
+  masterFlavorId: string;
+  masterFlavorName: string;
+  nodeCount: number;
+  flavorId: string;
+  flavorName: string;
+}
+
 // 프로비저닝 결과
 export interface ProvisionResult {
   serverId?: string;
   fixedIp?: string;
   floatingIp?: string;
-  namespace?: string;      // AI 워크스페이스 — 만들어진 네임스페이스
+  namespace?: string;      // AI 워크스페이스·클러스터 — 만들어진 네임스페이스
+  clusterId?: string;      // 클러스터 — Magnum 클러스터 ID(정리 실패 시에도 남는다)
+  clusterName?: string;
+  apiAddress?: string;
 }
 
 export interface ProvisionStepsResp {
@@ -631,11 +649,19 @@ export interface ResourceRequest {
   acceleratorCount?: number;
   deviceProfile?: string;  // 플레이버의 Cyborg device-profile (실제 VM 티켓의 가속기 표시)
   accelerators?: { kind: string; count: number }[];  // device-profile 의 가속기 종류(GPU/NPU)·개수 — 신청 시 저장
-  // Cluster
+  // Cluster — Worker 플레이버는 위 flavorId·flavorName·vcpu·ramGb·deviceProfile·accelerators, 희망 망은 networkType
   clusterName?: string;
   k8sVersion?: string;
   nodeCount?: number;      // Worker 노드 수
   masterCount?: number;    // Control Plane 노드 수
+  templateId?: string;
+  templateName?: string;
+  kubeVersion?: string;    // 템플릿 이미지의 K8s 버전
+  masterFlavorId?: string;
+  masterFlavorName?: string;
+  masterVcpu?: number;
+  masterRamGb?: number;
+  namespace?: string;      // 함께 만들 프로젝트 네임스페이스(신청 때 서버가 정함)
   // AI 워크스페이스 (프로젝트당 1개) — 가속기 수는 위 acceleratorCount.
   // 생성 시작 때 관리자가 조정한 한도는 provisionSpec 에 {cpu, memoryGi, acceleratorCount, storageGi} 로 담긴다
   workspaceName?: string;  // = Kubeflow Profile·네임스페이스 이름 (서버가 프로젝트 이름으로 정함)

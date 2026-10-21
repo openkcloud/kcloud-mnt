@@ -690,6 +690,17 @@ export function byProjectThenName<T extends { tenantId?: string; name: string }>
     a.name.localeCompare(b.name, "ko");
 }
 
+/** 프로젝트가 쓸 수 있는 플레이버(public + 이 프로젝트에 허용된 비공개) — VM·클러스터 신청. 목업 폴백 없음. */
+export function useProjectFlavors(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-project-flavors", projectId],
+    enabled: !!projectId,
+    queryFn: async (): Promise<FlavorSummary[]> =>
+      (await fetchJson<{ items: FlavorSummary[] }>(`${IAAS_BASE}/api/iaas/projects/${projectId}/flavors`)).items,
+    staleTime: 60 * 1000, retry: 0,
+  });
+}
+
 export function useFlavors() {
   const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
