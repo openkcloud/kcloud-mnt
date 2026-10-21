@@ -100,10 +100,11 @@ def _server_name_taken(project_id: str, name: str, token: str) -> bool:
 
 
 def _ticket_name_taken(db: Session, project_id: str, name: str) -> bool:
-    """같은 프로젝트의 반려되지 않은 VM 티켓과 이름이 겹치는지."""
+    """같은 프로젝트의 진행 중 VM 티켓(대기·승인·생성 중·재시도 대상 실패)과 이름이 겹치는지.
+    완료된 신청은 Nova 조회(_server_name_taken)로 보므로 제외 — VM 을 지웠으면 같은 이름으로 다시 신청할 수 있다."""
     return db.execute(
         text("""SELECT 1 FROM tkt_request
-                 WHERE type = 'vm' AND project_id = :p AND status <> 'rejected'
+                 WHERE type = 'vm' AND project_id = :p AND status IN ('pending', 'approved', 'provisioning', 'failed')
                    AND request_spec->>'vmName' = :n"""),
         {"p": project_id, "n": name},
     ).first() is not None
