@@ -973,44 +973,13 @@ class ProvisionClusterSpec(BaseModel):
     masterFlavorId: str | None = None
     nodeCount: int | None = None
     flavorId: str | None = None
-    # 키페어 — 보내지 않으면 신청 값. 보내면 그 값: 신청자 키(사용자 = 포털 SSH 키 keypairId, 관리자 = OpenStack 키페어
-    # novaKeypair — 신청 때와 같은 기준), 둘 다 null = 키페어를 넣지 않음(템플릿 키페어)
-    keypairId: int | None = None
+    # 키페어 — 보내지 않으면 신청 값, 보내면 그 OpenStack(Nova) 키페어 이름(관리자가 직접 선택), null = 템플릿 키페어
     novaKeypair: str | None = None
 
 
 class ProvisionClusterBody(BaseModel):
     expectedStatus: str | None = None  # 화면이 보고 있던 상태 — 다르면 409
     provisionSpec: ProvisionClusterSpec
-
-
-def _requester(db: Session, user_id: int) -> tuple[str, bool]:
-    """신청자 username 과 관리자 여부 — 키페어 기준(사용자 = 포털 SSH 키, 관리자 = OpenStack 키페어)."""
-    row = db.execute(
-        text("""SELECT u.username, EXISTS (SELECT 1 FROM iam_user_role ur JOIN iam_role ro ON ro.id = ur.role_id
-                                            WHERE ur.user_id = u.id AND ro.code = 'admin') AS admin
-                  FROM iam_user u WHERE u.id = :id"""),
-        {"id": user_id},
-    ).mappings().one()
-    return row["username"], row["admin"]
-
-
-@router.get("/tickets/{ticket_id}/keypairs", dependencies=[Depends(require_admin)])
-def ticket_keypairs(ticket_id: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
-    """프로비저닝 때 고를 수 있는 신청자 키페어(관리자) — 신청자가 사용자면 포털 SSH 키, 관리자면 OpenStack(Nova) 키페어.
-    OpenStack 키페어는 식별자가 이름이라 id 에 이름을 넣는다. 템플릿 키페어는 화면이 템플릿에서 읽는다."""
-    requested_by = db.execute(text("SELECT requested_by FROM tkt_request WHERE id = :id"), {"id": ticket_id}).scalar()
-    if requested_by is None:
-        raise HTTPException(404, "신청을 찾을 수 없습니다")
-    username, admin = _requester(db, requested_by)
-    if admin:
-        db.rollback()  # MNT-IAAS 호출 동안 커넥션을 잡지 않게
-        return {"kind": "nova", "items": [{"id": k["name"], "name": k["name"], "fingerprint": k["fingerprint"],
-                                           "publicKey": k["publicKey"]} for k in _iaas("/keypairs", user.token)["items"]]}
-    rows = db.execute(text("SELECT id, name, public_key, fingerprint FROM iam_ssh_key WHERE owner = :o ORDER BY created_at DESC"),
-                      {"o": username}).mappings().all()
-    return {"kind": "ssh", "items": [{"id": str(r["id"]), "name": r["name"], "fingerprint": r["fingerprint"],
-                                      "publicKey": r["public_key"]} for r in rows]}
 
 
 def _quota_short(quota: dict, need: dict) -> list[str]:
@@ -1033,7 +1002,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
         raise HTTPException(503, "Temporal 주소(TEMPORAL_API_BASE)가 설정되지 않았습니다")
     admin_id = _admin_id(db, user.username, "프로비저닝은 관리자만 할 수 있습니다")
     t = db.execute(text("""SELECT status, type, project_id, request_spec, provision_spec, result, error_message,
-                                  provisioning_by, provisioning_at, workflow_id, requested_by
+                                  provisioning_by, provisioning_at, workflow_id
                              FROM tkt_request WHERE id = :id"""),
                    {"id": ticket_id}).mappings().first()
     if t is None:
@@ -1043,7 +1012,6 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     if t["type"] != "cluster" or t["status"] not in ("approved", "failed"):
         raise HTTPException(409, "승인되었거나 실패한 클러스터 신청만 프로비저닝(재시도)할 수 있습니다")
     rs, ps, pid, token = t["request_spec"], body.provisionSpec, t["project_id"], user.token
-    requester, requester_admin = _requester(db, t["requested_by"])
     db.rollback()  # 외부 확인 동안 커넥션을 잡지 않게
 
     master_count = ps.masterCount or rs["masterCount"]
@@ -1055,9 +1023,11 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
         raise HTTPException(400, "클러스터 템플릿에 외부 네트워크(API Floating IP 풀)가 없습니다")
     master, worker = _cluster_flavors(pid, ps.masterFlavorId or rs["masterFlavorId"], ps.flavorId or rs["flavorId"], token)
 
-    # 망·서브넷 — 프로젝트가 쓸 수 있는 망(외부망 제외), DHCP 켜진 서브넷, 그 서브넷으로 API 에 Floating IP 를 붙일 수 있어야
+    # 망·서브넷 — 프로젝트가 쓸 수 있는 망(외부망은 공유된 것만), DHCP 켜진 서브넷, 그 서브넷으로 API 에 Floating IP 를 붙일 수
+    # 있어야 — 외부망에 바로 붙이면 API 는 Floating IP 없이 그 망 주소로 열린다(PAAS 가 API 공인 IP 를 끈다)
     net = next((n for n in _iaas(_project_path(pid) + "/networks", token)["items"]
-                if n["id"] == ps.networkId and n["kind"] != "external"), None)
+                if n["id"] == ps.networkId and (n["kind"] != "external" or n.get("shared"))), None)
+    external = net is not None and net["kind"] == "external"
     if not net:
         raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
     subnet = next((s for s in _iaas(f"/networks/{quote(net['id'], safe='')}", token)["subnets"] if s["id"] == ps.subnetId),
@@ -1066,10 +1036,11 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
         raise HTTPException(400, "서브넷이 고른 네트워크에 속하지 않습니다")
     if not subnet["dhcp"]:
         raise HTTPException(400, "DHCP 가 꺼진 서브넷에는 노드가 주소를 받지 못합니다")
-    chk = _iaas(f"/networks/{quote(net['id'], safe='')}/fip-reachable?floatingNetworkId={quote(floating, safe='')}"
-                f"&subnetId={quote(subnet['id'], safe='')}", token)
-    if not chk["reachable"]:
-        raise HTTPException(400, f"클러스터 API 에 Floating IP 를 붙일 수 없는 네트워크입니다\n{chk['reason']}")
+    if not external:
+        chk = _iaas(f"/networks/{quote(net['id'], safe='')}/fip-reachable?floatingNetworkId={quote(floating, safe='')}"
+                    f"&subnetId={quote(subnet['id'], safe='')}", token)
+        if not chk["reachable"]:
+            raise HTTPException(400, f"클러스터 API 에 Floating IP 를 붙일 수 없는 네트워크입니다\n{chk['reason']}")
 
     # 쿼터 — 노드 VM 수·vCPU·RAM. 실행 때 워크플로가 다시 본다(그 사이 다른 VM 이 쓸 수 있다)
     need = {"instances": master_count + node_count,
@@ -1082,36 +1053,21 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     reason = _cluster_name_reason(db, rs["clusterName"], token, exclude_id=ticket_id)  # 신청 뒤 같은 이름이 생겼을 수 있다
     if reason:
         raise HTTPException(409, reason)
-    # 키페어 — 관리자가 바꿨으면 그 값(신청자 키만), 아니면 신청 값. 둘 다 없으면 템플릿 키페어(public_key 없음)
-    changed = bool({"keypairId", "novaKeypair"} & ps.model_fields_set)
-    key_id = ps.keypairId if changed else (int(rs["keypairId"]) if rs.get("keypairId") else None)
-    nova_name = ps.novaKeypair if changed else rs.get("novaKeypair")
-    if key_id is not None and nova_name:
-        raise HTTPException(400, "키페어는 하나만 지정할 수 있습니다")
-    if changed and nova_name and not requester_admin:
-        raise HTTPException(400, "OpenStack 키페어는 관리자가 신청한 클러스터에만 넣을 수 있습니다")
-    public_key, key_name = None, None
-    if nova_name:  # OpenStack 키페어 — 지금의 공개키를 클러스터 키페어로 넣는다
-        nova_key = _nova_keypair(nova_name, token)
-        if not nova_key:
-            raise HTTPException(400 if changed else 409, "OpenStack 키페어를 찾을 수 없습니다" if changed
-                                else f"신청한 키페어({nova_name})가 삭제되어 노드에 넣을 수 없습니다")
-        public_key, key_name = nova_key["publicKey"], nova_name
-    if key_id is not None:  # 신청자의 포털 SSH 키
-        key = db.execute(text("SELECT name, public_key FROM iam_ssh_key WHERE id = :id AND owner = :o"),
-                         {"id": key_id, "o": requester}).mappings().first()
-        if key is None:
-            raise HTTPException(400 if changed else 409, "신청자의 키페어가 아닙니다" if changed
-                                else f"신청한 키페어({rs.get('keypairName')})가 삭제되어 노드에 넣을 수 없습니다")
-        public_key, key_name = key["public_key"], key["name"]
+    # 키페어 — 이름으로 OpenStack(Nova) 키페어를 찾아 그대로 넘긴다(새로 만들지 않음). 관리자가 바꿨으면 그 값, 아니면 신청 값
+    # (관리자 신청 = OpenStack 키페어, 사용자 신청 = 포털 SSH 키 이름 — 같은 이름의 OpenStack 키페어가 있어야 한다). 없으면 템플릿 키페어
+    changed = "novaKeypair" in ps.model_fields_set
+    key_name = ps.novaKeypair if changed else rs.get("keypairName")
+    if key_name and not _nova_keypair(key_name, token):
+        if changed:
+            raise HTTPException(400, "OpenStack 키페어를 찾을 수 없습니다")
+        raise HTTPException(409, f"신청한 키페어({key_name})가 OpenStack 에 없어 노드에 넣을 수 없습니다"
+                                 " — 프로비저닝 설정에서 다른 키페어를 고르세요")
 
     spec = {"networkId": net["id"], "networkName": net["name"], "subnetId": subnet["id"], "subnetCidr": subnet["cidr"],
             "floatingNetworkId": floating, "masterCount": master_count, "masterFlavorId": master["id"],
             "masterFlavorName": master["name"], "nodeCount": node_count, "flavorId": worker["id"],
             "flavorName": worker["name"],
-            # 넣은 키페어(재시도·상세 표시) — 없으면 템플릿 키페어
-            "keypairId": str(key_id) if key_id is not None else None, "novaKeypair": nova_name or None,
-            "keypairName": key_name}
+            "keypairName": key_name or None}  # 넣은 OpenStack 키페어(재시도·상세 표시) — 없으면 템플릿 키페어
     attempt = db.execute(text("SELECT coalesce(max(attempt), 0) + 1 FROM tkt_provision_step WHERE request_id = :id"),
                          {"id": ticket_id}).scalar()
     workflow_id = f"cluster-provision-{ticket_id}-{attempt}"
@@ -1131,8 +1087,8 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     inp = {"ticketId": ticket_id, "attempt": attempt, "projectId": pid, "projectName": rs["projectName"],
            "clusterName": rs["clusterName"], "templateId": rs["templateId"], "masterCount": master_count,
            "masterFlavorId": master["id"], "nodeCount": node_count, "flavorId": worker["id"],
-           "networkId": net["id"], "subnetId": subnet["id"], "floatingNetworkId": floating, "publicKey": public_key,
-           "namespace": rs["namespace"], "need": need}
+           "networkId": net["id"], "subnetId": subnet["id"], "floatingNetworkId": floating, "externalNetwork": external,
+           "keypair": key_name or None, "namespace": rs["namespace"], "need": need}
     prev = {"status": t["status"], "provisionSpec": t["provision_spec"], "provisioningBy": t["provisioning_by"],
             "provisioningAt": _iso(t["provisioning_at"]), "workflowId": t["workflow_id"],
             "errorMessage": t["error_message"], "result": t["result"]}

@@ -44,13 +44,16 @@ def fake(monkeypatch):
             return {"items": FLAVORS}
         if path.endswith("/networks"):
             return {"items": [{"id": "net", "name": "my-network", "kind": "project"},
-                              {"id": "public", "name": "public", "kind": "external"}]}
+                              {"id": "public", "name": "public", "kind": "external"},
+                              {"id": "pub-shared", "name": "public-shared", "kind": "external", "shared": True}]}
         if "/fip-reachable" in path:
             return state["fip"]
         if path.startswith("/placement-preview"):
             return {"quota": state["quota"]}
         if path == "/networks/net":
             return {"subnets": SUBNETS}
+        if path == "/networks/pub-shared":
+            return {"subnets": [{"id": "sub-pub", "cidr": "192.168.90.0/24", "dhcp": True}]}
         if path == "/keypairs":
             return {"items": state["keypairs"]}
         raise AssertionError(path)
@@ -179,12 +182,21 @@ def test_클러스터_프로비저닝(client, fake, started):
     assert inp | {"need": None} == {
         "ticketId": tid, "attempt": 1, "projectId": PROJECT, "projectName": "okc_test_prj", "clusterName": "test-cl",
         "templateId": "t1", "masterCount": 1, "masterFlavorId": "m1.large", "nodeCount": 2, "flavorId": "m1.rngd",
-        "networkId": "net", "subnetId": "sub-on", "floatingNetworkId": "pub", "publicKey": None,  # 템플릿 키페어
-        "namespace": "okc-test-prj", "need": None}
+        "networkId": "net", "subnetId": "sub-on", "floatingNetworkId": "pub", "externalNetwork": False,
+        "keypair": None, "namespace": "okc-test-prj", "need": None}  # keypair 없음 = 템플릿 키페어
     assert inp["need"] == {"instances": 3, "vcpu": 12, "ramGb": 24}
     assert any("subnetId=sub-on" in p for p in fake["iaas"])  # Floating IP 는 고른 서브넷 기준으로 판정
     spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
     assert (spec["networkName"], spec["subnetCidr"], spec["flavorName"]) == ("my-network", "10.0.1.0/24", "m1.large.rngd")
+
+
+def test_클러스터_프로비저닝_공유_외부망(client, fake, started):
+    # 공유된 외부망은 노드를 바로 붙일 수 있다 — API Floating IP 확인은 하지 않는다(공유 안 된 외부망 거부는 아래 확인 시험)
+    tid = _cluster_ticket()
+    body = {"provisionSpec": {"networkId": "pub-shared", "subnetId": "sub-pub"}}
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=body, headers=ADMIN).status_code == 200
+    assert started[0][1]["externalNetwork"] is True
+    assert not any("/fip-reachable" in p for p in fake["iaas"])
 
 
 def test_클러스터_프로비저닝_노드_조정(client, fake, started):
@@ -195,90 +207,48 @@ def test_클러스터_프로비저닝_노드_조정(client, fake, started):
     assert (inp["nodeCount"], inp["flavorId"], inp["need"]) == (3, "m1.large", {"instances": 4, "vcpu": 16, "ramGb": 32})
 
 
-def test_클러스터_프로비저닝_신청자_키(client, fake, started):
-    tid = _cluster_ticket()
-    key = _ssh_key("admin")
-    sql("""UPDATE tkt_request SET request_spec = request_spec || jsonb_build_object('keypairId', CAST(:k AS text),
-                                                                                    'keypairName', 'k1')
-            WHERE id = :id""", k=key, id=tid)
-    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN).status_code == 200
-    assert started[0][1]["publicKey"] == "ssh-ed25519 AAAA admin@h"
-    # 신청 뒤 키를 지웠으면 시작하지 않는다
-    sql("UPDATE tkt_request SET status = 'failed' WHERE id = :id", id=tid)
-    sql("DELETE FROM iam_ssh_key WHERE id = :k", k=key)
-    r = client.post(f"/api/core/tickets/{tid}/provision-cluster", json={"provisionSpec": PROVISION["provisionSpec"]},
-                    headers=ADMIN)
-    assert (r.status_code, r.json()["detail"]) == (409, "신청한 키페어(k1)가 삭제되어 노드에 넣을 수 없습니다")
-    assert len(started) == 1
-
-
-def test_클러스터_프로비저닝_OpenStack_키페어(client, fake, started):
+def test_클러스터_프로비저닝_키페어는_이름으로_찾아_넘김(client, fake, started):
+    # 신청 키페어 이름(관리자 = OpenStack 키페어, 사용자 = 포털 SSH 키)을 OpenStack 에서 찾아 그 이름을 넘긴다 — 새로 만들지 않음
     tid = _cluster_ticket()
     sql("""UPDATE tkt_request SET request_spec = request_spec || '{"novaKeypair": "gy-yang-pub", "keypairName": "gy-yang-pub"}'
             WHERE id = :id""", id=tid)
     assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN).status_code == 200
-    assert started[0][1]["publicKey"] == "ssh-ed25519 AAAA nova@h"  # 지금 Nova 에 있는 공개키
-    # 신청 뒤 Nova 에서 지웠으면 시작하지 않는다
-    sql("UPDATE tkt_request SET status = 'failed' WHERE id = :id", id=tid)
-    fake["keypairs"] = []
-    r = client.post(f"/api/core/tickets/{tid}/provision-cluster", json={"provisionSpec": PROVISION["provisionSpec"]},
-                    headers=ADMIN)
-    assert (r.status_code, r.json()["detail"]) == (409, "신청한 키페어(gy-yang-pub)가 삭제되어 노드에 넣을 수 없습니다")
-    assert len(started) == 1
+    assert started[0][1]["keypair"] == "gy-yang-pub" and "publicKey" not in started[0][1]
+    spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
+    assert spec["keypairName"] == "gy-yang-pub"
 
 
-def test_신청자_키페어_목록(client, fake):
-    # 사용자 신청 = 그 사용자의 포털 SSH 키, 관리자 신청 = OpenStack 키페어(id = 이름)
-    key = _ssh_key("ek.lee")
-    _ssh_key("admin", "admin-key")
-    user_tid, admin_tid = _cluster_ticket("req-990101-302", requester="ek.lee"), _cluster_ticket()
-    r = client.get(f"/api/core/tickets/{user_tid}/keypairs", headers=ADMIN).json()
-    assert (r["kind"], [(k["id"], k["name"]) for k in r["items"]]) == ("ssh", [(str(key), "k1")])
-    r = client.get(f"/api/core/tickets/{admin_tid}/keypairs", headers=ADMIN).json()
-    assert (r["kind"], r["items"][0]["id"], r["items"][0]["fingerprint"]) == ("nova", "gy-yang-pub", "SHA256:nova")
-    assert client.get(f"/api/core/tickets/{user_tid}/keypairs", headers=bearer(make_token())).status_code == 403
-    assert client.get("/api/core/tickets/req-000000-000/keypairs", headers=ADMIN).status_code == 404
+def test_클러스터_프로비저닝_신청_키페어가_OpenStack_에_없으면(client, fake, started):
+    # 사용자 포털 SSH 키 — 같은 이름의 OpenStack 키페어가 없으면 시작하지 않는다(관리자가 직접 선택으로 바꾼다)
+    tid = _cluster_ticket(requester="ek.lee")
+    key = _ssh_key("ek.lee", "k1")
+    sql("""UPDATE tkt_request SET request_spec = request_spec || jsonb_build_object('keypairId', CAST(:k AS text),
+                                                                                    'keypairName', 'k1')
+            WHERE id = :id""", k=key, id=tid)
+    r = client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (
+        409, "신청한 키페어(k1)가 OpenStack 에 없어 노드에 넣을 수 없습니다 — 프로비저닝 설정에서 다른 키페어를 고르세요")
+    fake["keypairs"].append({"name": "k1", "publicKey": "ssh-ed25519 AAAA k1@h", "fingerprint": "SHA256:k1"})
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN).status_code == 200
+    assert started[0][1]["keypair"] == "k1"
 
 
 def test_클러스터_프로비저닝_키페어_바꾸기(client, fake, started):
+    # 관리자가 직접 고른 OpenStack 키페어 — 없으면 400, null 이면 템플릿 키페어
     tid = _cluster_ticket(requester="ek.lee")
-    k1, k2, admin_key = _ssh_key("ek.lee"), _ssh_key("ek.lee", "k2"), _ssh_key("admin", "admin-key")
-    sql("""UPDATE tkt_request SET request_spec = request_spec || jsonb_build_object('keypairId', CAST(:k AS text),
-                                                                                    'keypairName', 'k1')
-            WHERE id = :id""", k=k1, id=tid)
 
     def provision(**key):
         return client.post(f"/api/core/tickets/{tid}/provision-cluster",
                            json={"provisionSpec": {**PROVISION["provisionSpec"], **key}}, headers=ADMIN)
 
-    for key, detail in [({"keypairId": admin_key}, "신청자의 키페어가 아닙니다"),
-                        ({"novaKeypair": "gy-yang-pub"}, "OpenStack 키페어는 관리자가 신청한 클러스터에만 넣을 수 있습니다"),
-                        ({"keypairId": k2, "novaKeypair": "gy-yang-pub"}, "키페어는 하나만 지정할 수 있습니다")]:
-        r = provision(**key)
-        assert (r.status_code, r.json()["detail"]) == (400, detail)
-    assert provision(keypairId=k2).status_code == 200  # 신청자의 다른 키
-    assert started[0][1]["publicKey"] == "ssh-ed25519 AAAA ek.lee@h"
-    spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
-    assert (spec["keypairId"], spec["keypairName"], spec["novaKeypair"]) == (str(k2), "k2", None)
-    # 둘 다 null = 키페어를 넣지 않음(템플릿 키페어)
-    sql("UPDATE tkt_request SET status = 'approved' WHERE id = :id", id=tid)
-    assert provision(keypairId=None, novaKeypair=None).status_code == 200
-    assert started[1][1]["publicKey"] is None
-    spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
-    assert (spec["keypairId"], spec["keypairName"]) == (None, None)
-
-
-def test_클러스터_프로비저닝_OpenStack_키페어_바꾸기(client, fake, started):
-    tid = _cluster_ticket()  # 관리자 신청 — 템플릿 키페어로 신청했어도 OpenStack 키페어로 바꿀 수 있다
-    r = client.post(f"/api/core/tickets/{tid}/provision-cluster",
-                    json={"provisionSpec": {**PROVISION["provisionSpec"], "novaKeypair": "nope"}}, headers=ADMIN)
+    r = provision(novaKeypair="nope")
     assert (r.status_code, r.json()["detail"]) == (400, "OpenStack 키페어를 찾을 수 없습니다")
-    r = client.post(f"/api/core/tickets/{tid}/provision-cluster",
-                    json={"provisionSpec": {**PROVISION["provisionSpec"], "novaKeypair": "gy-yang-pub"}}, headers=ADMIN)
-    assert r.status_code == 200
-    assert started[0][1]["publicKey"] == "ssh-ed25519 AAAA nova@h"
-    spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
-    assert (spec["novaKeypair"], spec["keypairName"], spec["keypairId"]) == ("gy-yang-pub", "gy-yang-pub", None)
+    assert provision(novaKeypair="gy-yang-pub").status_code == 200
+    assert started[0][1]["keypair"] == "gy-yang-pub"
+    sql("UPDATE tkt_request SET status = 'approved' WHERE id = :id", id=tid)
+    assert provision(novaKeypair=None).status_code == 200
+    assert started[1][1]["keypair"] is None
+    assert sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()["keypairName"] is None
 
 
 @pytest.mark.parametrize("spec,setup,status,detail", [
@@ -330,16 +300,20 @@ def test_클러스터_프로비저닝_시작_실패면_되돌림(client, fake, m
 def test_단계_등록과_접근_권한(client):
     tid = _cluster_ticket(status="provisioning")
     plan = activities.init_steps_paas(tid, 1)
-    assert [p["sub"] for p in plan] == ["check_name", "check_quota", "check_network", "send_request",
-                                        "create_control_plane", "create_workers", "check_api", "create_namespace",
-                                        "grant_access"]
-    assert {p["step"] for p in plan[:3]} == {"check_creatable"} and plan[6]["step"] == "create_cluster"
+    assert [p["sub"] for p in plan] == ["check_name", "check_quota", "check_network", "send_request", "prepare_api",
+                                        "create_cp_vm", "init_control_plane", "create_workers", "create_control_plane",
+                                        "finish_cluster", "check_api", "create_namespace", "grant_access"]
+    assert {p["step"] for p in plan[:3]} == {"check_creatable"} and plan[9]["step"] == "create_cluster"
+    assert plan[10] == {"step": "setup_cluster", "sub": "check_api"}  # K8s API 연결은 클러스터를 다 만든 뒤 단계
     assert activities.init_steps_paas(tid, 1) == plan  # 다시 불러도 같은 결과(재시도)
     assert sql("SELECT count(*) FROM tkt_provision_step WHERE request_id = :id", id=tid).scalar() == 3
     # 진행 조회 API 가 공통코드 이름으로 보여 준다
     steps = client.get(f"/api/core/tickets/{tid}/steps", headers=ADMIN).json()
     assert [s["message"] for s in steps["items"]] == ["클러스터 생성 가능 여부 확인중", "클러스터 생성", "네임스페이스 및 접근 권한"]
-    assert [d["label"] for d in steps["items"][1]["details"]][-1] == "K8s API 연결"
+    assert [d["label"] for d in steps["items"][1]["details"]] == [
+        "생성 요청 전송", "API 로드밸런서·공인 IP", "Control Plane VM 생성", "Control Plane 초기화", "Worker VM 생성", "노드 준비",
+        "클러스터 마무리"]
+    assert [d["label"] for d in steps["items"][2]["details"]][0] == "K8s API 연결"
 
     for _ in range(2):  # 멱등 — NULL namespace 도 한 줄만
         activities.grant_cluster_access(PROJECT, "c-1")

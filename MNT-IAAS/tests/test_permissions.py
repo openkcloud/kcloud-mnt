@@ -128,6 +128,18 @@ def test_네트워크_목록은_소속_망과_공유_외부망(monkeypatch):
     assert [n["id"] for n in client_as(USER).get(P + "/networks").json()["items"]] == ["mine", "ext", "shr"]
 
 
+def test_승인용_네트워크의_공유_여부(monkeypatch):
+    # 공유된 외부망(pub)에는 노드를 바로 붙일 수 있다 — 공유 안 된 외부망(ext)은 안 된다. RBAC 공유(rbac)도 공유
+    nets = [{"id": "mine", "project_id": MINE}, {"id": "ext", "project_id": OTHER, "router:external": True},
+            {"id": "pub", "project_id": OTHER, "router:external": True, "shared": True}, {"id": "rbac", "project_id": OTHER}]
+    fake = {"/networks": {"networks": nets}, "/subnets": {"subnets": []},
+            "/rbac-policies": {"rbac_policies": [{"object_id": "rbac", "target_tenant": MINE}]}}
+    monkeypatch.setattr(networks, "_neutron_get", lambda path, params=None: fake[path])
+    items = client_as(USER).get(P + f"/projects/{MINE}/networks").json()["items"]
+    assert {n["id"]: (n["kind"], n["shared"]) for n in items} == {
+        "mine": ("project", False), "ext": ("external", False), "pub": ("external", True), "rbac": ("shared", True)}
+
+
 def test_이미지는_공개와_소속_프로젝트_것(monkeypatch):
     imgs = [{"id": "pub", "owner": OTHER, "visibility": "public"}, {"id": "mine", "owner": MINE, "visibility": "private"},
             {"id": "oth", "owner": OTHER, "visibility": "private"}]

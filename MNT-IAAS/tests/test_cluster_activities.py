@@ -65,6 +65,14 @@ def test_노드_망_불가(monkeypatch, subnet, reachable, msg):
     assert e.value.non_retryable and str(e.value) == msg
 
 
+def test_공유_외부망은_Floating_IP_확인을_하지_않음(monkeypatch):
+    _neutron(monkeypatch, reachable=(False, "게이트웨이 없음"))
+    real = networks._neutron_get
+    monkeypatch.setattr(networks, "_neutron_get", lambda path, params=None: (
+        {"network": {**NET, "name": "public", "router:external": True}} if path == "/networks/net" else real(path, params)))
+    assert activities.check_network("net", "sub", "pub") == "public / 10.0.1.0/24"  # API 는 Floating IP 없이 그 망 주소로
+
+
 def test_없는_서브넷(monkeypatch):
     _neutron(monkeypatch)
     with pytest.raises(ApplicationError) as e:
