@@ -232,15 +232,16 @@ def test_노드_콘솔에_네트워크_실패가_보이면_문제로(monkeypatch
 
 
 class _K8s:
-    """가짜 워크로드 K8s API — kube-system 파드 목록과 직전 로그."""
+    """가짜 워크로드 K8s API — openstack-system 파드 목록과 직전 로그(Magnum 클러스터의 OCCM 은 이 네임스페이스의 DaemonSet)."""
     def __init__(self, restarts, log):
         self.restarts, self.log = restarts, log
 
     def get(self, path, params=None, timeout=None):
         if path.endswith("/log"):
             return httpx.Response(200, text=self.log, request=httpx.Request("GET", "http://k8s.test"))
+        occm = path.startswith("/api/v1/namespaces/openstack-system/")
         pods = {"items": [{"metadata": {"name": "openstack-cloud-controller-manager-x"},
-                           "status": {"containerStatuses": [{"name": "occm", "restartCount": self.restarts}]}}]}
+                           "status": {"containerStatuses": [{"name": "occm", "restartCount": self.restarts}]}}] if occm else []}
         return httpx.Response(200, json=pods, request=httpx.Request("GET", "http://k8s.test"))
 
 
