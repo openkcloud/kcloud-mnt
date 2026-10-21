@@ -33,7 +33,7 @@ _REQUEST_ROLES = ["owner", "member"]  # 신청 가능한 프로젝트 멤버 역
 _MAX_VOLUME_GB = 500
 
 
-def _service_get(base: str, module: str, setting: str, what: str, path: str, token: str):
+def _service_get(base: str, module: str, setting: str, what: str, path: str, token: str, timeout: float = 30):
     """다른 백엔드 GET(JSON) — 요청한 사용자의 토큰을 그대로 넘긴다(그 백엔드가 같은 기준으로 권한 판정).
     주소 미설정은 503, 권한 거부(401·403)는 그대로, 그 밖의 연결·응답 실패는 502."""
     label = f"{what}({module})"
@@ -41,7 +41,7 @@ def _service_get(base: str, module: str, setting: str, what: str, path: str, tok
         raise HTTPException(503, f"{module} 주소({setting})가 설정되지 않았습니다")
     req = urllib.request.Request(base + path, headers={"Authorization": f"Bearer {token}"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
@@ -56,10 +56,10 @@ def _service_get(base: str, module: str, setting: str, what: str, path: str, tok
         raise HTTPException(502, f"{label} 실패: {e}")
 
 
-def _iaas(path: str, token: str):
+def _iaas(path: str, token: str, timeout: float = 30):
     """MNT-IAAS GET(JSON) — OpenStack 라이브 조회."""
     base = settings.iaas_api_base and settings.iaas_api_base.rstrip("/") + "/api/iaas"
-    return _service_get(base, "MNT-IAAS", "IAAS_API_BASE", "OpenStack 조회", path, token)
+    return _service_get(base, "MNT-IAAS", "IAAS_API_BASE", "OpenStack 조회", path, token, timeout)
 
 
 def _paas(path: str, token: str):
@@ -192,7 +192,8 @@ def requestable_projects(user: CurrentUser = Depends(current_user), db: Session 
     if not rows:
         return {"items": []}
     db.rollback()  # 조회 트랜잭션을 닫고 MNT-IAAS 를 호출한다(호출 동안 커넥션을 잡지 않게)
-    live = {p["id"]: p for p in _iaas("/projects", user.token)["items"] if p.get("enabled", True)}
+    # 화면이 한 번에 5초씩 최대 3번 시도하는 조회 — 서버도 5초 넘게 붙잡지 않는다
+    live = {p["id"]: p for p in _iaas("/projects", user.token, timeout=5)["items"] if p.get("enabled", True)}
     items = [{"id": r["project_id"], "name": live[r["project_id"]]["name"], "role": r["role"],
               "orgId": str(r["org_id"]) if r["org_id"] is not None else None, "orgName": r["org_name"]}
              for r in rows if r["project_id"] in live]

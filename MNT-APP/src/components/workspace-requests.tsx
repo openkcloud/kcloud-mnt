@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAuth } from "@/lib/auth";
 import { useProfiles } from "@/lib/ainb-api";
-import { useCreateAiWorkspaceTicket, useTicketProjects, useTickets } from "@/lib/ticket-api";
+import { projectsLoadingText, useCreateAiWorkspaceTicket, useTicketProjects, useTickets } from "@/lib/ticket-api";
 import type { RequestStatus, ResourceRequest } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
 
@@ -90,7 +90,7 @@ export function WorkspaceLimitFields({
 export function WorkspaceRequestForm({ onDone }: { onDone: () => void }) {
   const user = useAuth((s) => s.user);
   const create = useCreateAiWorkspaceTicket();
-  const { data: projects = [], isLoading, error } = useTicketProjects(user?.username);
+  const { data: projects = [], isLoading, error, failureCount } = useTicketProjects(user?.username);
   // 이미 워크스페이스가 있는 프로젝트는 고를 수 없다 (프로젝트당 1개 — 서버도 다시 확인)
   const { data: prof } = useProfiles() as { data?: { items: { name: string; projectId?: string | null }[] } };
   const taken = new Map((prof?.items ?? []).flatMap((p) => (p.projectId ? [[p.projectId, p.name] as const] : [])));
@@ -125,7 +125,7 @@ export function WorkspaceRequestForm({ onDone }: { onDone: () => void }) {
       <div className="space-y-1.5">
         <Label>프로젝트</Label>
         {isLoading ? (
-          <p className="text-xs text-muted-foreground">프로젝트를 불러오는 중…</p>
+          <p className="text-xs text-muted-foreground">{projectsLoadingText(failureCount)}</p>
         ) : error ? (
           <p className="text-xs text-rose-600">프로젝트를 불러오지 못했습니다 ({error.message}).</p>
         ) : projects.length === 0 ? (
