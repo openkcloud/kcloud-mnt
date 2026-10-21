@@ -4,6 +4,7 @@
  * 티켓 관련 호출은 MSW 목업으로 폴백하지 않는다 — 실패하면 오류를 보여준다(실제 티켓과 목업 데이터가 섞이지 않게).
  */
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { LOOKUP, lookupRetry, withTimeout } from "@/lib/http";
 import { coreFetch } from "@/lib/menu-api";
 import type { ClusterProvisionSpec, Org, ProvisionSpec, ProvisionStepsResp, ResourceRequest } from "@/lib/types";
 
@@ -13,10 +14,15 @@ export function useTicketProjects(username: string | undefined) {
   return useQuery({
     queryKey: ["tickets", "projects", username],
     enabled: !!username,
-    queryFn: async (): Promise<TicketProject[]> =>
-      (await coreFetch<{ items: TicketProject[] }>(`/tickets/projects`)).items,
-    retry: 0,
+    queryFn: ({ signal }) => withTimeout(LOOKUP.timeoutMs, signal, async (s): Promise<TicketProject[]> =>
+      (await coreFetch<{ items: TicketProject[] }>(`/tickets/projects`, { signal: s })).items),
+    ...lookupRetry, // 한 번에 5초, 최대 3번 — 화면은 failureCount 로 "(n/3)" 표시
   });
+}
+
+/** 프로젝트 목록 조회 중 문구 — 몇 번째 시도인지(n/3). */
+export function projectsLoadingText(failureCount: number) {
+  return `프로젝트 목록 가져오는 중…(${Math.min(failureCount + 1, LOOKUP.attempts)}/${LOOKUP.attempts})`;
 }
 
 /** VM 이름 사용 가능 여부(같은 프로젝트의 기존 VM + 진행 중 티켓 — 완료·반려 제외). */

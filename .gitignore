@@ -69,3 +69,6 @@ Thumbs.db
 
 # 로컬 전체 기동 스크립트(dev-all.sh) 로그
 .dev-logs/
+
+# git 워크트리
+/git-worktree/

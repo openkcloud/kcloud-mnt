@@ -56,3 +56,29 @@ export async function authFetch(url: string, init: RequestInit = {}): Promise<Re
   }
   return res;
 }
+
+// ── 조회 시간 제한·재시도 ─────────────────────────────────────────
+
+/** 조회 한 번에 5초, 최대 3번 — 화면은 "…(n/3)" 으로 몇 번째 시도인지 보여 준다. */
+export const LOOKUP = { timeoutMs: 5000, attempts: 3 };
+
+/** 정한 시간 안에 응답이 없음 — 다시 시도한다. */
+export class TimeoutError extends Error {}
+
+/** run 을 ms 안에 끝내지 못하면 요청을 끊고 TimeoutError(토큰 갱신 시간 포함). signal 은 react-query 의 취소 신호. */
+export function withTimeout<T>(ms: number, signal: AbortSignal, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const timeout = AbortSignal.timeout(ms);
+  const both = AbortSignal.any([signal, timeout]);
+  return new Promise<T>((resolve, reject) => {
+    both.addEventListener("abort", () => reject(timeout.aborted ? new TimeoutError(`${ms / 1000}초 안에 응답이 없습니다`) : both.reason),
+      { once: true });
+    run(both).then(resolve, reject);
+  });
+}
+
+/** react-query 재시도 규칙 — 시간 초과·연결 실패·5xx 만 다시(4xx 는 다시 해도 같다). 바로 실패한 경우는 1초 쉬고. */
+export const lookupRetry = {
+  retry: (failureCount: number, error: Error) =>
+    failureCount < LOOKUP.attempts - 1 && !(error instanceof ApiError && error.status < 500),
+  retryDelay: (_failureCount: number, error: Error) => (error instanceof TimeoutError ? 0 : 1000),
+};

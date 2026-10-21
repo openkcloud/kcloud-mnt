@@ -140,7 +140,7 @@ def test_승인은_관리자만(client):
 
 
 def test_관리자는_멤버가_아니어도_모든_조직_프로젝트에_신청(client, monkeypatch):
-    monkeypatch.setattr(tickets, "_iaas", lambda path, token: {"items": [{"id": PROJECT, "name": "okc_test_prj"}]})
+    monkeypatch.setattr(tickets, "_iaas", lambda path, token, **kw: {"items": [{"id": PROJECT, "name": "okc_test_prj"}]})
     user, admin = bearer(make_token()), bearer(make_token("admin"))
     assert client.get("/api/core/tickets/projects", headers=user).json()["items"] == []
     assert [p["id"] for p in client.get("/api/core/tickets/projects", headers=admin).json()["items"]] == [PROJECT]
@@ -178,10 +178,17 @@ def test_디바이스_프로파일이_없는_스펙은_신청_불가(client, mon
 def test_IAAS_호출에_사용자_토큰_전달(client, monkeypatch):
     add_member("ek.lee")
     seen = []
-    monkeypatch.setattr(tickets, "_iaas", lambda path, token: seen.append(token) or {"items": [{"id": PROJECT, "name": "p"}]})
+    monkeypatch.setattr(tickets, "_iaas", lambda path, token, **kw: seen.append(token) or {"items": [{"id": PROJECT, "name": "p"}]})
     t = make_token()
     assert client.get("/api/core/tickets/projects?username=admin", headers=bearer(t)).json()["items"][0]["id"] == PROJECT
     assert seen == [t]
+
+
+def test_프로젝트_목록은_IAAS_를_5초_제한으로_조회(client, monkeypatch):
+    seen = []
+    monkeypatch.setattr(tickets, "_iaas", lambda path, token, **kw: seen.append((path, kw)) or {"items": []})
+    assert client.get("/api/core/tickets/projects", headers=bearer(make_token("admin"))).status_code == 200
+    assert seen == [("/projects", {"timeout": 5})]  # 화면이 5초씩 다시 시도한다 — 서버도 5초 넘게 기다리지 않게
 
 
 # ── 세션 ──────────────────────────────────────────────────────────

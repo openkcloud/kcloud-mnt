@@ -37,7 +37,7 @@ import { useAuth } from "@/lib/auth";
 import { useProjectFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
 import { useClusterTemplates } from "@/lib/paas-api";
 import {
-  useClusterNameCheck, useCreateClusterTicket, useCreateTicket, useTicketProjects, useVmNameCheck,
+  projectsLoadingText, useClusterNameCheck, useCreateClusterTicket, useCreateTicket, useTicketProjects, useVmNameCheck,
 } from "@/lib/ticket-api";
 import { useSshKeys } from "@/lib/sshkey-api";
 import { WorkspaceRequestForm } from "@/components/workspace-requests";
@@ -167,7 +167,7 @@ const PURPOSE_MAX = 300;
 function VmRequestForm({ onDone }: { onDone: () => void }) {
   const user = useAuth((s) => s.user);
   const createTicket = useCreateTicket();
-  const { data: projects = [], isLoading: projLoading, error: projError } = useTicketProjects(user?.username);
+  const { data: projects = [], isLoading: projLoading, error: projError, failureCount: projFails } = useTicketProjects(user?.username);
 
   const [step, setStep] = React.useState<StepKey>("project");
   const [vmName, setVmName] = React.useState("");
@@ -300,7 +300,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
           <p className="text-xs text-muted-foreground">할당된 프로젝트 목록입니다. 가상머신을 생성할 프로젝트를 선택하세요.</p>
           <div className="grid gap-2">
             {projLoading ? (
-              <p className="text-xs text-muted-foreground">프로젝트를 불러오는 중…</p>
+              <p className="text-xs text-muted-foreground">{projectsLoadingText(projFails)}</p>
             ) : projError ? (
               <LoadError what="프로젝트" message={projError.message} />
             ) : projects.length === 0 && (
@@ -741,7 +741,7 @@ function ReviewRow({ label, value, mono, accent }: {
 function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const user = useAuth((s) => s.user);
   const createTicket = useCreateClusterTicket();
-  const { data: projects = [], isLoading: projLoading, error: projError } = useTicketProjects(user?.username);
+  const { data: projects = [], isLoading: projLoading, error: projError, failureCount: projFails } = useTicketProjects(user?.username);
   const { data: allTemplates = [], isLoading: tplLoading, error: tplError } = useClusterTemplates();
 
   const [step, setStep] = React.useState<ClusterStepKey>("basic");
@@ -839,7 +839,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
             <Label>프로젝트</Label>
             <div className="grid gap-2">
               {projLoading ? (
-                <p className="text-xs text-muted-foreground">프로젝트를 불러오는 중…</p>
+                <p className="text-xs text-muted-foreground">{projectsLoadingText(projFails)}</p>
               ) : projError ? (
                 <LoadError what="프로젝트" message={projError.message} />
               ) : projects.length === 0 && (
