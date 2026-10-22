@@ -65,6 +65,45 @@ def namespaces(cluster_id: str):
     return {"items": [n["metadata"]["name"] for n in d.get("items", [])]}
 
 
+# 노드 라벨에서 모델명을 주는 키(벤더 feature-discovery)
+_ACCEL_PRODUCT_LABELS = ("nvidia.com/gpu.product",)
+
+
+@router.get("/clusters/{cluster_id}/accelerators")
+def accelerators(cluster_id: str):
+    """클러스터가 실제 보유한 가속기만 — 노드 allocatable 합산 + 노드 라벨의 모델명.
+
+    워크로드 생성 시 '이 클러스터에 있는 가속기'만 고르게 하기 위함.
+    반환: [{kind(확장 리소스 키), count(합계), products(모델 라벨 distinct)}]
+    """
+    try:
+        d = k8s_get(cluster_id, "/api/v1/nodes")
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+    agg: dict[str, int] = {}
+    products: dict[str, set[str]] = {}
+    for n in d.get("items", []):
+        alloc = (n.get("status") or {}).get("allocatable") or {}
+        labels = (n.get("metadata") or {}).get("labels") or {}
+        node_products = [labels[k] for k in _ACCEL_PRODUCT_LABELS if labels.get(k)]
+        for key in _ACCEL_KEYS:
+            try:
+                cnt = int(alloc.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                cnt = 0
+            if cnt <= 0:
+                continue
+            agg[key] = agg.get(key, 0) + cnt
+            # nvidia 처럼 노드 라벨로만 모델을 아는 경우 그 노드의 product 라벨을 연결
+            for p in node_products:
+                products.setdefault(key, set()).add(p)
+    items = [
+        {"kind": k, "count": agg[k], "products": sorted(products.get(k, set()))}
+        for k in sorted(agg)
+    ]
+    return {"items": items}
+
+
 @router.get("/clusters/{cluster_id}/workloads")
 def workloads(cluster_id: str, namespace: str | None = Query(None)):
     """Deployment·StatefulSet·DaemonSet·Job·CronJob 통합 목록."""
