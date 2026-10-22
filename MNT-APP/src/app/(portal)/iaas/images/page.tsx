@@ -138,7 +138,7 @@ export default function ImagesPage() {
       </Card>
 
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="max-w-2xl">
           {selected && <ImageDetailBody image={selected} projectLabel={projName(selected.tenantId)} />}
         </DialogContent>
       </Dialog>
@@ -252,7 +252,7 @@ function ImageProperties({ imageId, properties }: { imageId: string; properties:
         {keys.length === 0 && <p className="text-[11px] text-muted-foreground">등록된 속성이 없습니다.</p>}
         {keys.map((k) => (
           <div key={k} className="flex items-center gap-2">
-            <span className="w-40 shrink-0 truncate font-mono text-[11px]" title={k}>{k}</span>
+            <span className="w-56 shrink-0 break-all font-mono text-[11px]" title={k}>{k}</span>
             <Input value={draft[k]} onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))} className="h-8 font-mono text-xs" />
             <Button variant="ghost" size="icon-sm" title="속성 제거" onClick={() => removeKey(k)}><X className="size-3.5 text-rose-600" /></Button>
           </div>
