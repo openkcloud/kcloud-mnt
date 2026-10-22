@@ -110,3 +110,21 @@ def test_VM_프로비저닝_OpenStack_키페어(client, iaas_vm, monkeypatch):
     r = client.post("/api/core/tickets/req-990101-402/provision", json=body, headers=ADMIN)
     assert (r.status_code, r.json()["detail"]) == (409, "신청한 키페어(gy-yang-pub)가 삭제되어 주입할 수 없습니다")
     assert len(started) == 1
+
+
+# ── 조직 없는 프로젝트(v0.4 — 프로젝트 생성 때 조직 없이 포털에 등록) ─────────────────
+
+@pytest.fixture
+def orgless():
+    org = sql("SELECT org_id FROM iam_project WHERE project_id = :p", p=PROJECT).scalar()
+    sql("UPDATE iam_project SET org_id = NULL WHERE project_id = :p", p=PROJECT)
+    yield
+    sql("UPDATE iam_project SET org_id = :o WHERE project_id = :p", o=org, p=PROJECT)
+
+
+def test_조직_없는_프로젝트도_신청되고_목록에_보인다(client, iaas_vm, orgless):
+    r = client.post("/api/core/tickets", json=VM_BODY, headers=ADMIN)
+    assert r.status_code == 201, r.text
+    t = r.json()
+    assert (t["orgId"], t["orgName"]) == (None, None)
+    assert t["id"] in [x["id"] for x in client.get("/api/core/tickets", headers=ADMIN).json()["items"]]
