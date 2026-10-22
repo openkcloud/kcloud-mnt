@@ -18,12 +18,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import {
-  useFlavors, useDeviceProfiles, useCreateFlavor, useDeleteFlavor, profileTraits, type FlavorSummary,
+  useFlavors, useDeviceProfiles, useCreateFlavor, useDeleteFlavor, profileTraits,
+  useAccelModels, accelLabelResolver, type FlavorSummary,
 } from "@/lib/iaas-api";
 
 // 플레이버 — OpenStack Nova 실연동. 전역(admin) 자원이라 프로젝트 컬럼 없음. 가속기=Cyborg device-profile.
 export default function FlavorsPage() {
   const { data, isLoading } = useFlavors();
+  const dps = useDeviceProfiles();
+  const accelModels = useAccelModels();
+  const accelLabel = accelLabelResolver(dps.data, accelModels.data); // 가속기 배지 = dp 이름 → 모델명
   const del = useDeleteFlavor();
   const confirm = useConfirm();
   const [q, setQ] = React.useState("");
@@ -82,7 +86,7 @@ export default function FlavorsPage() {
                 <TableCell className="text-center font-mono tabular-nums">{(f.ramMb / 1024).toFixed(f.ramMb % 1024 ? 1 : 0)}GB</TableCell>
                 <TableCell className="text-center font-mono tabular-nums">{f.diskGb}GB</TableCell>
                 <TableCell>
-                  {f.accelerator ? <Badge variant={f.deviceProfileMissing ? "warning" : "default"} className="font-mono text-[10px]">{f.accelerator}</Badge> : <span className="text-muted-foreground">—</span>}
+                  {f.accelerator ? <Badge variant={f.deviceProfileMissing ? "warning" : "default"} className="font-mono text-[10px]" title={f.accelerator}>{accelLabel(f.accelerator)}</Badge> : <span className="text-muted-foreground">—</span>}
                   {f.deviceProfileMissing && <div className="mt-1 text-[11px] text-amber-700">연결된 디바이스 프로파일이 존재하지 않습니다.</div>}
                 </TableCell>
                 <TableCell>{f.isPublic ? <Badge variant="success" className="text-[10px]">public</Badge> : <Badge variant="outline" className="text-[10px]">private</Badge>}</TableCell>

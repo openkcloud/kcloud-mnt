@@ -3,6 +3,7 @@
 플레이버는 '전역(admin)' 자원 — 프로젝트 소속 아님(프로젝트 컬럼 없음).
 환경독립: override=template.format(service=...)+버전, catalog=service_type.
 """
+import json
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -289,9 +290,20 @@ def accelerator_devices(type: str | None = Query(None), vendor: str | None = Que
             usage = "unknown"
         else:
             usage = "available"
+        # std_board_info(JSON 문자열) → product_id — 포털 모델명 매핑 키
+        sbi = dev.get("std_board_info")
+        product_id = None
+        if isinstance(sbi, str):
+            try:
+                product_id = (json.loads(sbi) or {}).get("product_id")
+            except ValueError:
+                product_id = None
+        elif isinstance(sbi, dict):
+            product_id = sbi.get("product_id")
         items.append({
             "id": did, "uuid": duuid, "hostname": dev.get("hostname"),
             "type": dev.get("type"), "model": dev.get("model"), "vendor": dev.get("vendor"),
+            "productId": (product_id or "").lower() or None,
             "resourceClasses": sorted(set(rcs)), "traits": sorted(set(traits)),
             "usage": usage, "instances": instances,
         })
