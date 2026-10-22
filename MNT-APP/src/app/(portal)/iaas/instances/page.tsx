@@ -17,7 +17,8 @@ import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useAuth } from "@/lib/auth";
 import { useMyProjectIds } from "@/lib/member-api";
 import {
-  useServers, usePowerAction, useDeleteServer, useProjects, byProjectThenName, type ServerSummary,
+  useServers, usePowerAction, useDeleteServer, useProjects, byProjectThenName,
+  useDeviceProfiles, useAccelModels, accelLabelResolver, type ServerSummary,
 } from "@/lib/iaas-api";
 
 const STATUS_VARIANT: Record<string, "success" | "secondary" | "warning" | "outline"> = {
@@ -33,6 +34,9 @@ export default function InstancesPage() {
   const { data: myProjectIds } = useMyProjectIds(isAdmin ? undefined : myUsername);
   const { data, isLoading } = useServers();
   const { data: projData } = useProjects();
+  const dps = useDeviceProfiles();
+  const accelModels = useAccelModels();
+  const accelLabel = accelLabelResolver(dps.data, accelModels.data);
   const [q, setQ] = React.useState("");
   const [projFilter, setProjFilter] = React.useState("all");
   const [statusFilter, setStatusFilter] = React.useState("all");
@@ -126,7 +130,7 @@ export default function InstancesPage() {
                 </TableCell>
                 <TableCell><Badge variant={stVariant(s.status)} className="text-[10px]">{s.status}</Badge></TableCell>
                 <TableCell className="font-mono text-xs">{s.flavorName}</TableCell>
-                <TableCell>{s.accelerator ? <Badge variant="default" className="font-mono text-[10px]">{s.accelerator}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
+                <TableCell>{s.accelerator ? <Badge variant="default" className="font-mono text-[10px]" title={s.accelerator}>{accelLabel(s.accelerator)}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
                 <TableCell className="font-mono text-[11px]">{s.addresses.map((a) => a.ip).join(", ") || "—"}</TableCell>
                 <TableCell className="font-mono text-[11px] text-muted-foreground">{s.host || "—"}</TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>

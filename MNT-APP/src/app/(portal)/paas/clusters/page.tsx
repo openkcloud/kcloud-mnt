@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
-import { useProjects, useFlavors } from "@/lib/iaas-api";
+import { useProjects, useFlavors, useDeviceProfiles, useAccelModels, accelLabelResolver } from "@/lib/iaas-api";
 import { useClusters, useCluster, useDeleteCluster, downloadKubeconfig, type ClusterSummary } from "@/lib/paas-api";
 import { useAuth } from "@/lib/auth";
 import {
@@ -98,12 +98,15 @@ export default function ClustersPage() {
     return (id: string) => m[id] || id.slice(0, 8) || "—";
   }, [projects.data]);
 
-  /** flavor 이름 → 가속기 표기(dp-rngd 등). IaaS flavors 의 extra_spec 매핑 재사용. */
+  /** flavor 이름 → 가속기 모델명(매핑). dp-rngd 등 device-profile 이름을 모델명으로 치환. */
+  const dps = useDeviceProfiles();
+  const accelModels = useAccelModels();
   const flavorAccel = React.useMemo(() => {
+    const label = accelLabelResolver(dps.data, accelModels.data);
     const m = new Map<string, string>();
-    for (const f of flavors.data ?? []) if (f.accelerator) m.set(f.name, f.accelerator);
+    for (const f of flavors.data ?? []) if (f.accelerator) m.set(f.name, label(f.accelerator) ?? f.accelerator);
     return m;
-  }, [flavors.data]);
+  }, [flavors.data, dps.data, accelModels.data]);
 
   // 내가 볼 수 있는 클러스터 = 관리자 전체 / 사용자는 내 프로젝트에 접근 부여된 클러스터만(DB 매핑)
   const visible = React.useMemo(
