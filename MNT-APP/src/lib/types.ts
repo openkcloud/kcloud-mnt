@@ -624,8 +624,8 @@ export interface ResourceRequest {
   requestedByName: string;
   requesterOrgName?: string | null; // 신청자 본인 조직
   requestedAt: string;
-  orgId?: string;   // 프로젝트 조직
-  orgName?: string;
+  orgId?: string | null;   // 프로젝트 조직(없을 수 있음)
+  orgName?: string | null;
   projectId: string;
   projectName: string;
   // VM

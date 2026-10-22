@@ -140,7 +140,7 @@ _SELECT = """
       JOIN iam_user u ON u.id = r.requested_by
       LEFT JOIN iam_org ro ON ro.id = u.org_id  -- 신청자 본인 조직(관리자는 다른 조직 프로젝트에도 신청)
       JOIN iam_project p ON p.project_id = r.project_id
-      JOIN iam_org o ON o.id = p.org_id
+      LEFT JOIN iam_org o ON o.id = p.org_id  -- 프로젝트 조직은 선택(v0.4)
       LEFT JOIN iam_user ap ON ap.id = r.approved_by
       LEFT JOIN iam_user pv ON pv.id = r.provisioning_by
       LEFT JOIN iam_user ar ON ar.id = r.approved_reject_by
@@ -163,7 +163,7 @@ def _to_item(r) -> dict:
         "requestedByName": r["requester_name"],
         "requesterOrgName": r["requester_org_name"],  # 신청자 조직 — orgId·orgName 은 프로젝트 조직
         "requestedAt": r["created_at"].isoformat(),
-        "orgId": str(r["org_id"]),
+        "orgId": str(r["org_id"]) if r["org_id"] is not None else None,
         "orgName": r["org_name"],
         "projectId": r["project_id"],
         "provisionSpec": r["provision_spec"],
