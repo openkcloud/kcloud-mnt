@@ -217,8 +217,8 @@ function ModelMappingCard({ devices, byPid }: { devices: AcceleratorDevice[]; by
   }
   function remove(pid: string) {
     del.mutate(pid, {
-      onSuccess: () => { toast.success("매핑 삭제됨"); setEdits((s) => { const n = { ...s }; delete n[pid]; return n; }); },
-      onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }),
+      onSuccess: () => { toast.success("매핑 해제됨"); setEdits((s) => { const n = { ...s }; delete n[pid]; return n; }); },
+      onError: (e) => toast.error("매핑 해제 실패", { description: String((e as Error).message) }),
     });
   }
 
@@ -235,7 +235,7 @@ function ModelMappingCard({ devices, byPid }: { devices: AcceleratorDevice[]; by
             <TableHead>벤더 (PCI ID)</TableHead>
             <TableHead>product_id</TableHead>
             <TableHead>모델명</TableHead>
-            <TableHead className="w-32" />
+            <TableHead className="w-44" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -250,7 +250,7 @@ function ModelMappingCard({ devices, byPid }: { devices: AcceleratorDevice[]; by
               <TableCell>
                 <div className="flex gap-1">
                   <Button size="sm" className="h-8" disabled={upsert.isPending} onClick={() => save(productId, vendor)}>저장</Button>
-                  {byPid[productId] && <Button size="sm" variant="ghost" className="h-8" disabled={del.isPending} onClick={() => remove(productId)}>삭제</Button>}
+                  {byPid[productId] && <Button size="sm" variant="outline" className="h-8" disabled={del.isPending} onClick={() => remove(productId)}>매핑 해제</Button>}
                 </div>
               </TableCell>
             </TableRow>
