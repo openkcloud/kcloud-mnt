@@ -719,6 +719,65 @@ export function useDeviceProfiles() {
     staleTime: 5 * 60 * 1000, retry: 0,
   });
 }
+
+// ── 가속기 모델명 매핑(포털 DB, MNT-CORE) — Cyborg 가 모델명을 안 줘서 product_id → 모델명 관리 ──
+export interface AccelModel { productId: string; vendor: string | null; model: string }
+export function useAccelModels() {
+  return useQuery({
+    queryKey: ["core-accel-models"],
+    queryFn: async (): Promise<AccelModel[]> => (await coreFetch<{ items: AccelModel[] }>(`/accel-models`)).items,
+    staleTime: 5 * 60 * 1000, retry: 0,
+  });
+}
+export function useUpsertAccelModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (b: { productId: string; vendor?: string | null; model: string }) =>
+      coreFetch(`/accel-models`, { method: "PUT", body: JSON.stringify(b) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["core-accel-models"] }),
+  });
+}
+export function useDeleteAccelModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (productId: string) => coreFetch<void>(`/accel-models/${productId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["core-accel-models"] }),
+  });
+}
+/** 트레잇(CUSTOM_NVIDIA_26B9)에서 끝 product_id(26b9) 추출 */
+export function productIdFromTrait(trait: string): string | null {
+  const m = /_([0-9a-fA-F]{3,8})$/.exec(trait);
+  return m ? m[1].toLowerCase() : null;
+}
+/** device-profile groups 의 첫 트레잇에서 product_id 추출 */
+export function productIdFromProfile(dp: DeviceProfile): string | null {
+  for (const g of dp.groups ?? [])
+    for (const k of Object.keys(g))
+      if (k.startsWith("trait:")) {
+        const pid = productIdFromTrait(k.slice(6));
+        if (pid) return pid;
+      }
+  return null;
+}
+/** product_id → 모델명 맵 */
+export function accelModelByProductId(models: AccelModel[] | undefined): Record<string, string> {
+  const m: Record<string, string> = {};
+  for (const x of models ?? []) m[x.productId.toLowerCase()] = x.model;
+  return m;
+}
+/** device-profile 이름 → 표시 라벨 리졸버. 매핑되면 모델명, 매핑 없으면 product_id, 트레잇 없으면 dp 이름 유지. */
+export function accelLabelResolver(
+  profiles: DeviceProfile[] | undefined,
+  models: AccelModel[] | undefined,
+): (dpName: string | null | undefined) => string | null {
+  const byPid = accelModelByProductId(models);
+  const byDp: Record<string, string> = {};
+  for (const dp of profiles ?? []) {
+    const pid = productIdFromProfile(dp);
+    if (pid) byDp[dp.name] = byPid[pid] ?? pid;
+  }
+  return (dpName) => (dpName ? (byDp[dpName] ?? dpName) : null);
+}
 // 디바이스 프로파일 생성/삭제 (관리자) — Cyborg 는 불변이라 수정은 없다.
 // 가속기 1종류 = 장치 조건. 수량은 Cyborg group 복제 수(각 group 개수는 1 고정).
 export interface CreateDeviceProfileInput {
@@ -785,6 +844,7 @@ export interface AcceleratorDevice {
   type: string | null;
   model: string | null;
   vendor: string | null;
+  productId: string | null; // std_board_info.product_id (모델명 매핑 키)
   resourceClasses: string[];
   traits: string[];
   usage: "used" | "available" | "unknown";
