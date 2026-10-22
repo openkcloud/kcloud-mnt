@@ -660,6 +660,40 @@ export function useDeleteImage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-images"] }),
   });
 }
+// 이미지 상세 — 편집 가능한 속성(메타데이터) 포함(os_distro 등)
+export type ImageDetail = ImageSummary & { properties: Record<string, string> };
+export function useImage(id: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-image", id],
+    enabled: !!id,
+    queryFn: () => fetchJson<ImageDetail>(`${IAAS_BASE}/api/iaas/images/${id}`),
+    staleTime: 10 * 1000, retry: 0,
+  });
+}
+/** 이미지 속성(메타데이터) 추가·수정·삭제 — os_distro 등. */
+export function useUpdateImageProperties() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, set, remove }: { id: string; set?: Record<string, string>; remove?: string[] }) =>
+      sendJson<ImageDetail>("PATCH", `${IAAS_BASE}/api/iaas/images/${id}/properties`, { set: set ?? {}, remove: remove ?? [] }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ["iaas-image", v.id] });
+      qc.invalidateQueries({ queryKey: ["iaas-images"] });
+    },
+  });
+}
+export interface RegisterImageInput {
+  name: string; url: string; diskFormat: string; containerFormat: string;
+  visibility: string; minDisk: number; minRam: number; properties: Record<string, string>;
+}
+/** URL 가져오기(web-download) 등록 — Glance 가 URL 에서 직접 내려받음. */
+export function useRegisterImage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RegisterImageInput) => postJson<ImageDetail>(`${IAAS_BASE}/api/iaas/images`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-images"] }),
+  });
+}
 
 // ────── 플레이버 (Nova) — 전역 자원(프로젝트 없음) ──────
 export interface FlavorSummary {
