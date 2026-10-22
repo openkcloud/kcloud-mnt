@@ -143,6 +143,19 @@ export function useNamespaces(clusterId: string) {
   });
 }
 
+// 클러스터가 실제 보유한 가속기(노드 allocatable 합산 + 모델 라벨)
+export interface ClusterAccelerator { kind: string; count: number; products: string[] }
+export function useClusterAccelerators(clusterId: string) {
+  return useQuery({
+    queryKey: ["paas-accelerators", clusterId],
+    enabled: !!clusterId,
+    queryFn: async () =>
+      (await fetchJson<{ items: ClusterAccelerator[] }>(
+        `${PAAS_BASE}/api/paas/clusters/${clusterId}/accelerators`)).items,
+    staleTime: 60 * 1000, retry: 0,
+  });
+}
+
 export interface WorkloadRow {
   name: string;
   namespace: string;

@@ -32,7 +32,8 @@ import { WorkloadDiff } from "@/components/paas/workload-diff";
 import {
   useWorkloads, useCreateWorkload, useScaleWorkload, useRestartWorkload, useDeleteWorkload,
   useApplyWorkload, useUpdateWorkloadYaml, fetchWorkloadYaml, previewWorkloadApply, useWorkloadPods, fetchPodLogs,
-  useNamespaces, type WorkloadRow, type PodRow, type WorkloadPreview,
+  useNamespaces, useClusterAccelerators,
+  type WorkloadRow, type PodRow, type WorkloadPreview, type ClusterAccelerator,
 } from "@/lib/paas-api";
 
 const TEXTAREA_CLS = "w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -335,10 +336,24 @@ spec:
 `,
 };
 
+// K8s 확장 리소스 키 → 모델명. 벤더 1종은 키로 확정, nvidia 는 노드 라벨(product)로 구분.
+const ACCEL_KIND_MODEL: Record<string, string> = {
+  "furiosa.ai/rngd": "RNGD",
+  "furiosa.ai/npu": "Warboy",
+  "rebellions.ai/atom": "ATOM",
+  "samsung.com/pim": "Samsung PIM",
+  "nvidia.com/gpu": "NVIDIA GPU",
+};
+function accelModelLabel(a: ClusterAccelerator): string {
+  if (a.products.length) return a.products.map((p) => p.replace(/^NVIDIA-/i, "").replace(/_/g, " ")).join(", ");
+  return ACCEL_KIND_MODEL[a.kind] ?? a.kind;
+}
+
 function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; defaultNs: string; onClose: () => void }) {
   const create = useCreateWorkload(clusterId);
   const apply = useApplyWorkload(clusterId);
   const namespaces = useNamespaces(clusterId);
+  const accels = useClusterAccelerators(clusterId); // 이 클러스터가 실제 보유한 가속기만
   const [form, setForm] = React.useState({
     kind: "Deployment" as "Deployment" | "StatefulSet",
     namespace: defaultNs, name: "", image: "", replicas: "1",
@@ -351,6 +366,7 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
   const [previewing, setPreviewing] = React.useState(false);
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
   const pending = create.isPending || apply.isPending;
+  const selectedAccel = accels.data?.find((a) => a.kind === form.acceleratorKind);
 
   const pickTemplate = (k: string) => { setYamlKind(k); setYaml(tpl(k)); };
 
@@ -452,16 +468,23 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">없음</SelectItem>
-                    <SelectItem value="nvidia.com/gpu">nvidia.com/gpu</SelectItem>
-                    <SelectItem value="furiosa.ai/rngd">furiosa.ai/rngd</SelectItem>
-                    <SelectItem value="rebellions.ai/atom">rebellions.ai/atom</SelectItem>
+                    {(accels.data ?? []).map((a) => (
+                      <SelectItem key={a.kind} value={a.kind}>
+                        {accelModelLabel(a)}
+                        <span className="ml-2 font-mono text-[10px] text-muted-foreground">{a.kind} · 최대 {a.count}</span>
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
+                {accels.data && accels.data.length === 0 && (
+                  <p className="text-[10px] text-muted-foreground">이 클러스터에 가속기가 없습니다.</p>
+                )}
               </div>
               {form.acceleratorKind !== "none" && (
                 <div className="space-y-1.5">
                   <Label>가속기 개수</Label>
-                  <Input type="number" min={1} value={form.acceleratorCount} onChange={(e) => set("acceleratorCount", e.target.value)} />
+                  <Input type="number" min={1} max={selectedAccel?.count} value={form.acceleratorCount} onChange={(e) => set("acceleratorCount", e.target.value)} />
+                  {selectedAccel && <p className="text-[10px] text-muted-foreground">이 클러스터 가용 {selectedAccel.count}개</p>}
                 </div>
               )}
             </div>
