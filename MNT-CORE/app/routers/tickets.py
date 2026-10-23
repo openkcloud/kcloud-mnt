@@ -128,7 +128,7 @@ def _ticket_name_taken(db: Session, project_id: str, name: str) -> bool:
 
 
 _SELECT = """
-    SELECT r.id, r.type, r.status, r.project_id, r.request_spec, r.provision_spec, r.result,
+    SELECT r.id, r.type, r.status, r.project_id, r.request_spec, r.provision_spec, r.result, r.title,
            r.approved_at, r.provisioning_at, r.approved_reject_at, r.approved_reject_reason,
            r.provisioning_reject_at, r.provisioning_reject_reason, r.error_message, r.created_at,
            u.username, u.name AS requester_name, ro.name AS requester_org_name, o.id AS org_id, o.name AS org_name,
@@ -158,6 +158,7 @@ def _to_item(r) -> dict:
         **r["request_spec"],
         "id": r["id"],  # 신청 ID (req-YYMMDD-NNN)
         "type": r["type"],
+        "title": r["title"],  # 신청 제목(별도 컬럼) — request_spec 과 분리
         "status": r["status"],
         "requestedBy": r["username"],
         "requestedByName": r["requester_name"],
@@ -269,6 +270,7 @@ def list_tickets(requestedBy: str | None = None, status: str | None = None, type
 class CreateTicketBody(BaseModel):
     requestedBy: str | None = None  # 옛 화면 호환용 — 쓰지 않음(신청자 = 토큰 사용자)
     projectId: str               # OpenStack 프로젝트 UUID
+    title: str | None = None     # 신청 제목(선택) — 별도 컬럼
     vmName: str
     networkType: str             # 희망 망: internal(내부망) | external(인터넷망)
     floatingIp: bool = False     # 공인 IP 희망 (인터넷망일 때만)
@@ -367,9 +369,10 @@ def create_ticket(body: CreateTicketBody, user: CurrentUser = Depends(current_us
         "novaKeypair": body.novaKeypair,
     }
     db.execute(
-        text("""INSERT INTO tkt_request (id, type, project_id, requested_by, request_spec)
-                VALUES (:id, 'vm', :p, :u, CAST(:s AS jsonb))"""),
+        text("""INSERT INTO tkt_request (id, type, project_id, requested_by, title, request_spec)
+                VALUES (:id, 'vm', :p, :u, :t, CAST(:s AS jsonb))"""),
         {"id": ticket_id, "p": body.projectId, "u": user_id,
+         "t": (body.title or "").strip() or None,
          "s": json.dumps({k: v for k, v in spec.items() if v is not None}, ensure_ascii=False)},
     )
     db.commit()
@@ -874,6 +877,7 @@ def cluster_name_check(name: str, user: CurrentUser = Depends(current_user), db:
 
 class CreateClusterBody(BaseModel):
     projectId: str
+    title: str | None = None     # 신청 제목(선택) — 별도 컬럼
     clusterName: str
     templateId: str
     masterCount: int = 1
@@ -957,9 +961,10 @@ def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(c
         "purpose": body.purpose.strip()[:300],
     }
     db.execute(
-        text("""INSERT INTO tkt_request (id, type, project_id, requested_by, request_spec)
-                VALUES (:id, 'cluster', :p, :u, CAST(:s AS jsonb))"""),
+        text("""INSERT INTO tkt_request (id, type, project_id, requested_by, title, request_spec)
+                VALUES (:id, 'cluster', :p, :u, :t, CAST(:s AS jsonb))"""),
         {"id": ticket_id, "p": body.projectId, "u": user.id,
+         "t": (body.title or "").strip() or None,
          "s": json.dumps({k: v for k, v in spec.items() if v is not None}, ensure_ascii=False)},
     )
     db.commit()

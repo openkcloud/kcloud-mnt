@@ -81,6 +81,7 @@ export function useReviewTicket() {
 
 export interface CreateTicketInput {
   projectId: string;
+  title?: string;          // 신청 제목(선택)
   vmName: string;
   networkType: string;
   floatingIp: boolean;
@@ -180,6 +181,7 @@ export function useClusterNameCheck(name: string, enabled: boolean) {
 
 export interface CreateClusterTicketInput {
   projectId: string;
+  title?: string;          // 신청 제목(선택)
   clusterName: string;
   templateId: string;
   masterCount: number;
