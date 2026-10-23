@@ -197,10 +197,10 @@ function nameOf(r: ResourceRequest) {
   return (r.type === "vm" ? r.vmName : r.type === "cluster" ? r.clusterName : r.workspaceName) || "—";
 }
 
-// 목록 '신청 제목' 칸 — 사용자가 입력한 제목(없으면 —). 가장 넓게 쓰는 열
+// 목록 '신청 제목' 칸 — 한 줄 말줄임(…), 전체는 상세에서. 가장 넓게 쓰는 열
 function TitleCell({ r }: { r: ResourceRequest }) {
   return r.title
-    ? <span className="text-sm">{r.title}</span>
+    ? <div className="truncate text-sm" title={r.title}>{r.title}</div>
     : <span className="text-xs text-muted-foreground">—</span>;
 }
 
@@ -318,6 +318,7 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
           <div className={cn("truncate text-base font-semibold", serverId && "underline-offset-2 group-hover:underline")}>
             {isVm ? (r.vmName || "가상머신") : isWs ? (r.workspaceName || "AI 워크스페이스") : (r.clusterName || "서비스 클러스터")}
           </div>
+          {r.title && <div className="mt-0.5 break-words text-sm text-foreground">{r.title}</div>}
           <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
             {r.orgName && <><Building2 className="size-3" /><span>{r.orgName}</span><span className="text-muted-foreground/40">·</span></>}
             <FolderKanban className="size-3" />
@@ -1478,7 +1479,7 @@ function AdminView() {
                   <TableRow key={r.id} className="cursor-pointer" onClick={() => openDetail(r)}>
                     <CopyCell value={r.id} label="신청 ID" className="whitespace-nowrap font-semibold" after={<TypeBadge type={r.type} />} />
                     <TableCell className="whitespace-nowrap"><ProjectRequesterCell r={r} /></TableCell>
-                    <TableCell><TitleCell r={r} /></TableCell>
+                    <TableCell className="max-w-0"><TitleCell r={r} /></TableCell>
                     <CopyCell value={nameOf(r)} label="자원 이름" className="whitespace-nowrap" />
                     <TableCell className="whitespace-nowrap font-mono text-xs"><SpecCell r={r} /></TableCell>
                     <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
@@ -1743,7 +1744,7 @@ function UserView({ username }: { username: string }) {
                 <TableRow key={r.id} className="cursor-pointer" onClick={() => { setDetail(r); setDetailOpen(true); }}>
                   <CopyCell value={r.id} label="신청 ID" className="whitespace-nowrap font-semibold" after={<TypeBadge type={r.type} />} />
                   <TableCell className="whitespace-nowrap"><ProjectRequesterCell r={r} /></TableCell>
-                  <TableCell><TitleCell r={r} /></TableCell>
+                  <TableCell className="max-w-0"><TitleCell r={r} /></TableCell>
                   <CopyCell value={nameOf(r)} label="자원 이름" className="whitespace-nowrap" />
                   <TableCell className="whitespace-nowrap font-mono text-xs"><SpecCell r={r} /></TableCell>
                   <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
