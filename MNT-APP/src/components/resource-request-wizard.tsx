@@ -184,6 +184,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
 
   const [step, setStep] = React.useState<StepKey>("project");
   const [vmName, setVmName] = React.useState("");
+  const [title, setTitle] = React.useState("");
   const [project, setProject] = React.useState<string>("");
   const [network, setNetwork] = React.useState<string>("");
   const [floatingIp, setFloatingIp] = React.useState(false);
@@ -279,6 +280,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
     createTicket.mutate(
       {
         projectId: proj.id,
+        title: title.trim() || undefined,
         vmName,
         networkType: network,
         floatingIp,
@@ -436,6 +438,18 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               <span className="font-semibold">가속기가 필요한 경우</span> — GPU·NPU 가속기가 표시된 스펙을 선택하세요.
               가속기는 스펙에 내장되어 있으며 별도로 선택할 필요가 없습니다.
             </p>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="title">신청 제목 <span className="text-muted-foreground">(선택)</span></Label>
+            <Input
+              id="title"
+              placeholder="예: 연구용 학습 서버 증설"
+              value={title}
+              maxLength={200}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">신청 목록에 표시되는 제목입니다. 비워두면 표시되지 않습니다.</p>
           </div>
 
           <div className="grid gap-2">
@@ -761,6 +775,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const [step, setStep] = React.useState<ClusterStepKey>("basic");
   const [project, setProject] = React.useState("");
   const [clusterName, setClusterName] = React.useState("");
+  const [title, setTitle] = React.useState("");
   const [purpose, setPurpose] = React.useState("");
   const [templateId, setTemplateId] = React.useState("");
   const [nodeCfg, setNodeCfg] = React.useState<ClusterNodeConfig>(EMPTY_NODE_CONFIG);
@@ -817,6 +832,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
     createTicket.mutate(
       {
         projectId: selectedProject.id,
+        title: title.trim() || undefined,
         clusterName,
         templateId: selectedTemplate.id,
         masterCount: nodes.masterCount,
@@ -885,6 +901,18 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
             <p className="text-[11px] text-muted-foreground">
               클러스터의 노드 VM 은 이 프로젝트 쿼터에서 차감되고, 이 프로젝트 이름으로 네임스페이스가 함께 만들어집니다.
             </p>
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label htmlFor="cluster-title">신청 제목 <span className="font-normal text-muted-foreground">(선택)</span></Label>
+            <Input
+              id="cluster-title"
+              placeholder="예: LLM 평가용 클러스터 신설"
+              value={title}
+              maxLength={200}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">신청 목록에 표시되는 제목입니다. 비워두면 표시되지 않습니다.</p>
           </div>
 
           <div className="grid gap-1.5">
