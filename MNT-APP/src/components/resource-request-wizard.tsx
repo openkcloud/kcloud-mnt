@@ -446,7 +446,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               id="title"
               placeholder="예: 연구용 학습 서버 증설"
               value={title}
-              maxLength={200}
+              maxLength={100}
               onChange={(e) => setTitle(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">신청 목록에 표시되는 제목입니다. 비워두면 표시되지 않습니다.</p>
@@ -909,7 +909,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
               id="cluster-title"
               placeholder="예: LLM 평가용 클러스터 신설"
               value={title}
-              maxLength={200}
+              maxLength={100}
               onChange={(e) => setTitle(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">신청 목록에 표시되는 제목입니다. 비워두면 표시되지 않습니다.</p>
