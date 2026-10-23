@@ -628,6 +628,7 @@ export interface ResourceRequest {
   orgName?: string | null;
   projectId: string;
   projectName: string;
+  title?: string | null;   // 신청 제목(사용자 입력)
   // VM
   vmName?: string;
   networkType?: "internal" | "external"; // 사용자 희망 망
