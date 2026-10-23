@@ -135,7 +135,7 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
                 key={t.key}
                 type="button"
                 onClick={() => setType(t.key)}
-                className="group flex flex-col items-start gap-2.5 rounded-xl border border-border p-4 text-left transition-colors hover:border-brand-indigo-400 hover:bg-secondary/50"
+                className="group flex cursor-pointer flex-col items-start gap-2.5 rounded-xl border border-border p-4 text-left transition-colors hover:border-brand-indigo-400 hover:bg-secondary/50"
               >
                 <div className="flex size-10 items-center justify-center rounded-lg bg-brand-indigo-100 text-brand-indigo-700">
                   <t.icon className="size-5" />
@@ -150,7 +150,7 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
             <button
               type="button"
               onClick={() => setType(null)}
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
               <ChevronLeft className="size-3.5" /> 유형 다시 선택
             </button>
