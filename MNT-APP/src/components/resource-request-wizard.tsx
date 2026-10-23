@@ -31,7 +31,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { accKindClass, cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { useNovaKeypairs, useProjectFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
@@ -94,52 +93,73 @@ interface ResourceRequestWizardProps {
   onClose: () => void;
 }
 
+// 신청 유형 — 첫 화면의 선택 카드. 선택하면 해당 신청 흐름(단계)으로 진행한다.
+const REQUEST_TYPES = [
+  { key: "vm", icon: Server, title: "가상머신 신청", desc: "단일 가상머신(VM)을 생성합니다." },
+  { key: "cluster", icon: Boxes, title: "서비스 클러스터 신청", desc: "쿠버네티스 서비스 클러스터를 생성합니다." },
+  { key: "ai-workspace", icon: BrainCircuit, title: "AI 워크스페이스 신청", desc: "프로젝트 전용 AI 워크스페이스를 생성합니다." },
+] as const;
+
+type RequestTypeKey = typeof REQUEST_TYPES[number]["key"];
+
 /**
- * 자원 신청 통합 모달 — '가상머신 신청'(기본) · '서비스 클러스터 신청' · 'AI 워크스페이스 신청' 탭.
- * 탭 본문은 Radix Tabs/Dialog가 비활성·닫힘 시 언마운트하므로 입력값은 그때 초기화된다.
+ * 자원 신청 통합 모달 — 첫 화면에서 유형 카드(가상머신 · 서비스 클러스터 · AI 워크스페이스)를 고르고,
+ * 선택한 유형의 단계로 진행한다(상단 탭 없음). 유형을 바꾸려면 '유형 다시 선택'으로 첫 화면으로.
+ * 각 폼은 선택 시 마운트·뒤로가기/닫힘 시 언마운트되므로 입력값은 그때 초기화된다.
  */
 export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardProps) {
-  const [tab, setTab] = React.useState("vm");
+  const [type, setType] = React.useState<RequestTypeKey | null>(null);
 
   function close() {
     onClose();
-    setTab("vm"); // 다시 열면 항상 '가상머신 신청'부터
+    setType(null); // 다시 열면 항상 유형 선택 화면부터
   }
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && close()}>
       {/* 서비스 클러스터 신청은 노드 단계(왼쪽 노드 카드 + 오른쪽 스펙 표)가 넓어 모달을 넓힌다 */}
-      <DialogContent className={cn("max-h-[90vh] overflow-y-auto", tab === "cluster" ? "max-w-5xl" : "max-w-3xl")}>
+      <DialogContent className={cn("max-h-[90vh] overflow-y-auto", type === "cluster" ? "max-w-5xl" : "max-w-3xl")}>
         <DialogHeader>
           <DialogTitle>자원 신청</DialogTitle>
           <DialogDescription>
-            신청 유형을 고른 뒤 단계를 따라 입력하세요. 관리자 승인 후 프로비저닝이 시작됩니다.
+            {type
+              ? "단계를 따라 입력하세요. 관리자 승인 후 프로비저닝이 시작됩니다."
+              : "신청할 자원 유형을 선택하세요."}
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="vm">
-              <Server className="size-3.5" /> 가상머신 신청
-            </TabsTrigger>
-            <TabsTrigger value="cluster">
-              <Boxes className="size-3.5" /> 서비스 클러스터 신청
-            </TabsTrigger>
-            <TabsTrigger value="ai-workspace">
-              <BrainCircuit className="size-3.5" /> AI 워크스페이스 신청
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="vm">
-            <VmRequestForm onDone={close} />
-          </TabsContent>
-          <TabsContent value="cluster">
-            <ClusterRequestForm onDone={close} />
-          </TabsContent>
-          {/* AI 워크스페이스 = 프로젝트 1:1 (Kubeflow Profile) — 승인 후 관리자가 생성 시작 */}
-          <TabsContent value="ai-workspace">
-            <WorkspaceRequestForm onDone={close} />
-          </TabsContent>
-        </Tabs>
+        {type === null ? (
+          <div className="grid gap-3 py-2 sm:grid-cols-3">
+            {REQUEST_TYPES.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setType(t.key)}
+                className="group flex flex-col items-start gap-2.5 rounded-xl border border-border p-4 text-left transition-colors hover:border-brand-indigo-400 hover:bg-secondary/50"
+              >
+                <div className="flex size-10 items-center justify-center rounded-lg bg-brand-indigo-100 text-brand-indigo-700">
+                  <t.icon className="size-5" />
+                </div>
+                <div className="font-semibold">{t.title}</div>
+                <div className="text-xs text-muted-foreground">{t.desc}</div>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => setType(null)}
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ChevronLeft className="size-3.5" /> 유형 다시 선택
+            </button>
+            {type === "vm" && <VmRequestForm onDone={close} />}
+            {type === "cluster" && <ClusterRequestForm onDone={close} />}
+            {/* AI 워크스페이스 = 프로젝트 1:1 (Kubeflow Profile) — 승인 후 관리자가 생성 시작 */}
+            {type === "ai-workspace" && <WorkspaceRequestForm onDone={close} />}
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
