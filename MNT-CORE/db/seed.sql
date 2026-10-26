@@ -153,7 +153,6 @@ FROM (VALUES
     ('user', 'iaas.secgroups',    NULL, NULL),
     ('user', 'iaas.keypairs',     NULL, NULL),
     ('user', 'iaas.volumes',      NULL, NULL),
-    ('user', 'iaas.acceldevices', NULL, NULL),   -- 가속기 장치 현황은 조회라 사용자도 노출(디바이스 프로파일은 관리자 전용)
     ('user', 'cloud.paas',        NULL, NULL),
     ('user', 'paas.clusters',     NULL, NULL),
     ('user', 'paas.workloads',    NULL, NULL),

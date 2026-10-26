@@ -187,8 +187,7 @@ export interface CreateClusterTicketInput {
   masterCount: number;
   masterFlavorId: string;
   nodeCount: number;
-  flavorId: string;        // Worker 플레이버 — 가속기는 이 플레이버의 device-profile
-  networkType: string;     // 희망 망 internal | external — 실제 망·서브넷은 관리자가 프로비저닝 때
+  flavorId: string;        // Worker 플레이버 — 가속기는 이 플레이버의 device-profile (망·서브넷은 관리자가 프로비저닝 때)
   keypairId?: string;      // 본인 SSH 키(iam_ssh_key.id) — 없으면 템플릿 키페어
   novaKeypair?: string;    // 관리자만 — OpenStack(Nova) 키페어 이름
   purpose: string;

@@ -73,7 +73,7 @@ def _flavor_name(ref: str) -> str:
 def create_cluster(project_id: str, spec: dict) -> str:
     """클러스터 생성 요청(Magnum 1회, 소유 프로젝트 스코프 — API LB·Floating IP 도 그 프로젝트 소유로 생긴다) → 클러스터 ID.
     spec: name·templateId·masterCount·masterFlavorId·nodeCount·flavorId·networkId·subnetId·keypair(Nova 키페어 이름,
-    없으면 템플릿 키페어)·externalNetwork(노드를 공유 외부망에 바로 붙임 — API 로드밸런서에 Floating IP 를 붙이지 않는다).
+    없으면 템플릿 키페어).
     키페어는 새로 만들지 않는다 — 넘어온 이름을 Nova 에서 찾아 그대로 쓰고, 없으면 생성 요청을 보내지 않는다.
     본문은 2026-10-20 6차 시험(정상 완료)과 같다. 노드 Floating IP 는 이 드라이버가 지원하지 않아 끈다(API LB 에는 붙는다).
     플레이버는 ID 로 받아 이름으로 넘긴다(_flavor_name)."""
@@ -93,8 +93,6 @@ def create_cluster(project_id: str, spec: dict) -> str:
         "labels": {"availability_zone": settings.cluster_availability_zone,
                    "auto_scaling_enabled": "False", "auto_healing_enabled": "False"},
     }
-    if spec.get("externalNetwork"):  # 노드가 공유 외부망에 바로 붙음 — API 는 그 망의 LB 주소로(Floating IP 를 붙일 라우터가 없다)
-        body["labels"]["master_lb_floating_ip_enabled"] = "False"
     if spec.get("keypair"):  # Nova 키페어는 사용자(서비스 계정) 소유 — Magnum 이 같은 사용자로 찾는다
         try:
             magnum.service_get("nova", "compute", "/v2.1", f"/os-keypairs/{spec['keypair']}")

@@ -65,12 +65,15 @@ def test_노드_망_불가(monkeypatch, subnet, reachable, msg):
     assert e.value.non_retryable and str(e.value) == msg
 
 
-def test_공유_외부망은_Floating_IP_확인을_하지_않음(monkeypatch):
+def test_외부망도_Floating_IP_확인을_함(monkeypatch):
+    # 외부망에 노드를 바로 붙이면 API 로드밸런서 주소(OVN)에 밖에서 닿지 못한다(2026-10-22 req-261022-007) — 예외 없음
     _neutron(monkeypatch, reachable=(False, "게이트웨이 없음"))
     real = networks._neutron_get
     monkeypatch.setattr(networks, "_neutron_get", lambda path, params=None: (
         {"network": {**NET, "name": "public", "router:external": True}} if path == "/networks/net" else real(path, params)))
-    assert activities.check_network("net", "sub", "pub") == "public / 10.0.1.0/24"  # API 는 Floating IP 없이 그 망 주소로
+    with pytest.raises(ApplicationError) as e:
+        activities.check_network("net", "sub", "pub")
+    assert str(e.value) == "클러스터 API 에 Floating IP 를 붙일 수 없는 네트워크입니다 — 게이트웨이 없음"
 
 
 def test_없는_서브넷(monkeypatch):
