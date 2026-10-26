@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  AccelBadge, AccelTags, ChangedTag, Collapse, ExpandCard, KeypairTable, MAX_WORKERS, ManualTag, MetaGrid, NodeCard, Pager, PickerHeader,
+  AccelBadge, AccelTags, NetBadge, SharedTag, ChangedTag, Collapse, ExpandCard, KeypairTable, MAX_WORKERS, ManualTag, MetaGrid, NodeCard, Pager, PickerHeader,
   Radio, RefTag, SearchInput, Segment, SpecPicker, SwitchCard, TotalAccel, TotalsBlock, WorkerAccel, accelTotal, keyIcon, keyType,
   masterFlavorBlock, RequiredProgress, nodeTotals, paginate, serverIcon, specLine, useAccelModel, workerFlavorBlock, type KeyRow,
 } from "@/components/cluster-node-fields";
@@ -34,17 +34,6 @@ export function isClusterReview(r: ResourceRequest) {
 const TPL_KEY = "@template"; // 키페어 목록의 템플릿 키페어 행(키페어 이름·ID 와 겹치지 않는 값)
 
 // ── 공통 ──────────────────────────────────────────────────────────
-
-/** 망·서브넷 유형 배지 — 인터넷망(게이트웨이 IP 를 가진 라우터에 외부 게이트웨이, 외부망 자체 포함) · 내부망. */
-function NetTypeBadge({ type }: { type: "internet" | "internal" }) {
-  return (
-    <span className={cn("w-fit whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold", {
-      internet: "bg-[#fdf3dc] text-[#8a5a00]", internal: "bg-[#e3f1fb] text-[#1769aa]",
-    }[type])}>
-      {{ internet: "인터넷망", internal: "내부망" }[type]}
-    </span>
-  );
-}
 
 function PurposeButton({ onClick }: { onClick: () => void }) {
   return (
@@ -94,7 +83,7 @@ function HeroCard({ r, compact, result }: { r: ResourceRequest; compact?: boolea
           <FolderKanban className="size-3" />
           <span className="font-mono">{r.projectName}</span>
           <span className="text-muted-foreground/40">·</span>
-          <span>{r.requestedByName}</span>
+          <span>{r.requestedByName}{r.requesterOrgName ? ` (${r.requesterOrgName})` : ""}</span>
           <span className="text-muted-foreground/40">·</span>
           <span className="font-mono">{formatDateTime(r.requestedAt)}</span>
         </div>
@@ -108,7 +97,8 @@ function HeroCard({ r, compact, result }: { r: ResourceRequest; compact?: boolea
 function requestKeyLabel(r: ResourceRequest, template?: ClusterTemplate) {
   if (r.keypairId) return { name: r.keypairName ?? r.keypairId, from: "신청자 SSH 키" };
   if (r.novaKeypair) return { name: r.novaKeypair, from: "OpenStack 키페어" };
-  return { name: template ? template.keypair_id || "키페어 없음" : "—", from: "템플릿 키페어" };
+  if (template?.keypair_id) return { name: template.keypair_id, from: "템플릿 키페어" };
+  return { name: template ? "사용 안 함" : "—", from: "", none: true };
 }
 
 // 예) "NPU(RNGD) × 1" — 노드 구성의 가속기 표시와 같은 형식(모델명을 모르면 "NPU × 1")
@@ -161,8 +151,8 @@ function ApproveBody({ r, onPurpose }: { r: ResourceRequest; onPurpose: () => vo
         <div className="flex min-w-0 flex-col gap-3 rounded-xl border border-border px-[18px] py-4">
           <div className="flex items-center gap-1.5 text-sm font-bold"><Server className="size-4 text-rose-600" />노드 (신청)</div>
           {([
-            ["Control Plane", `${r.masterCount ?? 0} 대 / ${r.masterFlavorName ?? r.masterFlavorId ?? "—"}`, line(master, r.masterVcpu, r.masterRamGb)],
-            ["Worker", `${r.nodeCount ?? 0} 대 / ${r.flavorName ?? "—"}`, line(worker, r.vcpu, r.ramGb)],
+            ["Control Plane", `${r.masterCount ?? 0}대 / ${r.masterFlavorName ?? r.masterFlavorId ?? "—"}`, line(master, r.masterVcpu, r.masterRamGb)],
+            ["Worker", `${r.nodeCount ?? 0}대 / ${r.flavorName ?? "—"}`, line(worker, r.vcpu, r.ramGb)],
           ] as const).map(([k, v, sub]) => (
             <div key={k} className="grid grid-cols-[92px_minmax(0,1fr)] items-start gap-2">
               <span className="pt-px text-[13px] text-muted-foreground">{k}</span>
@@ -182,8 +172,10 @@ function ApproveBody({ r, onPurpose }: { r: ResourceRequest; onPurpose: () => vo
           <div className="grid grid-cols-[92px_minmax(0,1fr)] items-start gap-2">
             <span className="pt-px text-[13px] text-muted-foreground">키페어</span>
             <span className="flex flex-col items-end gap-0.5">
-              <span className="flex items-center gap-1 font-mono text-[13px] font-semibold"><KeyRound className="size-[13px] text-amber-600" />{key.name}</span>
-              <span className="text-[11px] text-muted-foreground">{key.from}</span>
+              {"none" in key ? <span className="text-[13px] text-muted-foreground">{key.name}</span> : <>
+                <span className="flex items-center gap-1 font-mono text-[13px] font-semibold"><KeyRound className="size-[13px] text-amber-600" />{key.name}</span>
+                <span className="text-[11px] text-muted-foreground">{key.from}</span>
+              </>}
             </span>
           </div>
         </div>
@@ -216,8 +208,8 @@ type PanelState = {
 };
 export type ProvisionPanelState = { spec: ClusterProvisionValue | null; ready: boolean; text: string };
 
-const NET_COLS = "grid grid-cols-[22px_minmax(0,1fr)_minmax(0,1.2fr)_112px] items-center gap-[14px] px-4";
-const SUB_COLS = "grid grid-cols-[22px_minmax(0,1fr)_minmax(0,1fr)_64px_56px] items-center gap-[14px] px-4";
+const NET_COLS = "grid grid-cols-[22px_minmax(0,1fr)_minmax(0,1.2fr)_168px] items-center gap-[14px] px-4"; // 유형 — 아이콘 배지 두 개가 한 줄에
+const SUB_COLS = "grid grid-cols-[22px_minmax(0,1fr)_minmax(0,1fr)_84px_56px] items-center gap-[14px] px-4";
 
 /** 1b 본문 — 데이터(스펙·키페어·템플릿)를 받은 뒤 그려 신청(재시도면 지난 회차) 값으로 채운다. */
 function ProvisionPanel({ r, onState, onPurpose }: {
@@ -355,14 +347,14 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
           selected={role === "net"} onSelect={() => set({ role: "net" })} />
         <NodeCard className="gap-2 px-3.5 py-3" icon={serverIcon} title="Control Plane" required range="1 또는 3대" rangeAt="count"
           tag={cpChanged ? <ChangedTag /> : <RefTag label="신청 값" />} status={cpF ? "done" : "missing"} placeholder="스펙을 고르세요"
-          value={cpF && `${st.cpn} 대 / ${cpF.name}`} line={cpF ? specLine(cpF) : MISSING_LINE[st.cpSrc]}
-          was={cpChanged ? `${REQ.cpn} 대 / ${reqCpF?.name ?? r.masterFlavorName ?? REQ.cp}` : undefined}
+          value={cpF && `${st.cpn}대 / ${cpF.name}`} line={cpF ? specLine(cpF) : MISSING_LINE[st.cpSrc]}
+          was={cpChanged ? `${REQ.cpn}대 / ${reqCpF?.name ?? r.masterFlavorName ?? REQ.cp}` : undefined}
           count={[st.cpn, () => set({ cpn: 1 }), () => set({ cpn: 3 })]} selected={role === "cp"} onSelect={() => set({ role: "cp" })} />
         <NodeCard className="gap-2 px-3.5 py-3" icon={serverIcon} title="Worker" required range={`1~${MAX_WORKERS}대`} rangeAt="count"
           tag={wChanged ? <ChangedTag /> : <RefTag label="신청 값" />} status={wF ? "done" : "missing"} placeholder="스펙을 고르세요"
-          value={wF && `${st.wn} 대 / ${wF.name}`}
+          value={wF && `${st.wn}대 / ${wF.name}`}
           line={wF ? <>{specLine(wF)}<WorkerAccel f={wF} model={modelOf(wF.accelerator)} /></> : MISSING_LINE[st.wSrc]}
-          was={wChanged ? `${REQ.wn} 대 / ${reqWF?.name ?? r.flavorName ?? REQ.w}` : undefined}
+          was={wChanged ? `${REQ.wn}대 / ${reqWF?.name ?? r.flavorName ?? REQ.w}` : undefined}
           count={[st.wn, () => set({ wn: Math.max(1, st.wn - 1) }), () => set({ wn: Math.min(MAX_WORKERS, st.wn + 1) })]}
           selected={role === "w"} onSelect={() => set({ role: "w" })} />
         <NodeCard className="gap-2 px-3.5 py-3" icon={keyIcon} title="키페어" optional
@@ -400,10 +392,10 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
               { key: "용도", k: <span className="flex items-center gap-1.5">용도 {r.purpose && <PurposeButton onClick={onPurpose} />}</span>, v: r.purpose || "—" },
             ] },
             { group: "노드 (신청)", items: [
-              { k: "Control Plane", v: `${REQ.cpn} 대 / ${r.masterFlavorName ?? REQ.cp}` },
-              { k: "Worker", v: `${REQ.wn} 대 / ${r.flavorName ?? REQ.w}` },
+              { k: "Control Plane", v: `${REQ.cpn}대 / ${r.masterFlavorName ?? REQ.cp}` },
+              { k: "Worker", v: `${REQ.wn}대 / ${r.flavorName ?? REQ.w}` },
               { k: "Worker 가속기", v: reqAccel(r, modelOf(r.deviceProfile)) ?? "없음" },
-              { k: "키페어", v: REQ.key === null ? "없음" : `${keyName(REQ.key)}${REQ.key === TPL_KEY ? " (템플릿)" : ""}` },
+              { k: "키페어", v: REQ.key === null ? "사용 안 함" : `${keyName(REQ.key)}${REQ.key === TPL_KEY ? " (템플릿)" : ""}` },
             ] },
           ]} />
         </Collapse>
@@ -445,7 +437,7 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
                           {why && <span className="text-[11px] text-[#e8823f]">{why}</span>}
                         </span>
                         <span className={cn("truncate text-xs", ok ? "text-muted-foreground" : "text-[#b3bac2]")}>{sn.name || "—"}</span>
-                        <NetTypeBadge type={sn.internet ? "internet" : "internal"} />
+                        <NetBadge type={sn.internet ? "internet" : "internal"} />
                         <span className={cn("w-fit rounded-full px-2 py-0.5 text-[11px] font-semibold",
                           sn.dhcp ? "bg-[#dff6ee] text-[#0f7a58]" : "bg-[#f1f3f6] text-[#7b858f]")}>{sn.dhcp ? "켜짐" : "꺼짐"}</span>
                       </div>
@@ -529,15 +521,15 @@ function NetworkPicker({ networks, loading, error, selected, onSelect }: {
                 <span className="flex min-w-0 flex-col gap-0.5">
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className={cn("truncate font-mono text-[13px] font-semibold", blocked && "text-[#9aa3ad]")}>{n.name}</span>
-                    {n.shared && <span className="flex-none rounded bg-violet-100 px-[5px] py-px text-[10px] font-semibold text-violet-800">공유</span>}
+                    {n.shared && <SharedTag />}
                   </span>
                   {blocked && <span title="외부망에 노드를 바로 붙이면 클러스터 API 주소(로드밸런서)에 밖에서 닿지 못합니다"
                     className="truncate text-[11px] text-[#e8823f]">API 주소에 밖에서 닿지 못합니다</span>}
                 </span>
                 <span title={n.cidr} className="truncate font-mono text-[11px] text-muted-foreground">{n.cidr || "—"}</span>
                 <span className="flex flex-wrap gap-1">
-                  {blocked ? <NetTypeBadge type="internet" />
-                    : n.access?.length ? n.access.map((t) => <NetTypeBadge key={t} type={t} />)
+                  {blocked ? <NetBadge type="internet" />
+                    : n.access?.length ? n.access.map((t) => <NetBadge key={t} type={t} />)
                     : <span className="text-[11px] text-muted-foreground">—</span>}
                 </span>
               </div>
@@ -557,8 +549,9 @@ function NetworkPicker({ networks, loading, error, selected, onSelect }: {
  * 클러스터 신청 상세 모달 내용(DialogContent) — 대기중이면 1a(승인·반려), 승인·실패면 1b(프로비저닝·재시도·반려).
  * 반려는 사유 입력을 펼친다(사유 필수). 1b 의 입력 상태는 반려 입력 중에도 숨겨 둘 뿐 유지한다.
  */
-export function ClusterReviewContent({ r, badge, reviewing, provisioning, onApprove, onReject, onProvision }: {
+export function ClusterReviewContent({ r, badge, rejectFirst, reviewing, provisioning, onApprove, onReject, onProvision }: {
   r: ResourceRequest;
+  rejectFirst?: boolean;   // 목록의 '반려' 버튼으로 열면 반려 사유 입력부터
   badge: React.ReactNode;
   reviewing: boolean;
   provisioning: boolean;
@@ -568,7 +561,7 @@ export function ClusterReviewContent({ r, badge, reviewing, provisioning, onAppr
 }) {
   const isPending = r.status === "pending";
   const isFailed = r.status === "failed";
-  const [rejecting, setRejecting] = React.useState(false);
+  const [rejecting, setRejecting] = React.useState(!!rejectFirst);
   const [reason, setReason] = React.useState("");
   const [purposeOpen, setPurposeOpen] = React.useState(false);
   const [panel, setPanel] = React.useState<ProvisionPanelState>({ spec: null, ready: false, text: "" });

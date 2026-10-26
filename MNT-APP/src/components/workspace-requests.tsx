@@ -36,7 +36,7 @@ export function limitsOf(r: ResourceRequest): WorkspaceLimits {
 }
 
 export function limitsText(l: WorkspaceLimits) {
-  return `vCPU ${l.cpu ?? "—"} · 메모리 ${l.memoryGi ?? "—"}GB · 가속기 ${l.acceleratorCount ?? 0}장 · 저장 ${l.storageGi ?? "—"}GB`;
+  return `vCPU ${l.cpu ?? "—"} / 메모리 ${l.memoryGi ?? "—"} GB / 가속기 ${l.acceleratorCount ?? 0}장 / 저장 ${l.storageGi ?? "—"} GB`;
 }
 
 export function toLimitsInput(l: WorkspaceLimits): WorkspaceLimitsInput {

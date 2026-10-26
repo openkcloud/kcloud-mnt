@@ -9,7 +9,7 @@
  * 스펙 표·키페어 표·페이지네이션 등)을 함께 쓴다.
  */
 import * as React from "react";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Cpu, KeyRound, Search, Server } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Cpu, Globe, KeyRound, Search, Server, Wifi } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { accKindClass, cn } from "@/lib/utils";
@@ -148,6 +148,22 @@ export function AccelBadge({ kind, model, count, title }: { kind?: string; model
       <Cpu className="size-3" />{kind ? `${kind}${model ? `(${model})` : ""} × ${count}` : "가속기"}
     </Badge>
   );
+}
+
+/** 망 유형 배지 — 인터넷망(외부 게이트웨이로 밖과 통신, 외부망 포함) · 내부망. 신청 목록·신청·승인 화면 공용. */
+export function NetBadge({ type }: { type: "internet" | "internal" }) {
+  const internet = type === "internet";
+  return (
+    <span className={cn("inline-flex w-fit flex-none items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+      internet ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
+      {internet ? <Globe className="size-3" /> : <Wifi className="size-3" />}{internet ? "인터넷망" : "내부망"}
+    </span>
+  );
+}
+
+/** 공유된 망 태그 — 망 이름 옆. */
+export function SharedTag() {
+  return <span className="flex-none rounded bg-violet-100 px-[5px] py-px text-[10px] font-semibold text-violet-800">공유</span>;
 }
 
 /** 플레이버의 가속기 배지 — n 은 노드 수(총 자원). */
@@ -888,9 +904,9 @@ export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onC
           count={[value.nodeCount, () => onChange({ ...value, nodeCount: Math.max(1, value.nodeCount - 1) }),
             () => onChange({ ...value, nodeCount: Math.min(MAX_WORKERS, value.nodeCount + 1) })]} />
         <NodeCard className={card} icon={keyIcon} title="키페어" optional tag={src.key === "tpl" && <RefTag label="템플릿" />}
-          value={src.key === "tpl" ? (template.keypair_id || "키페어 없음") : keyName ?? "사용 안 함"}
-          valueMuted={src.key === "tpl" ? !template.keypair_id : !keyName}
-          line={src.key === "tpl" ? (template.keypair_id ? undefined : "노드 SSH 미설정") : keyName ? undefined : keyNone}
+          value={(src.key === "tpl" ? template.keypair_id : keyName) || "사용 안 함"}
+          valueMuted={!(src.key === "tpl" ? template.keypair_id : keyName)}
+          line={(src.key === "tpl" ? template.keypair_id : keyName) ? undefined : keyNone}
           selected={role === "key"} onSelect={() => setRole("key")} />
         <TotalsBlock rows={[
           { k: "vCPU", v: totals && `${totals.vcpu}` }, { k: "RAM", v: totals && `${totals.ramGb} GB` },

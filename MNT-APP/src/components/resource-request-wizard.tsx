@@ -15,7 +15,6 @@ import {
   KeyRound,
   Boxes,
   Disc3,
-  Cpu,
   BrainCircuit,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -31,7 +30,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { accKindClass, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { useNovaKeypairs, useProjectFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
 import { useClusterTemplates } from "@/lib/paas-api";
@@ -78,11 +77,6 @@ const USER_NETWORKS = [
 
 // 부팅 볼륨 최대 크기 (GB)
 const MAX_VOLUME_GB = 500;
-
-// 예) "GPU × 1 + NPU × 1"
-function accelSummary(f: FlavorSummary) {
-  return (f.accelerators ?? []).map((a) => `${a.kind} × ${a.count}`).join(" + ");
-}
 
 // VM 이름 = 서버 이름 = hostname. Nova hostname 규칙(^[a-zA-Z0-9]+[a-zA-Z0-9-]*[a-zA-Z0-9]+$, 2~63자)에서
 // 영문은 소문자만 허용. 생성 시 hostname 에도 같은 값을 지정한다(microversion 2.90+).
@@ -212,6 +206,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
   const [image, setImage] = React.useState<string>("");
   const [volumeGb, setVolumeGb] = React.useState<number>(0);
   const [keypair, setKeypair] = React.useState<string>(""); // 키페어 이름
+  const modelOf = useAccelModel();
 
   // 스펙 = 선택한 프로젝트가 쓸 수 있는 플레이버(public + 이 프로젝트에 허용된 비공개)
   const { data: flavors = [], isLoading: flavorLoading, error: flavorError } = useProjectFlavors(project || undefined);
@@ -385,7 +380,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
                   network === n.id ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
                 )}
               >
-                <Wifi className="size-5 shrink-0 text-sky-600" />
+                {n.id === "external" ? <Globe className="size-5 shrink-0 text-amber-600" /> : <Wifi className="size-5 shrink-0 text-sky-600" />}
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-semibold">{n.label}</span>
@@ -516,20 +511,13 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               >
                 <Server className="size-5 shrink-0 text-rose-600" />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate font-mono font-semibold">{f.name}</span>
-                    {(f.accelerators ?? []).map((a) => (
-                      <Badge key={a.kind} variant="ghost" className={cn("h-5 shrink-0 gap-1 px-1.5 font-mono text-[10px]", accKindClass(a.kind))}>
-                        <Cpu className="size-3" />{a.kind} × {a.count}
-                      </Badge>
-                    ))}
-                    {/* 종류를 모를 때(Cyborg 조회 실패·device-profile 없음) — 가속기 없음으로 보이지 않게 */}
-                    {f.accelerator && !f.accelerators?.length && (
-                      <Badge variant="ghost" className={cn("h-5 shrink-0 gap-1 px-1.5 font-mono text-[10px]", accKindClass(""))}><Cpu className="size-3" />가속기</Badge>
-                    )}
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="break-all font-mono font-semibold">{f.name}</span>
+                    {/* 종류를 모를 때(Cyborg 조회 실패·device-profile 없음)도 '가속기' 배지 — 가속기 없음으로 보이지 않게 */}
+                    <AccelTags f={f} model={modelOf(f.accelerator)} />
                   </div>
                   <div className="font-mono text-xs text-muted-foreground tabular-nums">
-                    {f.vcpus} vCPU · {f.ramMb / 1024} GB RAM · {f.diskGb > 0 ? `${f.diskGb} GB Disk` : "Disk 볼륨 지정"}
+                    {f.vcpus} vCPU / {f.ramMb / 1024} GB RAM / {f.diskGb > 0 ? `${f.diskGb} GB Disk` : "Disk 볼륨 지정"}
                   </div>
                   {f.deviceProfileMissing && (
                     <div className="text-[11px] text-amber-700">연결된 디바이스 프로파일이 존재하지 않습니다.</div>
@@ -696,8 +684,8 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
           <div className="rounded-xl border border-border overflow-hidden">
             <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">스펙 · 템플릿</div>
             <div className="divide-y divide-border">
-              <ReviewRow label="Flavor" value={selectedFlavor?.name} mono />
-              <ReviewRow label="컴퓨트" value={selectedFlavor ? `${selectedFlavor.vcpus} vCPU · ${selectedFlavor.ramMb / 1024} GB RAM` : undefined} mono />
+              <ReviewRow label="스펙" value={selectedFlavor?.name} mono />
+              <ReviewRow label="vCPU / RAM" value={selectedFlavor ? `${selectedFlavor.vcpus} vCPU / ${selectedFlavor.ramMb / 1024} GB RAM` : undefined} mono />
               <ReviewRow
                 label="디스크"
                 value={selectedFlavor ? (needVolume ? `부팅 볼륨 ${volumeGb} GB` : `${selectedFlavor.diskGb} GB`) : undefined}
@@ -705,16 +693,13 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               />
               <ReviewRow
                 label="가속기"
-                value={selectedFlavor?.accelerator ? accelSummary(selectedFlavor) || "가속기" : "없음"}
-                accent={(() => { // 한 종류면 그 색(GPU 인디고·NPU 민트), 섞이거나 모르면 기본색
-                  const kinds = new Set(selectedFlavor?.accelerators?.map((a) => a.kind));
-                  return kinds.size !== 1 ? undefined : kinds.has("GPU") ? "indigo" : kinds.has("NPU") ? "mint" : undefined;
-                })()}
+                value={selectedFlavor?.accelerator
+                  ? <span className="inline-flex gap-1"><AccelTags f={selectedFlavor} model={modelOf(selectedFlavor.accelerator)} /></span> : "없음"}
               />
               <ReviewRow label="템플릿" value={selectedImage?.name} mono />
               <ReviewRow
                 label="SSH 키페어"
-                value={selectedImage && !selectedImage.cloudInit ? "미적용 (cloud-init 없음)" : keypair || "미선택"}
+                value={selectedImage && !selectedImage.cloudInit ? "미적용 (cloud-init 없음)" : keypair || "사용 안 함"}
                 mono
               />
             </div>
@@ -763,14 +748,12 @@ function ReviewRow({ label, value, mono, accent }: {
   label: string;
   value?: React.ReactNode;
   mono?: boolean;
-  accent?: "green" | "indigo" | "mint";
+  accent?: "green";
 }) {
   const valueClass = cn(
     "text-right text-sm",
     mono && "font-mono",
     accent === "green" && "text-green-700 font-medium",
-    accent === "indigo" && "text-brand-indigo-700 font-medium",
-    accent === "mint" && "text-brand-mint-700 font-medium",
     !value && "text-rose-500",
   );
   return (
@@ -826,7 +809,8 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const nodesMissing = nodeConfigMissing(nodes);
   // 직접 고른 키 — 템플릿 값이거나 고르지 않았으면 템플릿 키페어
   const chosenKey = nodeCfg.source.key === "custom" ? nodeCfg.keypairId || undefined : undefined;
-  const keypairLabel = chosenKey ? myKeypairs.find((k) => k.id === chosenKey)?.name : `${selectedTemplate?.keypair_id || "없음"} (템플릿)`;
+  const keypairLabel = chosenKey ? myKeypairs.find((k) => k.id === chosenKey)?.name
+    : selectedTemplate?.keypair_id ? `${selectedTemplate.keypair_id} (템플릿)` : "사용 안 함";
   const masterFlavor = flavors.find((f) => f.id === nodes.masterFlavorId);
   const workerFlavor = flavors.find((f) => f.id === nodes.flavorId);
   const totals = nodeTotals(flavors, nodes);
@@ -1051,10 +1035,10 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
           <div className="overflow-hidden rounded-xl border border-border">
             <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">노드 구성</div>
             <div className="divide-y divide-border">
-              <ReviewRow label="Control Plane" value={masterFlavor ? `${nodes.masterCount} 대 / ${masterFlavor.name}` : undefined} mono />
-              <ReviewRow label="Worker" value={workerFlavor ? `${nodes.nodeCount} 대 / ${workerFlavor.name}` : undefined} mono />
+              <ReviewRow label="Control Plane" value={masterFlavor ? `${nodes.masterCount}대 / ${masterFlavor.name}` : undefined} mono />
+              <ReviewRow label="Worker" value={workerFlavor ? `${nodes.nodeCount}대 / ${workerFlavor.name}` : undefined} mono />
               <ReviewRow
-                label="가속기 (Worker)"
+                label="Worker 가속기"
                 value={workerFlavor?.accelerator ? (
                   <span className="inline-flex items-center gap-1.5">
                     <AccelTags f={workerFlavor} model={modelOf(workerFlavor.accelerator)} />
@@ -1062,7 +1046,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
                   </span>
                 ) : "없음"}
               />
-              <ReviewRow label="합계" value={totals ? `VM ${totals.vms}대 / ${totals.vcpu} vCPU / ${totals.ramGb} GB` : undefined} mono />
+              <ReviewRow label="총 자원" value={totals ? `VM ${totals.vms}대 / ${totals.vcpu} vCPU / ${totals.ramGb} GB RAM / ${totals.diskGb} GB Disk` : undefined} mono />
               <ReviewRow label="키페어" value={keypairLabel} mono />
             </div>
           </div>
