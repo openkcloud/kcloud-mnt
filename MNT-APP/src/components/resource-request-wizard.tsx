@@ -517,7 +517,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
                 <Server className="size-5 shrink-0 text-rose-600" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="truncate font-mono font-semibold">{f.name}</span>
+                    <span className="truncate font-mono font-semibold" title={f.name}>{f.name}</span>
                     {(f.accelerators ?? []).map((a) => (
                       <Badge key={a.kind} variant="ghost" className={cn("h-5 shrink-0 gap-1 px-1.5 font-mono text-[10px]", accKindClass(a.kind))}>
                         <Cpu className="size-3" />{a.kind} × {a.count}
@@ -571,7 +571,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
                 <Disc3 className="size-5 shrink-0 text-indigo-600" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="truncate font-mono font-semibold">{img.name}</span>
+                    <span className="truncate font-mono font-semibold" title={img.name}>{img.name}</span>
                     {!img.cloudInit && (
                       <Badge variant="ghost" className="h-5 bg-amber-100 px-1.5 text-[10px] text-amber-800">cloud-init 없음</Badge>
                     )}
