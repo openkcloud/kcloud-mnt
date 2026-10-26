@@ -18,6 +18,15 @@ export const DETAIL_CONTENT = "flex max-h-[92vh] flex-col gap-0 overflow-hidden 
 /** 본문 — 스크롤 영역(카드 사이 14px). */
 export const DETAIL_BODY = "grid min-h-0 flex-1 content-start gap-[14px] overflow-y-auto px-7 pt-4 pb-6";
 
+/** 2단 처리 패널(클러스터 1b · VM 승인) — 왼쪽 카드(270px, 넘치면 왼쪽만 스크롤) + 오른쪽 고르기(넘치면 오른쪽만 스크롤).
+ *  높이 660px — 카드 네 장 + 총 자원이 레티나에서도 넘치지 않는 값. */
+export const PANEL = {
+  grid: "grid h-[660px] grid-cols-[270px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden rounded-xl border border-border [&_*]:leading-[1.2]",
+  left: "flex min-h-0 flex-col gap-2 overflow-y-auto border-r border-border bg-secondary/50 px-4 py-[18px] [scrollbar-width:thin]",
+  right: "grid min-h-0 min-w-0 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-[14px] overflow-y-auto px-6 py-5 [scrollbar-width:thin]",
+  card: "gap-2 px-3.5 py-3", // 왼쪽 카드 여백
+} as const;
+
 export function DetailHeader({ badge, description }: { badge: React.ReactNode; description: React.ReactNode }) {
   return (
     <div className="flex-none px-7 pt-6 pr-12">
