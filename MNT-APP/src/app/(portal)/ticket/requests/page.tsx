@@ -66,8 +66,9 @@ import {
   WorkspaceLimitFields, limitsBody, limitsOf, limitsOk, limitsText, toLimitsInput, type WorkspaceLimitsInput,
 } from "@/components/workspace-requests";
 import { ClusterReviewContent, isClusterReview, type ClusterProvisionValue } from "@/components/cluster-ticket-review";
-import { AccelBadge, useAccelModel } from "@/components/cluster-node-fields";
-import { accKindClass, cn, formatDateTime } from "@/lib/utils";
+import { useClusterTemplate } from "@/lib/paas-api";
+import { AccelBadge, NetBadge, SharedTag, useAccelModel } from "@/components/cluster-node-fields";
+import { cn, formatDateTime } from "@/lib/utils";
 import type {
   ClusterProvisionSpec, ProvisionSpec, ProvisionStep, ProvisionStepsResp, ProvStepStatus, ResourceRequest, RequestStatus,
   RequestType,
@@ -261,21 +262,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-// 망 종류 배지 — 외부(external) 망만 인터넷망
-function NetKindBadge({ internet }: { internet: boolean }) {
-  return (
-    <Badge variant="ghost" className={cn("gap-1", internet ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
-      {internet ? <Globe className="size-3" /> : <Wifi className="size-3" />}
-      {internet ? "인터넷망" : "내부망"}
-    </Badge>
-  );
-}
-
 // 사용자 희망 망 배지
 function NetworkWish({ r }: { r: ResourceRequest }) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <NetKindBadge internet={r.networkType === "external"} />
+      <NetBadge type={r.networkType === "external" ? "internet" : "internal"} />
       {r.floatingIp && <Badge variant="success">공인 IP 희망</Badge>}
     </span>
   );
@@ -301,6 +292,7 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
   const isWs = r.type === "ai-workspace";
   const p = r.provisionSpec;
   const cp = r.type === "cluster" ? clusterSpecOf(r) : undefined;
+  const { data: tpl, isLoading: tplLoading } = useClusterTemplate(r.type === "cluster" ? r.templateId ?? null : null);
   // 생성 완료된 VM — 누르면 IaaS > 가상서버 상세로(가상서버 상세의 네트워크·볼륨 행과 같은 방식)
   const serverId = isVm && r.status === "completed" ? r.result?.serverId : undefined;
   return (
@@ -327,7 +319,7 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
             <FolderKanban className="size-3" />
             <span className="font-mono">{r.projectName}</span>
             <span className="text-muted-foreground/40">·</span>
-            <span>{r.requestedByName}</span>
+            <span>{r.requestedByName}{r.requesterOrgName ? ` (${r.requesterOrgName})` : ""}</span>
             <span className="text-muted-foreground/40">·</span>
             <span className="font-mono">{fmtDt(r.requestedAt)}</span>
           </div>
@@ -342,7 +334,7 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
               <Cpu className="size-3.5 text-rose-600" /> 스펙
             </div>
             <Field label="스펙"><span className="font-mono">{r.flavorName ?? "—"}</span></Field>
-            <Field label="vCPU · 메모리"><span className="font-mono">{r.vcpu ?? "—"} vCPU / {r.ramGb ?? "—"} GB</span></Field>
+            <Field label="vCPU / RAM"><span className="font-mono">{r.vcpu ?? "—"} vCPU / {r.ramGb ?? "—"} GB RAM</span></Field>
             <Field label="디스크">
               <span className="font-mono">{r.diskGb ? `${r.diskGb} GB` : r.volumeGb ? `부팅 볼륨 ${r.volumeGb} GB` : "—"}</span>
             </Field>
@@ -368,7 +360,7 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
             </Field>
             <Field label="키페어">
               <span className="inline-flex items-center gap-1 font-mono">
-                {r.keypairName ? <><KeyRound className="size-3 text-amber-600" />{r.keypairName}</> : <span className="text-muted-foreground">미선택</span>}
+                {r.keypairName ? <><KeyRound className="size-3 text-amber-600" />{r.keypairName}</> : <span className="text-muted-foreground">사용 안 함</span>}
               </span>
             </Field>
             <Field label="희망 네트워크"><NetworkWish r={r} /></Field>
@@ -403,13 +395,15 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
               <Server className="size-3.5 text-rose-600" /> 노드 (신청)
             </div>
             <Field label="Control Plane">
-              <span className="font-mono">{r.masterCount ?? 0} 대 / {r.masterFlavorName ?? r.masterFlavorId ?? "—"}</span>
+              <span className="font-mono">{r.masterCount ?? 0}대 / {r.masterFlavorName ?? r.masterFlavorId ?? "—"}</span>
             </Field>
-            <Field label="Worker"><span className="font-mono">{r.nodeCount ?? 0} 대 / {r.flavorName ?? "—"}</span></Field>
+            <Field label="Worker"><span className="font-mono">{r.nodeCount ?? 0}대 / {r.flavorName ?? "—"}</span></Field>
             <Field label="Worker 가속기"><AccelBadges r={r} /></Field>
             <Field label="키페어">
               <span className="inline-flex items-center gap-1 font-mono">
-                {r.keypairName ? <><KeyRound className="size-3 text-amber-600" />{r.keypairName}</> : <span className="text-muted-foreground">템플릿 키페어</span>}
+                {r.keypairName ? <><KeyRound className="size-3 text-amber-600" />{r.keypairName}</>
+                  : tpl?.keypair_id ? <><KeyRound className="size-3 text-amber-600" />{tpl.keypair_id} (템플릿)</>
+                  : <span className="text-muted-foreground">{tplLoading ? "—" : "사용 안 함"}</span>}
               </span>
             </Field>
           </div>
@@ -423,8 +417,8 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
             <Network className="size-3.5 text-sky-600" /> 프로비저닝 설정
           </div>
           <Field label="네트워크 · 서브넷"><span className="font-mono">{cp.networkName} · {cp.subnetCidr}</span></Field>
-          <Field label="Control Plane"><span className="font-mono">{cp.masterCount} 대 / {cp.masterFlavorName}</span></Field>
-          <Field label="Worker"><span className="font-mono">{cp.nodeCount} 대 / {cp.flavorName}</span></Field>
+          <Field label="Control Plane"><span className="font-mono">{cp.masterCount}대 / {cp.masterFlavorName}</span></Field>
+          <Field label="Worker"><span className="font-mono">{cp.nodeCount}대 / {cp.flavorName}</span></Field>
           {r.result?.apiAddress && <Field label="API 주소"><span className="font-mono text-brand-mint-700">{r.result.apiAddress}</span></Field>}
           {r.result?.clusterId && <Field label="클러스터 ID"><span className="font-mono text-xs">{r.result.clusterId}</span></Field>}
         </div>
@@ -438,7 +432,7 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
           </div>
           <Field label="네트워크">
             <span className="inline-flex items-center gap-1.5">
-              <NetKindBadge internet={p.networkKind === "external"} /><span className="font-mono">{p.networkName}</span>
+              <NetBadge type={p.networkKind === "external" ? "internet" : "internal"} /><span className="font-mono">{p.networkName}</span>
             </span>
           </Field>
           <Field label="보안그룹"><span className="font-mono">{p.securityGroups.length ? p.securityGroups.join(", ") : "—"}</span></Field>
@@ -534,9 +528,6 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
     });
   }, [net, isExternal, fipOn, fipNet, ipManual, fixedIp, ipValid, sgNames, onChange]);
 
-  // 사용자 희망(내부망/인터넷망)과 같은 말로 표시 — 외부(external) 망만 인터넷망
-  const kindLabel = { project: "내부망", shared: "내부망 · 공유", external: "인터넷망" } as const;
-
   return (
     <div className="space-y-3 rounded-xl border border-brand-indigo-200 bg-brand-indigo-50/30 p-3.5">
       <div className="flex items-center justify-between gap-2">
@@ -570,10 +561,9 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
                 {n.kind === "external" ? <Globe className="size-4 shrink-0 text-amber-600" /> : <Wifi className="size-4 shrink-0 text-sky-600" />}
                 <span className={cn("flex-1 font-mono text-sm", networkId === n.id && "font-semibold text-brand-indigo-900")}>{n.name}</span>
                 <span className="font-mono text-[11px] text-muted-foreground">{n.cidr}</span>
-                {/* 색상은 '사용자 희망' 배지와 동일 — 인터넷망 amber, 내부망 sky */}
-                <Badge variant="ghost" className={cn("text-[10px]", n.kind === "external" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
-                  {kindLabel[n.kind]}
-                </Badge>
+                {/* 사용자 희망과 같은 배지 — 외부(external) 망만 인터넷망 */}
+                {n.kind === "shared" && <SharedTag />}
+                <NetBadge type={n.kind === "external" ? "internet" : "internal"} />
               </button>
             ))}
           </div>
@@ -716,6 +706,7 @@ function QuotaBar({ label, q, add, unit }: { label: string; q: { quota: number; 
 type PlacementState = { ok: boolean; pin: PlacementPreview["nodes"][number] | null };
 function PlacementCapacity({ r, onState }: { r: ResourceRequest; onState: (s: PlacementState) => void }) {
   const { data, isLoading, error } = usePlacementPreview(r.flavorId, r.projectId);
+  const modelOf = useAccelModel();
   const [host, setHost] = React.useState(r.provisionSpec?.host); // 재시도면 지난 회차에 고른 노드부터
   const addVcpu = r.vcpu ?? 0;
   const addRamGb = r.ramGb ?? 0;
@@ -769,7 +760,7 @@ function PlacementCapacity({ r, onState }: { r: ResourceRequest; onState: (s: Pl
             <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">
               <AlertCircle className="mt-0.5 size-4 shrink-0" />
               {accelShort
-                ? `요청한 가속기(${accelShort.kind} ${accelShort.count}장${r.deviceProfile ? ` · ${r.deviceProfile}` : ""}) 여유가 있는 노드가 없습니다 — 전체 ${accelShort.total}장 중 여유 ${accelShort.free}장. 반려하거나 회수 후 다시 시도하세요.`
+                ? `요청한 가속기(${accelShort.kind}${modelOf(r.deviceProfile) ? `(${modelOf(r.deviceProfile)})` : ""} × ${accelShort.count}${r.deviceProfile ? ` / ${r.deviceProfile}` : ""}) 여유가 있는 노드가 없습니다 — 전체 ${accelShort.total}장 중 여유 ${accelShort.free}장. 반려하거나 회수 후 다시 시도하세요.`
                 : "vCPU·메모리 여유가 있는 노드가 없습니다."}
             </div>
           )}
@@ -804,10 +795,8 @@ function PlacementCapacity({ r, onState }: { r: ResourceRequest; onState: (s: Pl
                       label={
                         <span className="flex min-w-0 items-center gap-1.5">
                           가속기
-                          <Badge variant="ghost" className={cn("h-5 shrink-0 gap-1 px-1.5 text-[10px]", accKindClass(a.kind))}>
-                            <Cpu className="size-3" />{a.kind}
-                          </Badge>
-                          <span className="truncate font-mono">
+                          <AccelBadge kind={a.kind} model={modelOf(r.deviceProfile)} count={a.count} />
+                          <span className="truncate font-mono text-muted-foreground">
                             {r.deviceProfile}{a.traits.length > 0 && `(${a.traits.join(", ")})`}
                           </span>
                         </span>
@@ -850,7 +839,7 @@ function PlacementCapacity({ r, onState }: { r: ResourceRequest; onState: (s: Pl
 
 // 프로비저닝 진행 사이드 시트 — 큰 단계 5개 + 세부 단계, MNT-CORE(tkt_provision_step) 폴링
 function fmtSec(ms: number) {
-  return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
+  return `${(Math.max(0, ms) / 1000).toFixed(1)}초`;
 }
 
 /** 보이는 단계의 소요 시간 — 끝났으면 기록된 시각끼리, 진행 중이면 화면 시계(t)까지. */
@@ -1106,9 +1095,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
               : isCluster ? <Boxes className="size-4 text-brand-indigo-600" />
               : <Server className="size-4 text-brand-indigo-600" />} 프로비저닝 진행
             <span className="ml-auto">
-              {status === "provisioning" ? (
-                <Badge variant="default" className="gap-1.5"><span className="size-1.5 rounded-full bg-brand-indigo-500" />진행 중</Badge>
-              ) : status && <StatusBadge status={status} />}
+              {status && <StatusBadge status={status} />}
             </span>
           </SheetTitle>
           <div className="flex items-center gap-2">
@@ -1222,9 +1209,18 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
                   </>
                 ) : (
                   <>
-                    {data?.result?.fixedIp && <div className="flex justify-between"><span className="text-muted-foreground">고정 IP</span><span className="font-mono">{data.result.fixedIp}</span></div>}
+                    {/* 받은 IP — 직접 입력했으면 고정 IP, 아니면 DHCP 자동 할당(신청 상세와 같은 표시) */}
+                    {data?.result?.fixedIp && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">IP</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <Badge variant="secondary" className="text-[10px]">{req?.provisionSpec?.fixedIp ? "고정 IP" : "DHCP"}</Badge>
+                          <span className="font-mono">{data.result.fixedIp}</span>
+                        </span>
+                      </div>
+                    )}
                     {data?.result?.floatingIp && <div className="flex justify-between"><span className="text-muted-foreground">Floating IP</span><span className="font-mono">{data.result.floatingIp}</span></div>}
-                    <div className="flex justify-between"><span className="text-muted-foreground">키페어</span><span className="font-mono">{req?.keypairName ?? "미지정"}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">키페어</span><span className="font-mono">{req?.cloudInit === false ? "미적용 (cloud-init 없음)" : req?.keypairName ?? "사용 안 함"}</span></div>
                   </>
                 )}
                 {totalMs !== undefined && <div className="flex justify-between"><span className="text-muted-foreground">총 소요 시간</span><span className="font-mono">{fmtSec(totalMs)}</span></div>}
@@ -1548,9 +1544,10 @@ function AdminView() {
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         {detail && isClusterReview(detail) ? (
           <ClusterReviewContent
-            key={detail.id}
+            key={`${detail.id}:${rejecting}`} // 같은 신청이라도 '반려' 버튼으로 열면 반려 입력부터
             r={detail}
             badge={<StatusBadge status={detail.status} />}
+            rejectFirst={rejecting}
             reviewing={reviewMutation.isPending}
             provisioning={provisionClusterMutation.isPending}
             onApprove={() => review("approve")}
