@@ -42,7 +42,8 @@ import {
 import { useSshKeys, type SshKey } from "@/lib/sshkey-api";
 import { WorkspaceRequestForm } from "@/components/workspace-requests";
 import {
-  AccelTags, ClusterNodeConfigPanel, EMPTY_NODE_CONFIG, effectiveNodes, nodeConfigMissing, nodeTotals, nodesValid, useAccelModel,
+  AccelTags, ClusterNodeConfigPanel, EMPTY_NODE_CONFIG, SpecPicker, accelChoices, accelGroup, effectiveNodes, nodeConfigMissing, nodeTotals,
+  nodesValid, useAccelModel, workerFlavorBlock,
   type ClusterNodeConfig,
 } from "@/components/cluster-node-fields";
 
@@ -209,6 +210,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
   const [volumeGb, setVolumeGb] = React.useState<number>(0);
   const [keypair, setKeypair] = React.useState<string>(""); // 키페어 이름
   const modelOf = useAccelModel();
+  const [accel, setAccel] = React.useState(""); // 스펙 표의 가속기 고르기 — "" = 가속기 없음
 
   // 스펙 = 선택한 프로젝트가 쓸 수 있는 플레이버(public + 이 프로젝트에 허용된 비공개)
   const { data: flavors = [], isLoading: flavorLoading, error: flavorError } = useProjectFlavors(project || undefined);
@@ -263,8 +265,16 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
     setVolumeGb(Math.max(1, img.minVolumeGb));
   }
 
+  // 가속기(종류·모델·노드당 개수 묶음) — 스펙을 고르면 그 스펙의 가속기. 바꿔서 고른 스펙과 맞지 않으면 스펙 선택을 비운다
+  const sameAccel = accelGroup(accelChoices(flavors, modelOf));
+  function handleAccel(dp: string) {
+    setAccel(dp);
+    if (selectedFlavor && workerFlavorBlock(selectedFlavor, dp, sameAccel)) setFlavor("");
+  }
+
   function handleFlavorSelect(f: FlavorSummary) {
     setFlavor(f.name);
+    setAccel(f.accelerator ?? "");
     // 템플릿을 먼저 고른 뒤 디스크 없는 스펙으로 바꾼 경우에도 최소 크기로 맞춘다
     if (f.diskGb === 0 && selectedImage) setVolumeGb(Math.max(1, selectedImage.minVolumeGb));
     // 디스크가 고른 템플릿보다 작은 스펙으로 바꾸면 템플릿 선택을 비운다(부팅 볼륨 = 플레이버 디스크)
@@ -452,8 +462,8 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
           <div className="flex gap-2.5 rounded-lg border border-sky-200 bg-sky-50 p-3">
             <Info className="mt-0.5 size-4 shrink-0 text-sky-600" />
             <p className="text-xs text-sky-800 leading-relaxed">
-              <span className="font-semibold">가속기가 필요한 경우</span> — GPU·NPU 가속기가 표시된 스펙을 선택하세요.
-              가속기는 스펙에 내장되어 있으며 별도로 선택할 필요가 없습니다.
+              <span className="font-semibold">가속기가 필요한 경우</span> — 아래 가속기에서 종류·모델·개수를 먼저 고르세요.
+              고른 가속기가 달린 스펙만 표에 보입니다(가속기는 스펙에 내장).
             </p>
           </div>
 
@@ -495,40 +505,15 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               <p className="text-xs text-rose-500">{nameCheck?.reason ?? "사용할 수 없는 이름입니다."}</p>
             )}
           </div>
-          <div className="space-y-2 pt-2">
+          <div className="grid gap-[14px] pt-2">
             <Label>스펙</Label>
             {flavorLoading && <p className="text-xs text-muted-foreground">스펙을 불러오는 중…</p>}
             {flavorError && <LoadError what="스펙" message={flavorError.message} />}
-            <div className="grid gap-2 sm:grid-cols-2">
-            {flavors.map((f) => (
-              <button
-                key={f.id}
-                disabled={f.deviceProfileMissing}
-                onClick={() => handleFlavorSelect(f)}
-                className={cn(
-                  "flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border p-2.5 text-left transition-colors",
-                  f.deviceProfileMissing && "cursor-not-allowed opacity-50",
-                  flavor === f.name ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
-                )}
-              >
-                <Server className="size-5 shrink-0 text-rose-600" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="break-all font-mono font-semibold">{f.name}</span>
-                    {/* 종류를 모를 때(Cyborg 조회 실패·device-profile 없음)도 '가속기' 배지 — 가속기 없음으로 보이지 않게 */}
-                    <AccelTags f={f} model={modelOf(f.accelerator)} />
-                  </div>
-                  <div className="font-mono text-xs text-muted-foreground tabular-nums">
-                    {f.vcpus} vCPU / {f.ramMb / 1024} GB RAM / {f.diskGb > 0 ? `${f.diskGb} GB Disk` : "Disk 볼륨 지정"}
-                  </div>
-                  {f.deviceProfileMissing && (
-                    <div className="text-[11px] text-amber-700">연결된 디바이스 프로파일이 존재하지 않습니다.</div>
-                  )}
-                </div>
-                {flavor === f.name && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
-              </button>
-            ))}
-            </div>
+            {!flavorLoading && !flavorError && (
+              <SpecPicker flavors={flavors} role="w" fixed={false} selected={selectedFlavor?.id ?? ""}
+                onSelect={(id) => { const f = flavors.find((x) => x.id === id); if (f) handleFlavorSelect(f); }}
+                accel={accel} onAccel={handleAccel} refLabel="" refId="" sortSelect groupAccel zeroDisk="Disk 볼륨 지정" />
+            )}
           </div>
         </>
       )}
