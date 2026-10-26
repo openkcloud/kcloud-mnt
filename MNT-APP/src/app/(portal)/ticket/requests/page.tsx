@@ -222,13 +222,23 @@ function SpecCell({ r }: { r: ResourceRequest }) {
   const accels = r.accelerators?.length ? r.accelerators
     : r.acceleratorKind ? [{ kind: r.acceleratorKind, count: r.acceleratorCount ?? 1 }] // 목업 티켓
     : [];
+  const badges = <>
+    {accels.map((a) => <AccelBadge key={a.kind} kind={a.kind} model={modelOf(r.deviceProfile)} count={a.count} />)}
+    {/* 가속기는 있으나 종류를 모를 때(종류 저장 전 티켓) */}
+    {!accels.length && r.deviceProfile && <AccelBadge />}
+  </>;
+  // 클러스터 — 1행 CP × 수 / 스펙, 2행 WK(Worker) × 수 / 스펙, 3행 가속기
+  if (r.type === "cluster") return (
+    <span className="flex flex-col items-start gap-1">
+      <span><span className="text-muted-foreground">CP × {r.masterCount ?? 0} /</span> {r.masterFlavorName ?? r.masterFlavorId ?? "—"}</span>
+      <span><span className="text-muted-foreground">WK × {r.nodeCount ?? 0} /</span> {r.flavorName ?? "—"}</span>
+      {(accels.length > 0 || r.deviceProfile) && <span className="flex flex-wrap gap-1">{badges}</span>}
+    </span>
+  );
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
-      {r.type === "cluster" && <span className="text-muted-foreground">CP×{r.masterCount ?? 0} / Worker×{r.nodeCount ?? 0}</span>}
       {r.flavorName ?? "—"}
-      {accels.map((a) => <AccelBadge key={a.kind} kind={a.kind} model={modelOf(r.deviceProfile)} count={a.count} />)}
-      {/* 가속기는 있으나 종류를 모를 때(종류 저장 전 티켓) */}
-      {!accels.length && r.deviceProfile && <AccelBadge />}
+      {badges}
     </span>
   );
 }
