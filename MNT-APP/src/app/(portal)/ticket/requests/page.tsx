@@ -308,7 +308,7 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
           {isVm ? <Server className="size-5" /> : isWs ? <BrainCircuit className="size-5" /> : <Boxes className="size-5" />}
         </div>
         <div className="min-w-0 flex-1">
-          <div className={cn("truncate text-base font-semibold", serverId && "underline-offset-2 group-hover:underline")}>
+          <div className={cn("break-words text-base font-semibold", serverId && "underline-offset-2 group-hover:underline")}>
             {isVm ? (r.vmName || "가상머신") : isWs ? (r.workspaceName || "AI 워크스페이스") : (r.clusterName || "서비스 클러스터")}
           </div>
           {r.title && <div className="mt-0.5 break-words text-sm text-foreground">{r.title}</div>}

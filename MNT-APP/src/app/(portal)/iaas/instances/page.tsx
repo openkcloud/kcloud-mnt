@@ -125,7 +125,7 @@ export default function InstancesPage() {
                 <TableCell>
                   <div className="flex items-center gap-2">
                     <Server className="size-3.5 text-brand-indigo-600" />
-                    <span className="max-w-[200px] truncate font-mono text-sm font-semibold">{s.name}</span>
+                    <span className="max-w-[200px] truncate font-mono text-sm font-semibold" title={s.name}>{s.name}</span>
                   </div>
                 </TableCell>
                 <TableCell><Badge variant={stVariant(s.status)} className="text-[10px]">{s.status}</Badge></TableCell>
