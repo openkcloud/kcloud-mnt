@@ -286,7 +286,8 @@ def _server_detail(server_id: str, accel_map: dict) -> dict:
          "ips": [fx.get("ip_address") for fx in (i.get("fixed_ips") or [])]}
         for i in ifaces
     ]
-    d["securityGroups"] = [g.get("name") for g in (s.get("security_groups") or [])]
+    # Nova 는 NIC(포트)마다 같은 보안그룹을 중복으로 줄 수 있어 이름 기준 중복 제거(순서 유지)
+    d["securityGroups"] = list(dict.fromkeys(g.get("name") for g in (s.get("security_groups") or []) if g.get("name")))
     return d
 
 
