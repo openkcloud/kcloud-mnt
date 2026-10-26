@@ -214,7 +214,7 @@ def check_quota(project_id: str, need: dict) -> str:
 def check_network(network_id: str, subnet_id: str, floating_network_id: str) -> str:
     """클러스터 노드 망 확인 — 서브넷이 그 망 소속·DHCP 켜짐 + API 에 Floating IP 를 붙일 수 있음 → '망 이름 / CIDR'.
     DHCP 가 꺼진 서브넷에서는 노드가 주소를 받지 못해 설치가 시작되지 않는다(2026-10-19 시험).
-    외부망(공유)에 노드를 바로 붙이면 API 는 Floating IP 없이 그 망의 주소로 열리므로 Floating IP 확인을 하지 않는다."""
+    외부망도 예외 없이 본다 — 노드를 바로 붙이면 API 로드밸런서 주소(OVN)에 밖에서 닿지 못한다(2026-10-22 시험)."""
     try:
         net = networks._neutron_get(f"/networks/{network_id}")["network"]
         sn = networks._neutron_get(f"/subnets/{subnet_id}")["subnet"]
@@ -226,8 +226,6 @@ def check_network(network_id: str, subnet_id: str, floating_network_id: str) -> 
         raise _fail("서브넷이 고른 네트워크에 속하지 않습니다.")
     if not sn.get("enable_dhcp"):
         raise _fail("DHCP 가 꺼진 서브넷에는 노드가 주소를 받지 못합니다.")
-    if net.get("router:external"):
-        return f"{net.get('name') or network_id} / {sn.get('cidr', '')}"
     try:
         r = networks.fip_reachable(network_id, floating_network_id, subnet_id)
     except HTTPException as e:

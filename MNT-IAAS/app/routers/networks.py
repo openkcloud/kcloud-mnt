@@ -298,8 +298,12 @@ def get_network(network_id: str):
         routers = _neutron_get("/routers", pf)["routers"]
         sgs = _neutron_get("/security-groups", pf)["security_groups"]
         fips = _neutron_get("/floatingips", pf)["floatingips"]
+        # 서브넷 유형 — 이 망에 붙은 라우터(다른 프로젝트 소유일 수 있어 따로 조회)
+        iface_routers = sorted({p["device_id"] for p in ports if p.get("device_owner") in _ROUTER_IFACE_OWNERS})
+        gw_routers = _neutron_get("/routers", {"id": iface_routers})["routers"] if iface_routers else []
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"네트워크 상세 조회 실패: {type(e).__name__}: {e}")
+    internet = _internet_subnet(ports, gw_routers)
 
     # Neutron 프로젝트 쿼터(사용량 포함) — 실패해도 상세는 반환(0 placeholder)
     quota = {}
@@ -328,7 +332,7 @@ def get_network(network_id: str):
             {
                 "id": s["id"], "name": s.get("name") or s["id"], "cidr": s.get("cidr", ""),
                 "gateway": s.get("gateway_ip") or "", "dhcp": bool(s.get("enable_dhcp")),
-                "dns": s.get("dns_nameservers") or [], "allocationPool": _pool(s),
+                "dns": s.get("dns_nameservers") or [], "allocationPool": _pool(s), "internet": internet(s),
             }
             for s in subnets
         ],
@@ -668,14 +672,17 @@ def list_project_networks(project_id: str):
     """승인 시 고를 네트워크 — 프로젝트 소유 + 공유 + 외부(external), Magnum 클러스터 네트워크 제외. kind: project|shared|external.
     공유는 전체 공유(shared) + 이 프로젝트에만 RBAC 로 공유된 것(관리자 조회 시 shared=false 로 보이므로 따로 확인).
     shared = 이 프로젝트가 포트를 만들 수 있는 공유 망인지(외부망도 공유돼 있으면 노드를 바로 붙일 수 있다).
-    cidr 는 서브넷 CIDR(여러 개면 ', ' 로 연결)."""
+    cidr 는 서브넷 CIDR(여러 개면 ', ' 로 연결). access = IPv4 서브넷 유형(internet·internal, 서브넷마다 — _internet_subnet)."""
     try:
         nets = _neutron_get("/networks")["networks"]
         subnets = _neutron_get("/subnets")["subnets"]
         rbac = _neutron_get("/rbac-policies", {"object_type": "network", "action": "access_as_shared"})["rbac_policies"]
+        iports = _neutron_get("/ports", {"device_owner": list(_ROUTER_IFACE_OWNERS)})["ports"]
+        routers = _neutron_get("/routers")["routers"]
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"네트워크 조회 실패: {type(e).__name__}: {e}")
     shared_to_project = {p["object_id"] for p in rbac if p.get("target_tenant") in (project_id, "*")}
+    internet = _internet_subnet(iports, routers)
     items = []
     for n in nets:
         if (n.get("name") or "").startswith(_MAGNUM_NET_PREFIX):
@@ -687,9 +694,11 @@ def list_project_networks(project_id: str):
                 continue
             kind = "shared"
         cidrs = [sn["cidr"] for sn in subnets if sn["network_id"] == n["id"]]
+        types = {internet(sn) for sn in subnets if sn["network_id"] == n["id"] and sn.get("ip_version") == 4}
         items.append({"id": n["id"], "name": n.get("name") or n["id"], "kind": kind,
                       "shared": bool(n.get("shared")) or n["id"] in shared_to_project,
-                      "projectId": owner, "cidr": ", ".join(cidrs)})
+                      "projectId": owner, "cidr": ", ".join(cidrs),
+                      "access": [t for t, on in (("internet", True), ("internal", False)) if on in types]})
     return {"items": items, "count": len(items)}
 
 
@@ -734,6 +743,16 @@ def ip_check(network_id: str, ip: str):
 # 라우터 인터페이스 포트 종류 — 일반·분산(DVR)·HA 라우터
 _ROUTER_IFACE_OWNERS = ("network:router_interface", "network:router_interface_distributed",
                         "network:ha_router_replicated_interface")
+
+
+def _internet_subnet(ports: list[dict], routers: list[dict]):
+    """서브넷 → 인터넷망(True)·내부망(False) 판정 함수. 게이트웨이 IP 를 가진 라우터에 외부 게이트웨이가 있으면 인터넷망
+    (fip_reachable 과 같은 기준 — VM·노드는 서브넷 게이트웨이 IP 로 나간다). ports 중 라우터 인터페이스만 본다."""
+    gw_routers = {r["id"] for r in routers if (r.get("external_gateway_info") or {}).get("network_id")}
+    reached = {(ip["subnet_id"], ip["ip_address"]) for pt in ports
+               if pt.get("device_owner") in _ROUTER_IFACE_OWNERS and pt.get("device_id") in gw_routers
+               for ip in pt.get("fixed_ips") or []}
+    return lambda sn: (sn["id"], sn.get("gateway_ip")) in reached
 
 
 @router.get("/networks/{network_id}/fip-reachable", dependencies=[Depends(require_admin)])

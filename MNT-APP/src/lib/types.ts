@@ -570,9 +570,10 @@ export interface ProvNetwork {
   id: string;
   name: string;
   kind: "project" | "shared" | "external";
-  shared?: boolean;        // 이 프로젝트가 포트를 만들 수 있는 공유 망(공유된 외부망이면 클러스터 노드를 바로 붙일 수 있다)
+  shared?: boolean;        // 이 프로젝트가 포트를 만들 수 있는 공유 망
   projectId: string;
   cidr: string;
+  access?: ("internet" | "internal")[]; // IPv4 서브넷 유형 — 게이트웨이 IP 를 가진 라우터에 외부 게이트웨이가 있으면 인터넷망
 }
 
 // 신청 마법사 키페어 — iam_ssh_key (owner = iam_user.username)
@@ -654,7 +655,7 @@ export interface ResourceRequest {
   acceleratorCount?: number;
   deviceProfile?: string;  // 플레이버의 Cyborg device-profile (실제 VM 티켓의 가속기 표시)
   accelerators?: { kind: string; count: number }[];  // device-profile 의 가속기 종류(GPU/NPU)·개수 — 신청 시 저장
-  // Cluster — Worker 플레이버는 위 flavorId·flavorName·vcpu·ramGb·deviceProfile·accelerators, 희망 망은 networkType
+  // Cluster — Worker 플레이버는 위 flavorId·flavorName·vcpu·ramGb·deviceProfile·accelerators(희망 망은 받지 않음 — 예전 신청에만 networkType)
   clusterName?: string;
   k8sVersion?: string;
   nodeCount?: number;      // Worker 노드 수

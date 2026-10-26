@@ -160,7 +160,8 @@ export interface NetworkDetail {
   type: "tenant" | "external" | "shared";
   vlan: number | null;
   status: string;
-  subnets: { id: string; name: string; cidr: string; gateway: string; dhcp: boolean; dns: string[]; allocationPool: string }[];
+  subnets: { id: string; name: string; cidr: string; gateway: string; dhcp: boolean; dns: string[]; allocationPool: string;
+    internet?: boolean }[]; // internet: 게이트웨이 IP 를 가진 라우터에 외부 게이트웨이가 있음(인터넷망)
   ports: { id: string; name: string; status: string; mac: string; ip: string; deviceOwner: string; vm: string | null }[];
   securityGroups: { id: string; name: string; rules: number; desc: string }[];
   routers: { id: string; name: string; status: string; gatewayIp: string; routes: number; ha: boolean }[];

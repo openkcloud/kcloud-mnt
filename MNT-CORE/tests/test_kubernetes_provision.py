@@ -157,7 +157,7 @@ async def _scenarios():
     create = next(c for c in calls if c[:2] == ("create", "wf-ok"))
     assert create[2] == "p-1" and create[3]["name"] == "cl-wf-ok" and create[3]["subnetId"] == "sub-1"
     assert create[3]["keypair"] == "gy-yang-pub"  # OpenStack 키페어 이름 그대로 — PAAS 가 찾아서 Magnum 에 넘긴다
-    assert create[3]["externalNetwork"] is False  # 입력에 없으면 프로젝트 망(라우터 + API Floating IP)
+    assert "externalNetwork" not in create[3]  # 노드는 프로젝트·공유 망만(라우터 + API Floating IP)
     assert sub_values("wf-ok") == {"check_name": "cl-wf-ok", "check_quota": "VM 3대 · vCPU 12 · RAM 24GB",
                                    "check_network": "my-network / 10.0.1.0/24", "send_request": "c-wf-ok",
                                    "prepare_api": API, "create_cp_vm": "1/1", "create_workers": "2/2",
@@ -194,34 +194,69 @@ async def _scenarios():
 T0 = datetime(2026, 10, 21, 18, 0)
 
 
-def _s(cp=1, workers=1, problem=None):
-    return {"cpVms": cp, "workerVms": workers, "problem": problem}
+def _s(cp=1, workers=1, problem=None, active=None, master=False):
+    return {"cpVms": cp, "cpActive": cp if active is None else active, "workerVms": workers, "masterReady": master,
+            "problem": problem}
 
 
 def test_노드_VM_이_안_생기면_2분부터_주의_5분에_실패():
-    seen: dict = {}
-    assert kp.judge(_s(cp=0), T0 + timedelta(minutes=1), T0, None, seen) == (None, None)  # 성공 때는 31초
-    assert kp.judge(_s(cp=0), T0 + timedelta(minutes=2), T0, None, seen) == (
+    seen: dict = {"no_cp_vm": T0}  # 워크플로가 생성 요청 시각으로 넣어 둔다
+    assert kp.judge(_s(cp=0), T0 + timedelta(minutes=1), seen) == (None, None)  # 성공 때는 31초
+    assert kp.judge(_s(cp=0), T0 + timedelta(minutes=2), seen) == (
         None, "주의: Control Plane VM 이 아직 만들어지지 않았습니다 (2분째)")
-    fail, _ = kp.judge(_s(cp=0), T0 + timedelta(minutes=5), T0, None, seen)
+    fail, _ = kp.judge(_s(cp=0), T0 + timedelta(minutes=5), seen)
     assert fail.startswith("Control Plane VM 이 5분 안에 만들어지지 않았습니다")
     # Worker VM — 노드 준비(Control Plane 완료) 뒤부터 센다
-    fail, _ = kp.judge(_s(workers=0), T0 + timedelta(minutes=9), T0, T0 + timedelta(minutes=4), seen)
+    assert kp.judge(_s(workers=0, master=True), T0 + timedelta(minutes=4), seen) == (None, None)
+    fail, _ = kp.judge(_s(workers=0, master=True), T0 + timedelta(minutes=9), seen)
     assert fail.startswith("Worker VM 이 5분 안에 만들어지지 않았습니다")
+
+
+def test_노드_VM_이_있다가_사라지면_사라진_때부터_센다():
+    # 2026-10-22 req-261022-007 — 생성 44분 뒤 Control Plane VM 이 지워지자 '5분 안에 안 생김'이 바로 걸렸다
+    seen: dict = {"no_cp_vm": T0}
+    assert kp.judge(_s(cp=1, workers=1), T0 + timedelta(minutes=4), seen) == (None, None)
+    assert kp.judge(_s(cp=0, workers=1), T0 + timedelta(minutes=44), seen) == (None, None)
+    assert kp.judge(_s(cp=0, workers=1), T0 + timedelta(minutes=46), seen)[1] == (
+        "주의: Control Plane VM 이 아직 만들어지지 않았습니다 (2분째)")
+    fail, _ = kp.judge(_s(cp=0, workers=1), T0 + timedelta(minutes=49), seen)
+    assert fail.startswith("Control Plane VM 이 5분 안에 만들어지지 않았습니다")
+    # Worker VM 도 같다 — 노드 준비 뒤 있다가 사라진 때부터
+    seen = {}
+    assert kp.judge(_s(workers=2, master=True), T0, seen) == (None, None)
+    assert kp.judge(_s(workers=0, master=True), T0 + timedelta(minutes=20), seen) == (None, None)
+
+
+def test_Control_Plane_VM_이_뜬_뒤_Worker_VM_이_안_생기면_5분부터_주의_10분에_실패():
+    # 2026-10-22 req-261022-007 — kubeadm init 은 끝났지만 API 주소(외부망 LB)에 닿지 못해 Worker 가 안 생김, 45분 대기
+    # 성공 때 초기화는 2~2.5분(Control Plane VM ACTIVE → Worker VM 생성 시작)
+    seen: dict = {"no_cp_vm": T0}
+    assert kp.judge(_s(cp=1, active=0, workers=0), T0 + timedelta(minutes=2), seen) == (None, None)  # 아직 BUILD
+    assert kp.judge(_s(cp=1, workers=0), T0 + timedelta(minutes=4), seen) == (None, None)
+    assert kp.judge(_s(cp=1, workers=0), T0 + timedelta(minutes=8), seen)[0] is None
+    assert kp.judge(_s(cp=1, workers=0), T0 + timedelta(minutes=9), seen) == (
+        None, "주의: Control Plane VM 이 뜬 뒤 Worker VM 이 아직 만들어지지 않았습니다 (5분째)")
+    fail, _ = kp.judge(_s(cp=1, workers=0), T0 + timedelta(minutes=14), seen)
+    assert fail.startswith("Control Plane VM 이 뜬 뒤 10분 동안 Worker VM 이 만들어지지 않았습니다")
+    # Worker VM 이 생기거나 노드 준비가 끝나면 풀린다
+    seen = {"no_cp_vm": T0}
+    assert kp.judge(_s(cp=1, workers=0), T0 + timedelta(minutes=4), seen) == (None, None)
+    assert kp.judge(_s(cp=1, workers=1), T0 + timedelta(minutes=6), seen) == (None, None)
+    assert kp.judge(_s(cp=1, workers=0, master=True), T0 + timedelta(minutes=15), seen) == (None, None)
 
 
 def test_클라우드_컨트롤러_문제는_3분_계속되면_실패():
     occm = {"code": "occm", "message": "클라우드 컨트롤러(OCCM)가 OpenStack API·DNS 에 닿지 못합니다 (i/o timeout)"}
     seen: dict = {}
-    assert kp.judge(_s(problem=occm), T0, T0, None, seen) == (None, f"주의: {occm['message']} (0분째)")
-    assert kp.judge(_s(problem=occm), T0 + timedelta(minutes=2), T0, None, seen)[0] is None
+    assert kp.judge(_s(problem=occm), T0, seen) == (None, f"주의: {occm['message']} (0분째)")
+    assert kp.judge(_s(problem=occm), T0 + timedelta(minutes=2), seen)[0] is None
     # 사라졌다 다시 생기면 처음부터 센다
-    assert kp.judge(_s(), T0 + timedelta(minutes=2, seconds=30), T0, None, seen) == (None, None)
-    assert kp.judge(_s(problem=occm), T0 + timedelta(minutes=3), T0, None, seen)[0] is None
-    assert kp.judge(_s(problem=occm), T0 + timedelta(minutes=6), T0, None, seen) == (occm["message"], None)
+    assert kp.judge(_s(), T0 + timedelta(minutes=2, seconds=30), seen) == (None, None)
+    assert kp.judge(_s(problem=occm), T0 + timedelta(minutes=3), seen)[0] is None
+    assert kp.judge(_s(problem=occm), T0 + timedelta(minutes=6), seen) == (occm["message"], None)
 
 
 @pytest.mark.parametrize("code", ["vm_error", "node_network"])
 def test_확정된_문제는_바로_실패(code):
     p = {"code": code, "message": "노드 문제(시험)"}
-    assert kp.judge(_s(problem=p), T0, T0, None, {}) == ("노드 문제(시험)", None)
+    assert kp.judge(_s(problem=p), T0, {}) == ("노드 문제(시험)", None)
