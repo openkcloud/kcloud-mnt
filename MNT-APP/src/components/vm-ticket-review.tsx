@@ -181,6 +181,7 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
                   { k: "템플릿", v: r.imageName ?? "—" },
                   { k: "cloud-init", v: r.cloudInit === false ? "없음 (키페어 미적용)" : "포함" },
                   { k: "키페어", v: r.keypairName || "사용 안 함" },
+                  { k: "용도", v: r.purpose || "—" },
                 ] },
               ]} />
             </Collapse>

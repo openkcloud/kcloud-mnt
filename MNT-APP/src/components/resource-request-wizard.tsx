@@ -9,14 +9,11 @@ import {
   Server,
   Wifi,
   Globe,
-  Info,
   AlertTriangle,
   HardDrive,
-  KeyRound,
   Boxes,
   Disc3,
   BrainCircuit,
-  Cpu,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -32,7 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { InfoRow, Section } from "@/components/request-detail";
+import { InfoRow, PANEL, Section } from "@/components/request-detail";
 import { useAuth } from "@/lib/auth";
 import { useNovaKeypairs, useProjectFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
 import { useClusterTemplates } from "@/lib/paas-api";
@@ -42,16 +39,17 @@ import {
 import { useSshKeys, type SshKey } from "@/lib/sshkey-api";
 import { WorkspaceRequestForm } from "@/components/workspace-requests";
 import {
-  AccelTags, ClusterNodeConfigPanel, EMPTY_NODE_CONFIG, SpecPicker, accelChoices, accelGroup, effectiveNodes, nodeConfigMissing, nodeTotals,
-  nodesValid, useAccelModel, workerFlavorBlock,
+  AccelTags, ClusterNodeConfigPanel, EMPTY_NODE_CONFIG, KeypairTable, NodeCard, PickerHeader, RequiredProgress, SpecPicker, TotalAccel,
+  TotalsBlock, WorkerAccel, accelChoices, accelGroup, effectiveNodes, keyIcon, keyType, nodeConfigMissing, nodeTotals, nodesValid,
+  serverIcon, useAccelModel, workerFlavorBlock,
   type ClusterNodeConfig,
 } from "@/components/cluster-node-fields";
 
+// 서비스 클러스터 신청과 같은 흐름 — 기본 → 템플릿 → 구성 → 확인
 const STEPS = [
-  { key: "project", title: "프로젝트", icon: FolderKanban, desc: "OpenStack 프로젝트 선택" },
-  { key: "network", title: "네트워크", icon: Network, desc: "희망 망 · 공인 IP" },
-  { key: "spec", title: "스펙", icon: Server, desc: "스펙 — vCPU·RAM·Disk·가속기" },
-  { key: "template", title: "템플릿", icon: Disc3, desc: "OS 이미지 · 볼륨 · 키페어" },
+  { key: "basic", title: "기본", icon: FolderKanban, desc: "프로젝트 · 이름 · 용도" },
+  { key: "template", title: "템플릿", icon: Disc3, desc: "OS 이미지" },
+  { key: "config", title: "가상머신 구성", icon: Server, desc: "네트워크 · 스펙 · 키페어" },
   { key: "review", title: "확인", icon: CheckCircle2, desc: "요청 검토 및 제출" },
 ] as const;
 
@@ -114,8 +112,8 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && close()}>
-      {/* 서비스 클러스터 신청은 노드 단계(왼쪽 노드 카드 + 오른쪽 스펙 표)가 넓어 모달을 넓힌다 */}
-      <DialogContent className={cn("max-h-[90vh] overflow-y-auto", type === "cluster" ? "max-w-5xl" : "max-w-3xl")}>
+      {/* 서비스 클러스터·가상머신 신청은 구성 단계(왼쪽 카드 + 오른쪽 고르기)가 넓어 모달을 넓힌다 */}
+      <DialogContent className={cn("max-h-[90vh] overflow-y-auto", type === "cluster" || type === "vm" ? "max-w-5xl" : "max-w-3xl")}>
         <DialogHeader>
           <DialogTitle>자원 신청</DialogTitle>
           <DialogDescription>
@@ -199,9 +197,11 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
   const createTicket = useCreateTicket();
   const { data: projects = [], isLoading: projLoading, error: projError, failureCount: projFails } = useTicketProjects(user?.username);
 
-  const [step, setStep] = React.useState<StepKey>("project");
+  const [step, setStep] = React.useState<StepKey>("basic");
   const [vmName, setVmName] = React.useState("");
   const [title, setTitle] = React.useState("");
+  const [purpose, setPurpose] = React.useState("");
+  const [role, setRole] = React.useState<"net" | "spec" | "key">("net"); // 가상머신 구성 — 오른쪽에 보일 고르기
   const [project, setProject] = React.useState<string>("");
   const [network, setNetwork] = React.useState<string>("");
   const [floatingIp, setFloatingIp] = React.useState(false);
@@ -258,12 +258,17 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
     setKeypair("");
   }
 
-  // 부팅 볼륨 크기는 템플릿을 바꿀 때마다 그 템플릿의 최소 디스크로 맞춘다
+  // 부팅 볼륨 크기는 템플릿을 바꿀 때마다 그 템플릿의 최소 디스크로 맞춘다. 고른 스펙 디스크가 새 템플릿보다 작으면 스펙을 비운다
   function handleImageSelect(img: ProjectImage) {
     setImage(img.id);
     if (!img.cloudInit) setKeypair(""); // cloud-init 없으면 키페어 주입 불가
     setVolumeGb(Math.max(1, img.minVolumeGb));
+    if (selectedFlavor && selectedFlavor.diskGb > 0 && selectedFlavor.diskGb < img.minVolumeGb) setFlavor("");
   }
+  // 부팅 볼륨 = 플레이버 디스크 — 고른 템플릿의 최소 디스크보다 작은 스펙은 쓸 수 없다(디스크 0 스펙은 부팅 볼륨 크기를 입력)
+  const tooSmall = (f: FlavorSummary) => selectedImage && f.diskGb > 0 && f.diskGb < selectedImage.minVolumeGb
+    ? `템플릿 최소 디스크(${selectedImage.minVolumeGb} GB)보다 작은 스펙` : null;
+  const noCloudInit = !!selectedImage && !selectedImage.cloudInit;
 
   // 가속기(종류·모델·노드당 개수 묶음) — 스펙을 고르면 그 스펙의 가속기. 바꿔서 고른 스펙과 맞지 않으면 스펙 선택을 비운다
   const sameAccel = accelGroup(accelChoices(flavors, modelOf));
@@ -275,19 +280,17 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
   function handleFlavorSelect(f: FlavorSummary) {
     setFlavor(f.name);
     setAccel(f.accelerator ?? "");
-    // 템플릿을 먼저 고른 뒤 디스크 없는 스펙으로 바꾼 경우에도 최소 크기로 맞춘다
-    if (f.diskGb === 0 && selectedImage) setVolumeGb(Math.max(1, selectedImage.minVolumeGb));
-    // 디스크가 고른 템플릿보다 작은 스펙으로 바꾸면 템플릿 선택을 비운다(부팅 볼륨 = 플레이버 디스크)
-    if (f.diskGb > 0 && selectedImage && f.diskGb < selectedImage.minVolumeGb) setImage("");
+    // 디스크 없는 스펙 — 부팅 볼륨을 템플릿 최소 디스크로 맞춘다
+    if (f.diskGb === 0) setVolumeGb(Math.max(1, selectedImage?.minVolumeGb ?? 1));
   }
 
   const volumeValid = !needVolume || (volumeGb >= minVolume && volumeGb <= MAX_VOLUME_GB);
 
+  const specOk = !!selectedFlavor && volumeValid && !tooSmall(selectedFlavor);
   const canProceed: Record<StepKey, boolean> = {
-    project: !!project,
-    network: !!network,
-    spec: !!flavor && nameOk,
-    template: !!image && volumeValid,
+    basic: !!project && nameOk,
+    template: !!image,
+    config: !!network && specOk,
     review: true,
   };
 
@@ -309,6 +312,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
         projectId: proj.id,
         title: title.trim() || undefined,
         vmName,
+        purpose: purpose.trim(),
         networkType: network,
         floatingIp,
         flavorId: flv.id, // Nova 생성 시 flavorRef
@@ -336,135 +340,43 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
     {/* Step content */}
     <div className="min-h-[340px] space-y-3 py-2">
 
-      {/* ── 1. 프로젝트 ── */}
-      {step === "project" && (
-        <>
-          <div className="text-sm font-semibold">프로젝트 선택</div>
-          <p className="text-xs text-muted-foreground">할당된 프로젝트 목록입니다. 가상머신을 생성할 프로젝트를 선택하세요.</p>
-          <div className="grid gap-2">
-            {projLoading ? (
-              <p className="text-xs text-muted-foreground">{projectsLoadingText(projFails)}</p>
-            ) : projError ? (
-              <LoadError what="프로젝트" message={projError.message} />
-            ) : projects.length === 0 && (
-              <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
-                <p className="text-xs text-amber-800">신청할 수 있는 프로젝트가 없습니다(프로젝트 owner·member만 신청 가능). 조직 관리자에게 프로젝트 할당을 요청하세요.</p>
-              </div>
-            )}
-            {projects.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => handleProjectSelect(p.id)}
-                className={cn(
-                  "flex cursor-pointer items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors",
-                  project === p.id ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
-                )}
-              >
-                <FolderKanban className="size-5 text-brand-indigo-600" />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono font-semibold">{p.name}</span>
-                    {p.orgName && <span className="text-xs text-muted-foreground">{p.orgName}</span>}
-                  </div>
+      {/* ── 1. 기본 — 프로젝트 · 신청 제목 · 가상머신 이름 · 용도 ── */}
+      {step === "basic" && (
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>프로젝트</Label>
+            <div className="grid gap-2">
+              {projLoading ? (
+                <p className="text-xs text-muted-foreground">{projectsLoadingText(projFails)}</p>
+              ) : projError ? (
+                <LoadError what="프로젝트" message={projError.message} />
+              ) : projects.length === 0 && (
+                <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
+                  <p className="text-xs text-amber-800">신청할 수 있는 프로젝트가 없습니다(프로젝트 owner·member만 신청 가능). 조직 관리자에게 프로젝트 할당을 요청하세요.</p>
                 </div>
-                {project === p.id && <CheckCircle2 className="size-4 text-brand-mint-600" />}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-
-      {/* ── 2. 네트워크 ── */}
-      {step === "network" && (
-        <>
-          <div className="text-sm font-semibold">희망 네트워크 선택</div>
-          <p className="text-xs text-muted-foreground">
-            <span className="font-mono text-foreground">{selectedProject?.name}</span> 프로젝트에서 사용할 네트워크 용도를 선택하세요. 실제 네트워크와 IP는 관리자가 승인 시 지정합니다.
-          </p>
-          <div className="grid gap-2">
-            {USER_NETWORKS.map((n) => (
-              <button
-                key={n.id}
-                onClick={() => handleNetworkSelect(n.id)}
-                className={cn(
-                  "flex cursor-pointer items-center gap-3 rounded-lg border border-border p-4 text-left transition-colors",
-                  network === n.id ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
-                )}
-              >
-                {n.id === "external" ? <Globe className="size-5 shrink-0 text-amber-600" /> : <Wifi className="size-5 shrink-0 text-sky-600" />}
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold">{n.label}</span>
-                    <span className="text-xs text-muted-foreground">{n.sublabel}</span>
+              )}
+              {projects.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => handleProjectSelect(p.id)}
+                  className={cn(
+                    "flex cursor-pointer items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors",
+                    project === p.id ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
+                  )}
+                >
+                  <FolderKanban className="size-5 text-brand-indigo-600" />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-semibold">{p.name}</span>
+                      {p.orgName && <span className="text-xs text-muted-foreground">{p.orgName}</span>}
+                    </div>
                   </div>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{n.description}</p>
-                </div>
-                {network === n.id && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
-              </button>
-            ))}
-          </div>
-
-          {/* 공인 IP 희망 — 인터넷망 선택 시만 활성 */}
-          <button
-            type="button"
-            onClick={() => selectedNetworkObj?.fipAvailable && setFloatingIp((v) => !v)}
-            disabled={!selectedNetworkObj?.fipAvailable}
-            className={cn(
-              "flex w-full cursor-pointer items-center gap-3 rounded-lg border p-4 text-left transition-colors",
-              !selectedNetworkObj?.fipAvailable && "cursor-not-allowed opacity-40",
-              floatingIp ? "border-primary bg-brand-indigo-50/40" : "border-border hover:bg-secondary/40",
-            )}
-          >
-            <Globe className="size-5 shrink-0 text-amber-600" />
-            <div className="flex-1">
-              <div className="font-semibold text-sm">외부 접속용 공인 IP 희망</div>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                외부에서 접속 가능한 IP를 요청합니다. 인터넷망 선택 시에만 신청 가능하며, 할당 방식은 관리자가 결정합니다.
-              </p>
+                  {project === p.id && <CheckCircle2 className="size-4 text-brand-mint-600" />}
+                </button>
+              ))}
             </div>
-            <div className={cn(
-              "flex size-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
-              floatingIp ? "border-primary bg-primary" : "border-muted-foreground/30",
-            )}>
-              {floatingIp && <CheckCircle2 className="size-3 text-white" />}
-            </div>
-          </button>
-
-          {network === "internal" && (
-            <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
-              <p className="text-xs text-amber-800">
-                <span className="font-semibold">외부 SSH 접속 불가</span> — 내부망 가상머신은 사설 IP만 부여되어 데이터센터 외부에서 접근할 수 없습니다.
-                외부 접속이 필요하다면 <span className="font-semibold">인터넷망</span>을 선택하고 공인 IP를 희망하세요.
-              </p>
-            </div>
-          )}
-          {network === "external" && !floatingIp && (
-            <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
-              <p className="text-xs text-amber-800">
-                공인 IP를 희망하지 않으면 외부에서 직접 SSH 접속이 불가능할 수 있습니다.
-              </p>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* ── 3. 스펙 ── */}
-      {step === "spec" && (
-        <>
-          <div className="text-sm font-semibold">스펙 선택</div>
-          <p className="text-xs text-muted-foreground">
-            가상머신 이름을 입력하고 컴퓨트 스펙을 선택하세요. 디스크가 없는 스펙은 다음 단계에서 부팅 볼륨 크기를 지정합니다.
-          </p>
-
-          <div className="flex gap-2.5 rounded-lg border border-sky-200 bg-sky-50 p-3">
-            <Info className="mt-0.5 size-4 shrink-0 text-sky-600" />
-            <p className="text-xs text-sky-800 leading-relaxed">
-              <span className="font-semibold">가속기가 필요한 경우</span> — 아래 가속기에서 종류·모델·개수를 먼저 고르세요.
-              고른 가속기가 달린 스펙만 표에 보입니다(가속기는 스펙에 내장).
-            </p>
+            <p className="text-[11px] text-muted-foreground">가상머신은 이 프로젝트 쿼터에서 차감됩니다.</p>
           </div>
 
           <div className="grid gap-2">
@@ -505,41 +417,38 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               <p className="text-xs text-rose-500">{nameCheck?.reason ?? "사용할 수 없는 이름입니다."}</p>
             )}
           </div>
-          <div className="grid gap-[14px] pt-2">
-            <Label>스펙</Label>
-            {flavorLoading && <p className="text-xs text-muted-foreground">스펙을 불러오는 중…</p>}
-            {flavorError && <LoadError what="스펙" message={flavorError.message} />}
-            {!flavorLoading && !flavorError && (
-              <SpecPicker flavors={flavors} role="w" fixed={false} selected={selectedFlavor?.id ?? ""}
-                onSelect={(id) => { const f = flavors.find((x) => x.id === id); if (f) handleFlavorSelect(f); }}
-                accel={accel} onAccel={handleAccel} refLabel="" refId="" sortSelect groupAccel zeroDisk="Disk 볼륨 지정" />
-            )}
+
+          <div className="grid gap-2">
+            <Label htmlFor="vm-purpose">용도 <span className="text-muted-foreground">(선택)</span></Label>
+            <Input
+              id="vm-purpose"
+              placeholder="예: 모델 학습·추론 실험"
+              value={purpose}
+              maxLength={PURPOSE_MAX}
+              onChange={(e) => setPurpose(e.target.value)}
+            />
+            <p className="text-right font-mono text-[10px] text-muted-foreground">{purpose.length} / {PURPOSE_MAX}</p>
           </div>
-        </>
+        </div>
       )}
 
-      {/* ── 4. 템플릿 ── */}
+      {/* ── 2. 템플릿 ── */}
       {step === "template" && (
         <>
           <div className="text-sm font-semibold">템플릿 선택</div>
-          <p className="text-xs text-muted-foreground">가상머신에 설치할 OS 이미지를 선택하세요.</p>
+          <p className="text-xs text-muted-foreground">가상머신에 설치할 OS 이미지를 선택하세요. 스펙은 다음 단계에서 이 이미지의 최소 디스크 이상으로 고릅니다.</p>
           {imageLoading && <p className="text-xs text-muted-foreground">템플릿을 불러오는 중…</p>}
           {imageError && <LoadError what="템플릿" message={imageError.message} />}
           {!imageLoading && !imageError && images.length === 0 && (
             <p className="text-xs text-muted-foreground">이 프로젝트에서 사용할 수 있는 템플릿이 없습니다.</p>
           )}
           <div className="grid gap-2 sm:grid-cols-2">
-            {images.map((img) => {
-              // 부팅 볼륨 = 플레이버 디스크 — 디스크가 템플릿 최소 크기보다 작으면 고를 수 없다(디스크 0 스펙은 볼륨 크기를 입력)
-              const tooSmall = !needVolume && !!selectedFlavor && selectedFlavor.diskGb < img.minVolumeGb;
-              return (
+            {images.map((img) => (
               <button
                 key={img.id}
-                disabled={tooSmall}
                 onClick={() => handleImageSelect(img)}
                 className={cn(
                   "flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border p-2.5 text-left transition-colors",
-                  tooSmall && "cursor-not-allowed opacity-50",
                   image === img.id ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
                 )}
               >
@@ -554,14 +463,10 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
                   <div className="text-xs text-muted-foreground">
                     {[img.os, `최소 디스크 ${img.minVolumeGb} GB`].filter(Boolean).join(" · ")}
                   </div>
-                  {tooSmall && (
-                    <div className="text-[11px] text-amber-700">스펙 디스크({selectedFlavor?.diskGb} GB)보다 커서 선택할 수 없습니다</div>
-                  )}
                 </div>
                 {image === img.id && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
               </button>
-              );
-            })}
+            ))}
           </div>
 
           {selectedImage && !selectedImage.cloudInit && (
@@ -572,79 +477,175 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               </p>
             </div>
           )}
+        </>
+      )}
 
-          {/* 부팅 볼륨 — 디스크 없는 스펙 */}
-          {needVolume && (
-            <div className="space-y-2 pt-2">
-              <Label htmlFor="volume">부팅 볼륨 크기</Label>
-              <p className="text-xs text-muted-foreground">
-                선택한 스펙(<span className="font-mono">{selectedFlavor?.name}</span>)에 디스크가 없어 부팅 볼륨을 생성합니다.
-                {selectedImage ? ` ${minVolume} ~ ${MAX_VOLUME_GB} GB` : ` 최대 ${MAX_VOLUME_GB} GB`}
-              </p>
-              <div className="flex items-center gap-2">
-                <HardDrive className="size-5 shrink-0 text-indigo-600" />
-                <Input
-                  id="volume"
-                  type="number"
-                  min={minVolume}
-                  max={MAX_VOLUME_GB}
-                  value={volumeGb || ""}
-                  onChange={(e) => setVolumeGb(Math.max(0, Number(e.target.value)))}
-                  placeholder={String(minVolume)}
-                  className="h-9 w-32 text-right"
-                />
-                <span className="text-xs text-muted-foreground">GB</span>
-              </div>
-              {volumeGb > 0 && !volumeValid && (
-                <p className="text-xs text-rose-500">
-                  {volumeGb > MAX_VOLUME_GB ? `최대 ${MAX_VOLUME_GB} GB까지 신청할 수 있습니다.` : `이미지 최소 디스크(${minVolume} GB) 이상이어야 합니다.`}
-                </p>
-              )}
-            </div>
-          )}
+      {/* ── 3. 가상머신 구성 — 왼쪽 카드(네트워크·스펙·키페어) + 오른쪽 고르기. 서비스 클러스터 노드 구성과 같은 2단 ── */}
+      {step === "config" && (
+        <div className={PANEL.grid}>
+          <div className={PANEL.left}>
+            <RequiredProgress title="가상머신 구성" items={[!!network, specOk]} />
+            <NodeCard className={PANEL.card} icon={<Network className="size-4 text-primary" />} title="네트워크" required
+              status={network ? "done" : "missing"} placeholder="네트워크를 고르세요" value={selectedNetworkObj?.label}
+              line={selectedNetworkObj
+                ? `${selectedNetworkObj.sublabel}${selectedNetworkObj.fipAvailable ? (floatingIp ? " / 공인 IP 희망" : " / 공인 IP 희망 안 함") : ""}`
+                : "필수 항목입니다. 오른쪽 목록에서 고르세요"}
+              selected={role === "net"} onSelect={() => setRole("net")} />
+            <NodeCard className={PANEL.card} icon={serverIcon} title="스펙" required
+              status={specOk ? "done" : "missing"} placeholder="스펙을 고르세요" value={selectedFlavor?.name}
+              line={!selectedFlavor ? "필수 항목입니다. 오른쪽 목록에서 고르세요"
+                : needVolume && !volumeValid ? "부팅 볼륨 크기를 확인하세요"
+                : <>{`${selectedFlavor.vcpus} vCPU / ${selectedFlavor.ramMb / 1024} GB RAM / ${needVolume ? `부팅 볼륨 ${volumeGb} GB` : `${selectedFlavor.diskGb} GB Disk`}`}
+                  <WorkerAccel f={selectedFlavor} model={modelOf(selectedFlavor.accelerator)} /></>}
+              selected={role === "spec"} onSelect={() => setRole("spec")} />
+            <NodeCard className={PANEL.card} icon={keyIcon} title="키페어" optional
+              value={noCloudInit ? "미적용 (cloud-init 없음)" : keypair || "사용 안 함"} valueMuted={noCloudInit || !keypair}
+              line={noCloudInit ? "이 템플릿은 키페어를 넣을 수 없습니다" : keypair ? undefined : "VM 에 SSH 키를 넣지 않습니다"}
+              selected={role === "key"} onSelect={() => setRole("key")} />
+            <TotalsBlock rows={[
+              { k: "VM", v: "1대" },
+              { k: "vCPU", v: selectedFlavor && `${selectedFlavor.vcpus}` },
+              { k: "RAM", v: selectedFlavor && `${selectedFlavor.ramMb / 1024} GB` },
+              { k: "Disk", v: selectedFlavor && (needVolume ? `부팅 볼륨 ${volumeGb} GB` : `${selectedFlavor.diskGb} GB`) },
+              { k: "가속기", v: selectedFlavor && <TotalAccel f={selectedFlavor} model={modelOf(selectedFlavor.accelerator)} n={1} /> },
+            ]} />
+          </div>
 
-          {/* SSH 키페어 (선택) */}
-          <div className="space-y-2 pt-2">
-            <Label>SSH 키페어 <span className="text-muted-foreground">(선택)</span></Label>
-            <p className="text-xs text-muted-foreground">
-              부팅 시 공개키가 주입되어 SSH 접속에 사용됩니다. 개인키는 키페어 생성 시 내려받은 파일을 사용하세요.
-            </p>
-            {myKeypairs.length === 0 ? (
-              <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
-                <p className="text-xs text-amber-800">
-                  등록된 키페어가 없습니다. <span className="font-semibold">키페어</span> 메뉴에서 생성할 수 있습니다.
-                </p>
-              </div>
-            ) : (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {myKeypairs.map((k) => {
-                  const disabled = !!selectedImage && !selectedImage.cloudInit;
-                  return (
-                    <button
-                      key={k.id}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => setKeypair((cur) => (cur === k.name ? "" : k.name))}
-                      className={cn(
-                        "flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors",
-                        disabled && "cursor-not-allowed opacity-40",
-                        keypair === k.name ? "border-primary bg-brand-indigo-50/40" : "border-border hover:bg-secondary/40",
-                      )}
-                    >
-                      <KeyRound className="size-4 shrink-0 text-amber-600" />
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-mono text-sm font-medium">{k.name}</div>
-                        <div className="truncate font-mono text-[10px] text-muted-foreground">{k.fingerprint}</div>
+          {/* 오른쪽 — 넘치면 여기만 스크롤 */}
+          <div className={PANEL.right}>
+            {role === "net" ? (
+              <>
+                <PickerHeader title="네트워크" hint="희망 망 — 실제 네트워크와 IP 는 관리자가 승인 때 정합니다" />
+              <div className="grid gap-2">
+                {USER_NETWORKS.map((n) => (
+                  <button
+                    key={n.id}
+                    onClick={() => handleNetworkSelect(n.id)}
+                    className={cn(
+                      "flex cursor-pointer items-center gap-3 rounded-lg border border-border p-4 text-left transition-colors",
+                      network === n.id ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
+                    )}
+                  >
+                    {n.id === "external" ? <Globe className="size-5 shrink-0 text-amber-600" /> : <Wifi className="size-5 shrink-0 text-sky-600" />}
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold">{n.label}</span>
+                        <span className="text-xs text-muted-foreground">{n.sublabel}</span>
                       </div>
-                      {keypair === k.name && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
-                    </button>
-                  );
-                })}
+                      <p className="mt-0.5 text-xs text-muted-foreground">{n.description}</p>
+                    </div>
+                    {network === n.id && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
+                  </button>
+                ))}
               </div>
+
+              {/* 공인 IP 희망 — 인터넷망 선택 시만 활성 */}
+              <button
+                type="button"
+                onClick={() => selectedNetworkObj?.fipAvailable && setFloatingIp((v) => !v)}
+                disabled={!selectedNetworkObj?.fipAvailable}
+                className={cn(
+                  "flex w-full cursor-pointer items-center gap-3 rounded-lg border p-4 text-left transition-colors",
+                  !selectedNetworkObj?.fipAvailable && "cursor-not-allowed opacity-40",
+                  floatingIp ? "border-primary bg-brand-indigo-50/40" : "border-border hover:bg-secondary/40",
+                )}
+              >
+                <Globe className="size-5 shrink-0 text-amber-600" />
+                <div className="flex-1">
+                  <div className="font-semibold text-sm">외부 접속용 공인 IP 희망</div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    외부에서 접속 가능한 IP를 요청합니다. 인터넷망 선택 시에만 신청 가능하며, 할당 방식은 관리자가 결정합니다.
+                  </p>
+                </div>
+                <div className={cn(
+                  "flex size-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
+                  floatingIp ? "border-primary bg-primary" : "border-muted-foreground/30",
+                )}>
+                  {floatingIp && <CheckCircle2 className="size-3 text-white" />}
+                </div>
+              </button>
+
+              {network === "internal" && (
+                <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
+                  <p className="text-xs text-amber-800">
+                    <span className="font-semibold">외부 SSH 접속 불가</span> — 내부망 가상머신은 사설 IP만 부여되어 데이터센터 외부에서 접근할 수 없습니다.
+                    외부 접속이 필요하다면 <span className="font-semibold">인터넷망</span>을 선택하고 공인 IP를 희망하세요.
+                  </p>
+                </div>
+              )}
+              {network === "external" && !floatingIp && (
+                <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
+                  <p className="text-xs text-amber-800">
+                    공인 IP를 희망하지 않으면 외부에서 직접 SSH 접속이 불가능할 수 있습니다.
+                  </p>
+                </div>
+              )}
+              </>
+            ) : role === "spec" ? (
+              <>
+                <PickerHeader title="스펙" hint="가속기를 고르면 맞는 스펙만 보입니다" />
+                {flavorLoading && <p className="text-xs text-muted-foreground">스펙을 불러오는 중…</p>}
+                {flavorError && <LoadError what="스펙" message={flavorError.message} />}
+                {!flavorLoading && !flavorError && (
+                  <SpecPicker flavors={flavors} role="w" fixed={false} selected={selectedFlavor?.id ?? ""}
+                    onSelect={(id) => { const f = flavors.find((x) => x.id === id); if (f) handleFlavorSelect(f); }}
+                    accel={accel} onAccel={handleAccel} refLabel="" refId="" sortSelect groupAccel zeroDisk="Disk 볼륨 지정"
+                    extraBlock={tooSmall} />
+                )}
+              {/* 부팅 볼륨 — 디스크 없는 스펙 */}
+              {needVolume && (
+                <div className="space-y-2 pt-2">
+                  <Label htmlFor="volume">부팅 볼륨 크기</Label>
+                  <p className="text-xs text-muted-foreground">
+                    선택한 스펙(<span className="font-mono">{selectedFlavor?.name}</span>)에 디스크가 없어 부팅 볼륨을 생성합니다.
+                    {selectedImage ? ` ${minVolume} ~ ${MAX_VOLUME_GB} GB` : ` 최대 ${MAX_VOLUME_GB} GB`}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <HardDrive className="size-5 shrink-0 text-indigo-600" />
+                    <Input
+                      id="volume"
+                      type="number"
+                      min={minVolume}
+                      max={MAX_VOLUME_GB}
+                      value={volumeGb || ""}
+                      onChange={(e) => setVolumeGb(Math.max(0, Number(e.target.value)))}
+                      placeholder={String(minVolume)}
+                      className="h-9 w-32 text-right"
+                    />
+                    <span className="text-xs text-muted-foreground">GB</span>
+                  </div>
+                  {volumeGb > 0 && !volumeValid && (
+                    <p className="text-xs text-rose-500">
+                      {volumeGb > MAX_VOLUME_GB ? `최대 ${MAX_VOLUME_GB} GB까지 신청할 수 있습니다.` : `이미지 최소 디스크(${minVolume} GB) 이상이어야 합니다.`}
+                    </p>
+                  )}
+                </div>
+              )}
+              </>
+            ) : (
+              <>
+                <PickerHeader title="키페어" hint="부팅 때 공개키를 넣어 SSH 접속에 씁니다 · 다시 누르면 해제" />
+                {noCloudInit ? (
+                  <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
+                    <p className="text-xs text-amber-800">
+                      <span className="font-semibold">키페어 미적용</span> — cloud-init이 없는 이미지는 키페어가 주입되지 않습니다. 이미지의 기본 계정으로 접속하세요.
+                    </p>
+                  </div>
+                ) : (
+                  <KeypairTable
+                    rows={myKeypairs.map((k) => ({ id: k.name, name: k.name, fingerprint: k.fingerprint, type: keyType(k.publicKey) }))}
+                    selected={keypair || null} refLabel="" paged
+                    onSelect={(id) => setKeypair((cur) => (cur === id ? "" : id))}
+                    empty={<>등록된 키페어가 없습니다. <span className="font-semibold">키페어</span> 메뉴에서 생성할 수 있습니다.</>}
+                  />
+                )}
+              </>
             )}
           </div>
-        </>
+        </div>
       )}
 
       {/* ── 5. 확인 ── */}
@@ -653,17 +654,16 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
           <p className="text-xs text-muted-foreground">아래 내용을 확인하고 신청하세요.</p>
 
           <Section icon={<FolderKanban className="size-4 text-brand-indigo-600" />} title="기본 정보">
-            <ReviewRow label="가상머신 이름" value={vmName} />
-            {title.trim() && <ReviewRow label="신청 제목" value={title.trim()} />}
             <ReviewRow label="프로젝트" value={selectedProject?.name} mono />
+            <ReviewRow label="가상머신 이름" value={vmName} mono />
+            {title.trim() && <ReviewRow label="신청 제목" value={title.trim()} />}
+            <ReviewRow label="템플릿" value={selectedImage?.name} mono />
+            <ReviewRow label="용도" value={purpose.trim() || "—"} />
           </Section>
 
-          <Section icon={<Network className="size-4 text-sky-600" />} title="네트워크 (희망)">
-            <ReviewRow label="유형" value={selectedNetworkObj ? `${selectedNetworkObj.label} (${selectedNetworkObj.sublabel})` : undefined} />
-            <ReviewRow label="공인 IP" value={floatingIp ? "희망" : "미희망"} accent={floatingIp ? "green" : undefined} />
-          </Section>
-
-          <Section icon={<Cpu className="size-4 text-rose-600" />} title="스펙 · 템플릿">
+          <Section icon={<Server className="size-4 text-rose-600" />} title="가상머신 구성">
+            <ReviewRow label="네트워크 (희망)" value={selectedNetworkObj ? `${selectedNetworkObj.label} (${selectedNetworkObj.sublabel})` : undefined} />
+            <ReviewRow label="공인 IP" value={floatingIp ? "희망" : "희망 안 함"} accent={floatingIp ? "green" : undefined} />
             <ReviewRow label="스펙" value={selectedFlavor?.name} mono />
             <ReviewRow label="vCPU / RAM" value={selectedFlavor ? `${selectedFlavor.vcpus} vCPU / ${selectedFlavor.ramMb / 1024} GB RAM` : undefined} mono />
             <ReviewRow
@@ -676,11 +676,10 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
               value={selectedFlavor?.accelerator
                 ? <span className="inline-flex gap-1"><AccelTags f={selectedFlavor} model={modelOf(selectedFlavor.accelerator)} /></span> : "없음"}
             />
-            <ReviewRow label="템플릿" value={selectedImage?.name} mono />
             <ReviewRow
               label="SSH 키페어"
-              value={selectedImage && !selectedImage.cloudInit ? "미적용 (cloud-init 없음)" : keypair || "사용 안 함"}
-              mono={!!keypair && selectedImage?.cloudInit !== false}
+              value={noCloudInit ? "미적용 (cloud-init 없음)" : keypair || "사용 안 함"}
+              mono={!!keypair && !noCloudInit}
             />
           </Section>
 
