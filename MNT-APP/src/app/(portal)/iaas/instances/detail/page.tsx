@@ -299,6 +299,7 @@ function SecurityGroupsCard({ serverId, projectId, current, busy }: { serverId: 
   const [addOpen, setAddOpen] = React.useState(false);
   const pending = remove.isPending || busy;
   const byName = new Map((sgs ?? []).map((g) => [g.name, g])); // 이름 → 보안그룹(규칙 정보)
+  const names = Array.from(new Set(current)); // Nova 가 NIC 마다 같은 SG 를 중복으로 주므로 중복 제거
 
   async function doRemove(name: string) {
     if (!(await confirm({ title: "보안그룹 제거", destructive: true, confirmLabel: "제거", description: `${name} 을(를) 이 가상서버에서 제거할까요?` }))) return;
@@ -311,14 +312,14 @@ function SecurityGroupsCard({ serverId, projectId, current, busy }: { serverId: 
   return (
     <Card className="p-4">
       <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="size-4 text-emerald-600" /> 보안그룹 ({current.length})</div>
+        <div className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="size-4 text-emerald-600" /> 보안그룹 ({names.length})</div>
         <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}><Plus className="size-3.5" /> 추가</Button>
       </div>
-      {current.length === 0 ? (
+      {names.length === 0 ? (
         <div className="p-3 text-center text-xs text-muted-foreground">할당된 보안그룹이 없습니다.</div>
       ) : (
         <div className="space-y-1.5">
-          {current.map((name) => {
+          {names.map((name) => {
             const g = byName.get(name);
             return (
               <div key={name} className="rounded-md border border-border p-2.5">
