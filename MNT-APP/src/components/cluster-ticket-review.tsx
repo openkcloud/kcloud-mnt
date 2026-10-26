@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  DETAIL_BODY, DETAIL_CONTENT, DETAIL_W, DetailFooter, DetailHeader, InfoRow, ReasonBanner, RejectInput, RequestHero, Section,
+  DETAIL_BODY, DETAIL_CONTENT, DETAIL_W, DetailFooter, DetailHeader, InfoRow, PANEL, ReasonBanner, RejectInput, RequestHero, Section,
 } from "@/components/request-detail";
 import {
   AccelBadge, AccelTags, NetBadge, SharedTag, ChangedTag, Collapse, ExpandCard, KeypairTable, MAX_WORKERS, ManualTag, MetaGrid, NodeCard, Pager, PickerHeader,
@@ -292,29 +292,29 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
   return (
     // 높이 660px — 시안 640px 에서 네트워크를 고른 상태(서브넷 줄) + 가속기 Worker 스펙 줄 두 줄이 레티나(카드 테두리 1.5px)에서도
     // 넘치지 않게. '변경' 줄이 생기거나 키페어를 비우면 왼쪽만 스크롤
-    <div className="grid h-[660px] grid-cols-[270px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden rounded-xl border border-border [&_*]:leading-[1.2]">
+    <div className={PANEL.grid}>
       {/* 왼쪽 — 프로비저닝 설정 카드 + 총 자원. 카드에 원래 값 줄이 생기면 길어져 넘치면 스크롤 */}
-      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto border-r border-border bg-secondary/50 px-4 py-[18px] [scrollbar-width:thin]">
+      <div className={PANEL.left}>
         <RequiredProgress title="프로비저닝 설정" items={required} />
-        <NodeCard className="gap-2 px-3.5 py-3" icon={<Network className="size-4 text-primary" />} title="네트워크" required
+        <NodeCard className={PANEL.card} icon={<Network className="size-4 text-primary" />} title="네트워크" required
           tag={<ManualTag />} status={required[0] ? "done" : "missing"} placeholder="네트워크를 고르세요"
           value={st.net ? netName ?? st.net : null}
           line={!st.net ? MISSING_LINE.custom : netBlocked ? "외부망은 쓸 수 없습니다. 다른 네트워크를 고르세요"
             : subnet && subnetCidr ? `서브넷 ${subnetCidr}` : "서브넷을 고르세요"}
           selected={role === "net"} onSelect={() => set({ role: "net" })} />
-        <NodeCard className="gap-2 px-3.5 py-3" icon={serverIcon} title="Control Plane" required range="1 또는 3대" rangeAt="count"
+        <NodeCard className={PANEL.card} icon={serverIcon} title="Control Plane" required range="1 또는 3대" rangeAt="count"
           tag={cpChanged ? <ChangedTag /> : <RefTag label="신청 값" />} status={cpF ? "done" : "missing"} placeholder="스펙을 고르세요"
           value={cpF && `${st.cpn}대 / ${cpF.name}`} line={cpF ? specLine(cpF) : MISSING_LINE[st.cpSrc]}
           was={cpChanged ? `${REQ.cpn}대 / ${reqCpF?.name ?? r.masterFlavorName ?? REQ.cp}` : undefined}
           count={[st.cpn, () => set({ cpn: 1 }), () => set({ cpn: 3 })]} selected={role === "cp"} onSelect={() => set({ role: "cp" })} />
-        <NodeCard className="gap-2 px-3.5 py-3" icon={serverIcon} title="Worker" required range={`1~${MAX_WORKERS}대`} rangeAt="count"
+        <NodeCard className={PANEL.card} icon={serverIcon} title="Worker" required range={`1~${MAX_WORKERS}대`} rangeAt="count"
           tag={wChanged ? <ChangedTag /> : <RefTag label="신청 값" />} status={wF ? "done" : "missing"} placeholder="스펙을 고르세요"
           value={wF && `${st.wn}대 / ${wF.name}`}
           line={wF ? <>{specLine(wF)}<WorkerAccel f={wF} model={modelOf(wF.accelerator)} /></> : MISSING_LINE[st.wSrc]}
           was={wChanged ? `${REQ.wn}대 / ${reqWF?.name ?? r.flavorName ?? REQ.w}` : undefined}
           count={[st.wn, () => set({ wn: Math.max(1, st.wn - 1) }), () => set({ wn: Math.min(MAX_WORKERS, st.wn + 1) })]}
           selected={role === "w"} onSelect={() => set({ role: "w" })} />
-        <NodeCard className="gap-2 px-3.5 py-3" icon={keyIcon} title="키페어" optional
+        <NodeCard className={PANEL.card} icon={keyIcon} title="키페어" optional
           tag={keyChanged ? <ChangedTag /> : <RefTag label="신청 값" />} status={keyMissing(keyApplied) ? "missing" : undefined}
           value={keyName(key)} valueMuted={key === null}
           line={keyMissing(keyApplied)
@@ -333,7 +333,7 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
       </div>
 
       {/* 오른쪽 — 넘치면 여기만 스크롤 */}
-      <div className="grid min-h-0 min-w-0 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-[14px] overflow-y-auto px-6 py-5 [scrollbar-width:thin]">
+      <div className={PANEL.right}>
         <div className="grid grid-cols-2 gap-3">
           <SwitchCard title="신청 값 그대로" desc="신청한 노드 구성 그대로 프로비저닝합니다. 네트워크는 직접 고릅니다." checked={asReq}
             onCheckedChange={(on) => set(on ? { cpSrc: "req", wSrc: "req", keySrc: "req", cpn: REQ.cpn, wn: REQ.wn }
