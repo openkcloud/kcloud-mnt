@@ -710,7 +710,10 @@ def list_project_security_groups(project_id: str):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"보안 그룹 조회 실패: {type(e).__name__}: {e}")
     items = [{"id": sg["id"], "name": sg.get("name") or sg["id"], "projectId": project_id,
-              "description": sg.get("description") or ""} for sg in sgs
+              "description": sg.get("description") or "",
+              "rules": len(sg.get("security_group_rules") or []),
+              "ruleList": [_to_sg_rule(r) for r in sg.get("security_group_rules") or []]}
+             for sg in sgs
              if not (sg.get("name") or "").startswith(_MAGNUM_SG_PREFIX)]
     return {"items": items, "count": len(items)}
 
