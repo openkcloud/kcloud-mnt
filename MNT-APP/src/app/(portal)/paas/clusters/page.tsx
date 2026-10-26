@@ -223,7 +223,7 @@ function ClusterRow({
       <TableCell>
         <div className="flex items-center gap-2">
           <Boxes className="size-3.5 text-brand-indigo-600" />
-          <span className="max-w-[200px] truncate font-mono text-sm font-semibold">{c.name}</span>
+          <span className="max-w-[200px] truncate font-mono text-sm font-semibold" title={c.name}>{c.name}</span>
         </div>
       </TableCell>
       <TableCell>
@@ -346,7 +346,7 @@ function ClusterDetailDialog({
                         </TableCell>
                         <TableCell className="font-mono text-xs">{g.nodeCount}</TableCell>
                         <TableCell className="font-mono text-xs">{g.flavorId}</TableCell>
-                        <TableCell className="max-w-[220px] truncate font-mono text-[11px] text-muted-foreground">{g.imageId}</TableCell>
+                        <TableCell className="break-all font-mono text-[11px] text-muted-foreground">{g.imageId}</TableCell>
                         <TableCell>
                           <Badge variant={stVariant(g.status)} className="text-[10px]">{g.status}</Badge>
                         </TableCell>
@@ -480,7 +480,7 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   return (
     <div className="flex items-baseline justify-between gap-3">
       <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className={mono ? "min-w-0 truncate font-mono" : "min-w-0 truncate"}>{value}</span>
+      <span className={mono ? "min-w-0 break-all text-right font-mono" : "min-w-0 break-words text-right"}>{value}</span>
     </div>
   );
 }
