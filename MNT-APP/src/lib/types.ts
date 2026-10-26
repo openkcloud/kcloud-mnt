@@ -586,11 +586,21 @@ export interface SshKey {
   createdAt: string;
 }
 
+export interface SecurityGroupRuleBrief {
+  direction: string;
+  protocol: string | null;
+  portMin: number | null;
+  portMax: number | null;
+  remoteCidr: string | null;
+  remoteGroup: string | null;
+}
 export interface SecurityGroup {
   id: string;
   name: string;
   projectId: string;
   description: string;
+  rules?: number;                        // 규칙 수
+  ruleList?: SecurityGroupRuleBrief[];   // 규칙 요약(가상서버 보안그룹 추가 시 정보 확인용)
 }
 
 export type ProvStepStatus = "waiting" | "running" | "done" | "failed" | "skipped";
