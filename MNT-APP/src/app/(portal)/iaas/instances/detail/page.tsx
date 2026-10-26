@@ -480,11 +480,17 @@ function AttachVolumeDialog({ serverId, projectId, attached, open, onClose }: { 
                 className="group flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-brand-indigo-300 hover:bg-brand-indigo-50/40 disabled:opacity-50">
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-brand-indigo-100 text-brand-indigo-700"><HardDrive className="size-4" /></div>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-sm font-semibold">{v.name}</div>
-                  <div className="mt-0.5 flex items-center gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate font-mono text-sm font-semibold" title={v.name}>{v.name}</span>
+                    {v.bootable && <Badge variant="warning" className="shrink-0 text-[10px]">부팅 가능</Badge>}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                     <Badge variant="outline" className="text-[10px]">{v.size}GB</Badge>
                     <Badge variant="secondary" className="text-[10px]">{v.type}</Badge>
+                    <span className="font-mono text-[10px] text-muted-foreground">{v.id.slice(0, 8)}</span>
+                    <span className="text-[10px] text-muted-foreground">{fmtDateTime(v.createdAt)}</span>
                   </div>
+                  {v.description && <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={v.description}>{v.description}</div>}
                 </div>
                 <Plus className="size-4 shrink-0 text-muted-foreground group-hover:text-brand-indigo-600" />
               </button>
