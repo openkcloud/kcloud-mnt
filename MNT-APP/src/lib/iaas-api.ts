@@ -1006,6 +1006,16 @@ export function useDetachInterface() {
   return useServerMutation(({ serverId, portId }: { serverId: string; portId: string }) =>
     sendJson("DELETE", `${IAAS_BASE}/api/iaas/servers/${serverId}/interfaces/${portId}`));
 }
+/** 가상서버 보안그룹 추가 — Nova addSecurityGroup(이름 기준). Horizon '보안 그룹 편집'과 동일. */
+export function useAddServerSecurityGroup() {
+  return useServerMutation(({ serverId, name }: { serverId: string; name: string }) =>
+    postJson(`${IAAS_BASE}/api/iaas/servers/${serverId}/security-groups`, { name }));
+}
+/** 가상서버 보안그룹 제거 — Nova removeSecurityGroup. */
+export function useRemoveServerSecurityGroup() {
+  return useServerMutation(({ serverId, name }: { serverId: string; name: string }) =>
+    sendJson("DELETE", `${IAAS_BASE}/api/iaas/servers/${serverId}/security-groups/${encodeURIComponent(name)}`));
+}
 /** 스펙(플레이버) 변경 — resize 시작 → VERIFY_RESIZE 후 confirm/revert. */
 export function useResizeServer() {
   return useServerMutation(({ id, flavorId }: { id: string; flavorId: string }) =>

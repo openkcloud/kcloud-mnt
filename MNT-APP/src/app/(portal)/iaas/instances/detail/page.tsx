@@ -3,7 +3,7 @@ import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Server, Play, Square, RotateCw, Trash2, Loader2, Plus, HardDrive, ArrowLeft,
-  Cpu, MemoryStick, Network as NetIcon, Database, Gauge, SlidersHorizontal, MonitorPlay,
+  Cpu, MemoryStick, Network as NetIcon, Database, Gauge, SlidersHorizontal, MonitorPlay, ShieldCheck, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
@@ -23,6 +23,7 @@ import {
   useResizeServer, useResizeConfirm, useResizeRevert,
   useProjects, useVolumes, useImages, useNetworks, useFlavors,
   useDeviceProfiles, useAccelModels, accelLabelResolver,
+  useProjectSecurityGroups, useAddServerSecurityGroup, useRemoveServerSecurityGroup,
   getServerConsoleUrl,
 } from "@/lib/iaas-api";
 
@@ -179,7 +180,6 @@ function ServerDetailPage() {
             <Field label="이미지" value={imageName} mono />
             <Field label="키페어" value={s.keyName || "—"} mono />
             <Field label="생성일" value={fmtDateTime(s.createdAt)} mono />
-            <Field label="보안그룹" value={s.securityGroups.join(", ") || "—"} />
           </div>
           {sshIp && (
             <div className="mt-4 space-y-1.5 border-t border-border pt-3">
@@ -255,6 +255,9 @@ function ServerDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* 보안그룹 — 서버에 직접 추가/제거(Nova). 클러스터 노드 접속 등에서 별도 SG 할당용 */}
+          <SecurityGroupsCard serverId={s.id} projectId={s.tenantId} current={s.securityGroups} busy={busy} />
         </div>
       </div>
 
@@ -265,6 +268,67 @@ function ServerDetailPage() {
       <AttachNetworkDialog serverId={s.id} projectId={s.tenantId} attached={new Set(s.interfaces.map((i) => i.netId))} open={attachNetOpen} onClose={() => setAttachNetOpen(false)} />
       {isAdmin && <ResizeDialog serverId={s.id} currentFlavor={s.flavorName} open={resizeOpen} onClose={() => setResizeOpen(false)} />}
     </div>
+  );
+}
+
+// 가상서버 보안그룹 편집 — 현재 할당된 SG 배지(제거) + 프로젝트 SG 추가. Horizon '보안 그룹 편집' 대응.
+function SecurityGroupsCard({ serverId, projectId, current, busy }: { serverId: string; projectId: string; current: string[]; busy: boolean }) {
+  const { data: projectSgs } = useProjectSecurityGroups(projectId);
+  const add = useAddServerSecurityGroup();
+  const remove = useRemoveServerSecurityGroup();
+  const confirm = useConfirm();
+  const [pick, setPick] = React.useState("");
+  const pending = add.isPending || remove.isPending || busy;
+  // 아직 안 붙은 프로젝트 보안그룹만 추가 후보로
+  const addable = (projectSgs ?? []).filter((g) => !current.includes(g.name));
+
+  function doAdd() {
+    if (!pick) return;
+    add.mutate({ serverId, name: pick }, {
+      onSuccess: () => { toast.success(`보안그룹 ${pick} 추가됨`); setPick(""); },
+      onError: (e) => toast.error("보안그룹 추가 실패", { description: String((e as Error).message) }),
+    });
+  }
+  async function doRemove(name: string) {
+    if (!(await confirm({ title: "보안그룹 제거", destructive: true, confirmLabel: "제거", description: `${name} 을(를) 이 가상서버에서 제거할까요?` }))) return;
+    remove.mutate({ serverId, name }, {
+      onSuccess: () => toast.success(`보안그룹 ${name} 제거됨`),
+      onError: (e) => toast.error("보안그룹 제거 실패", { description: String((e as Error).message) }),
+    });
+  }
+
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+        <ShieldCheck className="size-4 text-emerald-600" /> 보안그룹 ({current.length})
+      </div>
+      {current.length === 0 ? (
+        <div className="p-3 text-center text-xs text-muted-foreground">할당된 보안그룹이 없습니다.</div>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {current.map((name) => (
+            <Badge key={name} variant="outline" className="gap-1 font-mono text-[11px]">
+              {name}
+              <button type="button" title="제거" disabled={pending} onClick={() => doRemove(name)}
+                className="ml-0.5 rounded-sm text-muted-foreground hover:text-rose-600 disabled:opacity-50">
+                <X className="size-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+      <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
+        <Select value={pick} onValueChange={setPick}>
+          <SelectTrigger className="h-8 flex-1 text-xs"><SelectValue placeholder="추가할 보안그룹 선택" /></SelectTrigger>
+          <SelectContent>
+            {addable.length === 0
+              ? <div className="px-2 py-1.5 text-xs text-muted-foreground">추가할 보안그룹이 없습니다.</div>
+              : addable.map((g) => <SelectItem key={g.id} value={g.name} className="font-mono text-xs">{g.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Button size="sm" className="h-8" disabled={!pick || pending} onClick={doAdd}><Plus className="size-3.5" /> 추가</Button>
+      </div>
+    </Card>
   );
 }
 
