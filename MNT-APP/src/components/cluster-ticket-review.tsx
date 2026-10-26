@@ -9,10 +9,13 @@
  * 망·서브넷(DHCP·Floating IP)·쿼터·이름·키페어는 프로비저닝 요청 때 서버가 다시 확인한다(실패하면 사유가 오류로 온다).
  */
 import * as React from "react";
-import { AlertCircle, Boxes, Building2, CheckCircle2, FileText, FolderKanban, KeyRound, Network, RotateCcw, Server, XCircle } from "lucide-react";
+import { AlertCircle, Boxes, CheckCircle2, FileText, KeyRound, Network, RotateCcw, Server, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DETAIL_BODY, DETAIL_CONTENT, DETAIL_W, DetailFooter, DetailHeader, InfoRow, ReasonBanner, RejectInput, RequestHero, Section,
+} from "@/components/request-detail";
 import {
   AccelBadge, AccelTags, NetBadge, SharedTag, ChangedTag, Collapse, ExpandCard, KeypairTable, MAX_WORKERS, ManualTag, MetaGrid, NodeCard, Pager, PickerHeader,
   Radio, RefTag, SearchInput, Segment, SpecPicker, SwitchCard, TotalAccel, TotalsBlock, WorkerAccel, accelTotal, keyIcon, keyType,
@@ -22,7 +25,7 @@ import { useNetwork, useNovaKeypairs, useProjectFlavors, useProjectNetworks, typ
 import { useClusterTemplate, type ClusterTemplate } from "@/lib/paas-api";
 import type { ProvisionClusterInput } from "@/lib/ticket-api";
 import type { ClusterProvisionSpec, ResourceRequest } from "@/lib/types";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export type ClusterProvisionValue = ProvisionClusterInput["provisionSpec"];
 
@@ -69,30 +72,6 @@ function PurposeDialog({ open, onOpenChange, clusterName, purpose }: {
   );
 }
 
-/** 신청 정보 카드 — 클러스터명 · 조직 · 프로젝트 · 신청자 · 신청 일시. 1b 는 오른쪽에 처리 결과. */
-function HeroCard({ r, compact, result }: { r: ResourceRequest; compact?: boolean; result?: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-3.5 rounded-xl border border-border bg-[#fafbfc] px-[18px] py-4">
-      <div className={cn("flex flex-none items-center justify-center rounded-[10px] bg-brand-indigo-100/70 text-primary", compact ? "size-10" : "size-11")}>
-        <Boxes className="size-5" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className={cn("truncate font-bold", compact ? "text-base" : "text-[17px]")}>{r.clusterName || "서비스 클러스터"}</div>
-        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-          {r.orgName && <><Building2 className="size-3" /><span>{r.orgName}</span><span className="text-muted-foreground/40">·</span></>}
-          <FolderKanban className="size-3" />
-          <span className="font-mono">{r.projectName}</span>
-          <span className="text-muted-foreground/40">·</span>
-          <span>{r.requestedByName}{r.requesterOrgName ? ` (${r.requesterOrgName})` : ""}</span>
-          <span className="text-muted-foreground/40">·</span>
-          <span className="font-mono">{formatDateTime(r.requestedAt)}</span>
-        </div>
-      </div>
-      {result && <div className="flex-none self-stretch border-l border-border pl-4 text-right">{result}</div>}
-    </div>
-  );
-}
-
 // 신청 키페어 표시 — 이름과 출처
 function requestKeyLabel(r: ResourceRequest, template?: ClusterTemplate) {
   if (r.keypairId) return { name: r.keypairName ?? r.keypairId, from: "신청자 SSH 키" };
@@ -108,11 +87,14 @@ function reqAccel(r: ResourceRequest, model: string | null) {
     : r.deviceProfile ? <AccelBadge title={r.deviceProfile} /> : null;
 }
 
-// ── 1a 승인 ───────────────────────────────────────────────────────
+// ── 클러스터 신청 내용(1a · 기존 상세 공용) ─────────────────────────
 
-function ApproveBody({ r, onPurpose }: { r: ResourceRequest; onPurpose: () => void }) {
+/** 클러스터 신청 내용 — 클러스터(템플릿·버전·네임스페이스·용도) · 노드(신청) 카드 + 총 자원.
+ *  1a 와 기존 상세(생성 중·완료·반려, 사용자 화면)가 같이 쓴다. 용도 전체는 '보기' 로 겹쳐 연다. */
+export function ClusterRequestSections({ r }: { r: ResourceRequest }) {
   const { data: flavors = [] } = useProjectFlavors(r.projectId);
   const { data: template } = useClusterTemplate(r.templateId ?? null);
+  const [purposeOpen, setPurposeOpen] = React.useState(false);
   const master = flavors.find((f) => f.id === r.masterFlavorId);
   const worker = flavors.find((f) => f.id === r.flavorId);
   const key = requestKeyLabel(r, template);
@@ -123,62 +105,36 @@ function ApproveBody({ r, onPurpose }: { r: ResourceRequest; onPurpose: () => vo
     nodeCount: r.nodeCount ?? 1, flavorId: r.flavorId ?? "" };
   const totals = nodeTotals(flavors, nodes);
   // 스펙 줄 — 프로젝트 플레이버에서(디스크 포함), 없으면 신청에 남긴 vCPU·RAM
-  const line = (f: FlavorSummary | undefined, vcpu?: number, ramGb?: number) => f ? specLine(f) : vcpu ? `${vcpu} vCPU / ${ramGb} GB RAM` : "";
+  const line = (f: FlavorSummary | undefined, vcpu?: number, ramGb?: number) => f ? specLine(f) : vcpu ? `${vcpu} vCPU / ${ramGb} GB RAM` : undefined;
 
-  const clusterRows: [string, React.ReactNode][] = [
-    ["템플릿", <span key="t" className="font-mono text-[13px] font-semibold [overflow-wrap:anywhere]">{r.templateName ?? "—"}</span>],
-    ["Kubernetes 버전", <span key="k" className="font-mono">{kube ? `v${kube}` : "—"}</span>],
-    ["프로젝트", <span key="p" className="font-mono">{r.projectName}</span>],
-    ["네임스페이스", <span key="n" className="font-mono">{r.namespace ?? "—"}</span>],
-  ];
   return (
-    <div className="grid gap-[14px] px-7 pt-5 pb-6">
-      <HeroCard r={r} />
+    <>
       <div className="grid grid-cols-2 gap-[14px]">
-        <div className="flex min-w-0 flex-col gap-3 rounded-xl border border-border px-[18px] py-4">
-          <div className="flex items-center gap-1.5 text-sm font-bold"><Boxes className="size-4 text-primary" />클러스터</div>
-          {clusterRows.map(([k, v]) => (
-            <div key={k} className="grid min-h-6 grid-cols-[110px_minmax(0,1fr)] items-center gap-2.5">
-              <span className="text-[13px] text-muted-foreground">{k}</span>
-              <span className="text-right text-[13px]">{v}</span>
-            </div>
-          ))}
-          <div className="grid min-h-6 grid-cols-[110px_minmax(0,1fr)] items-center gap-2.5">
-            <span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">용도 {r.purpose && <PurposeButton onClick={onPurpose} />}</span>
-            <span title={r.purpose} className="truncate text-right text-sm font-medium">{r.purpose || "—"}</span>
-          </div>
-        </div>
-        <div className="flex min-w-0 flex-col gap-3 rounded-xl border border-border px-[18px] py-4">
-          <div className="flex items-center gap-1.5 text-sm font-bold"><Server className="size-4 text-rose-600" />노드 (신청)</div>
-          {([
-            ["Control Plane", `${r.masterCount ?? 0}대 / ${r.masterFlavorName ?? r.masterFlavorId ?? "—"}`, line(master, r.masterVcpu, r.masterRamGb)],
-            ["Worker", `${r.nodeCount ?? 0}대 / ${r.flavorName ?? "—"}`, line(worker, r.vcpu, r.ramGb)],
-          ] as const).map(([k, v, sub]) => (
-            <div key={k} className="grid grid-cols-[92px_minmax(0,1fr)] items-start gap-2">
-              <span className="pt-px text-[13px] text-muted-foreground">{k}</span>
-              <span className="flex flex-col items-end gap-0.5">
-                <span className="font-mono text-[13px] font-semibold">{v}</span>
-                {sub && <span className="font-mono text-[11px] whitespace-nowrap text-muted-foreground">{sub}</span>}
-              </span>
-            </div>
-          ))}
-          <div className="grid grid-cols-[92px_minmax(0,1fr)] items-start gap-2">
-            <span className="pt-px text-[13px] text-muted-foreground">Worker 가속기</span>
-            <span className="flex flex-col items-end gap-0.5">
-              {accel ? <span className="flex flex-wrap justify-end gap-1">{accel}</span>
-                : <span className="text-[13px] text-muted-foreground">없음</span>}
-            </span>
-          </div>
-          <div className="grid grid-cols-[92px_minmax(0,1fr)] items-start gap-2">
-            <span className="pt-px text-[13px] text-muted-foreground">키페어</span>
-            <span className="flex flex-col items-end gap-0.5">
-              {"none" in key ? <span className="text-[13px] text-muted-foreground">{key.name}</span> : <>
-                <span className="flex items-center gap-1 font-mono text-[13px] font-semibold"><KeyRound className="size-[13px] text-amber-600" />{key.name}</span>
-                <span className="text-[11px] text-muted-foreground">{key.from}</span>
-              </>}
-            </span>
-          </div>
-        </div>
+        <Section icon={<Boxes className="size-4 text-primary" />} title="클러스터">
+          <InfoRow label="템플릿"><span className="font-mono font-semibold [overflow-wrap:anywhere]">{r.templateName ?? "—"}</span></InfoRow>
+          <InfoRow label="Kubernetes 버전"><span className="font-mono">{kube ? `v${kube}` : "—"}</span></InfoRow>
+          <InfoRow label="네임스페이스"><span className="font-mono">{r.result?.namespace ?? r.namespace ?? "—"}</span></InfoRow>
+          <InfoRow label={<span className="flex items-center gap-1.5">용도 {r.purpose && <PurposeButton onClick={() => setPurposeOpen(true)} />}</span>}>
+            <span title={r.purpose} className="max-w-full truncate font-medium">{r.purpose || "—"}</span>
+          </InfoRow>
+        </Section>
+        <Section icon={<Server className="size-4 text-rose-600" />} title="노드 (신청)">
+          <InfoRow label="Control Plane" sub={line(master, r.masterVcpu, r.masterRamGb)}>
+            <span className="font-mono font-semibold">{r.masterCount ?? 0}대 / {r.masterFlavorName ?? r.masterFlavorId ?? "—"}</span>
+          </InfoRow>
+          <InfoRow label="Worker" sub={line(worker, r.vcpu, r.ramGb)}>
+            <span className="font-mono font-semibold">{r.nodeCount ?? 0}대 / {r.flavorName ?? "—"}</span>
+          </InfoRow>
+          <InfoRow label="Worker 가속기">
+            {accel ? <span className="flex flex-wrap justify-end gap-1">{accel}</span> : <span className="text-muted-foreground">없음</span>}
+          </InfoRow>
+          <InfoRow label="키페어">
+            {"none" in key ? <span className="text-muted-foreground">{key.name}</span> : <>
+              <span className="flex items-center gap-1 font-mono font-semibold"><KeyRound className="size-[13px] text-amber-600" />{key.name}</span>
+              <span className="text-[11px] text-muted-foreground">{key.from}</span>
+            </>}
+          </InfoRow>
+        </Section>
       </div>
       <div className="flex items-center gap-3 rounded-[10px] border border-border/70 bg-secondary/50 px-4 py-[11px]">
         <span className="text-xs text-muted-foreground">총 자원</span>
@@ -189,7 +145,8 @@ function ApproveBody({ r, onPurpose }: { r: ResourceRequest; onPurpose: () => vo
             : "—"}
         </span>
       </div>
-    </div>
+      <PurposeDialog open={purposeOpen} onOpenChange={setPurposeOpen} clusterName={r.clusterName} purpose={r.purpose ?? ""} />
+    </>
   );
 }
 
@@ -220,10 +177,10 @@ function ProvisionPanel({ r, onState, onPurpose }: {
   const templateQ = useClusterTemplate(r.templateId ?? null);
   const loading = flavorsQ.isLoading || keysQ.isLoading || templateQ.isLoading;
   const error = flavorsQ.error ?? keysQ.error;
-  if (loading) return <Skeleton className="mx-7 mt-3.5 h-[660px] rounded-xl" />;
+  if (loading) return <Skeleton className="h-[660px] rounded-xl" />;
   if (error || !flavorsQ.data || !keysQ.data) {
     return (
-      <div className="mx-7 mt-3.5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+      <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
         프로비저닝 설정을 불러오지 못했습니다{error ? ` (${error.message})` : ""}.
       </div>
     );
@@ -335,7 +292,7 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState, onPurpose }: 
   return (
     // 높이 660px — 시안 640px 에서 네트워크를 고른 상태(서브넷 줄) + 가속기 Worker 스펙 줄 두 줄이 레티나(카드 테두리 1.5px)에서도
     // 넘치지 않게. '변경' 줄이 생기거나 키페어를 비우면 왼쪽만 스크롤
-    <div className="mx-7 mt-3.5 grid h-[660px] grid-cols-[270px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden rounded-xl border border-border [&_*]:leading-[1.2]">
+    <div className="grid h-[660px] grid-cols-[270px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden rounded-xl border border-border [&_*]:leading-[1.2]">
       {/* 왼쪽 — 프로비저닝 설정 카드 + 총 자원. 카드에 원래 값 줄이 생기면 길어져 넘치면 스크롤 */}
       <div className="flex min-h-0 flex-col gap-2 overflow-y-auto border-r border-border bg-secondary/50 px-4 py-[18px] [scrollbar-width:thin]">
         <RequiredProgress title="프로비저닝 설정" items={required} />
@@ -547,6 +504,7 @@ function NetworkPicker({ networks, loading, error, selected, onSelect }: {
 
 /**
  * 클러스터 신청 상세 모달 내용(DialogContent) — 대기중이면 1a(승인·반려), 승인·실패면 1b(프로비저닝·재시도·반려).
+ * 공용 틀(request-detail): 머리 · 이름 카드(처리 결과) · 사유 띠 · 본문 · 고정 바닥. 폭은 1a 760px, 1b 1000px.
  * 반려는 사유 입력을 펼친다(사유 필수). 1b 의 입력 상태는 반려 입력 중에도 숨겨 둘 뿐 유지한다.
  */
 export function ClusterReviewContent({ r, badge, rejectFirst, reviewing, provisioning, onApprove, onReject, onProvision }: {
@@ -568,61 +526,26 @@ export function ClusterReviewContent({ r, badge, rejectFirst, reviewing, provisi
 
   return (
     <DialogContent
-      className={cn("max-h-[95vh] gap-0 overflow-y-auto rounded-[14px] p-0 outline-none", isPending ? "max-w-[760px]" : "max-w-[1000px]")}
+      className={cn(DETAIL_CONTENT, isPending ? DETAIL_W.read : DETAIL_W.process)}
       onOpenAutoFocus={(e) => e.preventDefault()} // 첫 버튼(용도 보기)에 포커스 테두리가 생기지 않게 — Tab 이동·Esc 는 그대로
     >
-      <div className="px-7 pt-6 pr-12">
-        <DialogTitle className="flex items-center gap-2 text-xl font-bold">신청 상세 {badge}</DialogTitle>
-        <DialogDescription className="mt-1.5 text-sm">
-          {isPending ? "신청 내용을 확인하고 승인하거나 반려하세요."
-            : isFailed ? "프로비저닝 설정을 확인·수정해 재시도하거나 반려하세요. 실패한 회차의 클러스터는 삭제되었습니다(정리 실패면 실패 사유에 표시)."
-            : "노드를 붙일 네트워크·서브넷을 고르고 노드 구성을 확인·조정한 뒤 프로비저닝하거나 반려하세요."}
-        </DialogDescription>
-      </div>
+      <DetailHeader badge={badge} description={
+        isPending ? "신청 내용을 확인하고 승인하거나 반려하세요."
+          : isFailed ? "프로비저닝 설정을 확인·수정해 재시도하거나 반려하세요. 실패한 회차가 만든 자원은 정리되었습니다(정리에 실패하면 실패 사유에 표시)."
+          : "노드를 붙일 네트워크·서브넷을 고르고 노드 구성을 확인·조정한 뒤 프로비저닝하거나 반려하세요."} />
 
-      {isPending ? (
-        !rejecting && <ApproveBody r={r} onPurpose={() => setPurposeOpen(true)} />
-      ) : (
-        <>
-          <div className="mx-7 mt-4">
-            <HeroCard r={r} compact result={r.approvedByName && (
-              <>
-                <div className="text-[11px] text-muted-foreground">처리 결과</div>
-                <div className="mt-1 text-xs font-semibold">
-                  승인 · {r.approvedByName} · <span className="font-mono font-medium">{formatDateTime(r.approvedAt)}</span>
-                </div>
-              </>
-            )} />
-          </div>
-          {isFailed && r.errorMessage && (
-            <div className="mx-7 mt-3 flex gap-2 rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
-              <XCircle className="mt-px size-3.5 flex-none" /><span className="whitespace-pre-line">실패 사유: {r.errorMessage}</span>
-            </div>
-          )}
+      <div className={DETAIL_BODY}>
+        <RequestHero r={r} />
+        <ReasonBanner r={r} />
+        {isPending ? <ClusterRequestSections r={r} /> : (
           <div className={cn(rejecting && "hidden")}>
             <ProvisionPanel r={r} onState={setPanel} onPurpose={() => setPurposeOpen(true)} />
           </div>
-        </>
-      )}
+        )}
+        {rejecting && <RejectInput value={reason} onChange={setReason} />}
+      </div>
 
-      {rejecting && (
-        <div className="mx-7 mt-4 space-y-2">
-          <label className="text-sm font-medium">반려 사유 <span className="text-rose-500">(필수)</span></label>
-          <textarea
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-            rows={3}
-            placeholder="예: 프로젝트 쿼터 초과, 가속기 미할당 등"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            autoFocus
-          />
-        </div>
-      )}
-
-      <div className={cn("flex items-center gap-2 border-t border-border bg-[#fafbfc] px-7 py-3.5", isPending && !rejecting ? "" : "mt-[18px]")}>
-        <span className={cn("flex-1 text-[13px]", panel.ready ? "text-[#0f7a58]" : "text-[#d92d20]")}>
-          {!isPending && !rejecting && panel.text}
-        </span>
+      <DetailFooter status={!isPending && !rejecting && panel.text} ok={panel.ready}>
         {rejecting ? (
           <>
             <Button variant="outline" onClick={() => setRejecting(false)}>취소</Button>
@@ -645,7 +568,7 @@ export function ClusterReviewContent({ r, badge, rejectFirst, reviewing, provisi
             )}
           </>
         )}
-      </div>
+      </DetailFooter>
 
       <PurposeDialog open={purposeOpen} onOpenChange={setPurposeOpen} clusterName={r.clusterName} purpose={r.purpose ?? ""} />
     </DialogContent>

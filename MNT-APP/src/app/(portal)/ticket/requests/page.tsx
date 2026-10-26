@@ -3,14 +3,12 @@ import * as React from "react";
 import {
   CheckCircle2,
   XCircle,
-  Clock,
   Server,
   Boxes,
   Plus,
   Search,
   Loader2,
   AlertCircle,
-  FolderKanban,
   Network,
   Cpu,
   Wifi,
@@ -20,7 +18,6 @@ import {
   KeyRound,
   ShieldCheck,
   RotateCcw,
-  Building2,
   ChevronDown,
   CircleCheck,
   CircleDashed,
@@ -65,8 +62,10 @@ import { ResourceRequestWizard } from "@/components/resource-request-wizard";
 import {
   WorkspaceLimitFields, limitsBody, limitsOf, limitsOk, limitsText, toLimitsInput, type WorkspaceLimitsInput,
 } from "@/components/workspace-requests";
-import { ClusterReviewContent, isClusterReview, type ClusterProvisionValue } from "@/components/cluster-ticket-review";
-import { useClusterTemplate } from "@/lib/paas-api";
+import { ClusterRequestSections, ClusterReviewContent, isClusterReview, type ClusterProvisionValue } from "@/components/cluster-ticket-review";
+import {
+  DETAIL_BODY, DETAIL_CONTENT, DETAIL_W, DetailFooter, DetailHeader, InfoRow, ReasonBanner, RejectInput, RequestHero, Section,
+} from "@/components/request-detail";
 import { AccelBadge, NetBadge, SharedTag, useAccelModel } from "@/components/cluster-node-fields";
 import { cn, formatDateTime } from "@/lib/utils";
 import type {
@@ -248,19 +247,6 @@ function fmtDt(iso: string) {
   return formatDateTime(iso); // 한국 시각 — 문자열을 잘라 쓰면 서버 시간대(UTC) 그대로 보인다
 }
 
-// 반려 사유 — 승인 단계 또는 프로비저닝 단계
-function rejectReasonOf(r: ResourceRequest) {
-  return r.approvedRejectReason ?? r.provisioningRejectReason;
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
-      <div className="text-right text-sm">{children}</div>
-    </div>
-  );
-}
 
 // 사용자 희망 망 배지
 function NetworkWish({ r }: { r: ResourceRequest }) {
@@ -286,188 +272,96 @@ function AccelBadges({ r }: { r: ResourceRequest }) {
     : <span className="text-muted-foreground">없음</span>;
 }
 
+// 신청 상세 본문(공용 틀) — 이름 카드(처리 결과) · 사유 띠 · 유형별 신청 내용 · 관리자 할당/결과. DETAIL_BODY 안에 놓는다.
 function RequestDetailBody({ r }: { r: ResourceRequest }) {
   const router = useRouter();
   const isVm = r.type === "vm";
   const isWs = r.type === "ai-workspace";
   const p = r.provisionSpec;
   const cp = r.type === "cluster" ? clusterSpecOf(r) : undefined;
-  const { data: tpl, isLoading: tplLoading } = useClusterTemplate(r.type === "cluster" ? r.templateId ?? null : null);
-  // 생성 완료된 VM — 누르면 IaaS > 가상서버 상세로(가상서버 상세의 네트워크·볼륨 행과 같은 방식)
+  // 생성 완료된 VM — 이름을 누르면 IaaS > 가상서버 상세로(가상서버 상세의 네트워크·볼륨 행과 같은 방식)
   const serverId = isVm && r.status === "completed" ? r.result?.serverId : undefined;
   return (
-    <div className="space-y-3">
-      {/* Hero */}
-      <div
-        onClick={serverId ? () => router.push(`/iaas/instances/detail/?id=${serverId}`) : undefined}
-        title={serverId ? "가상서버 상세 열기" : undefined}
-        className={cn(
-          "flex items-center gap-3 rounded-xl border border-border bg-gradient-to-br from-brand-indigo-50/70 to-transparent p-3.5",
-          serverId && "group cursor-pointer transition-colors hover:bg-secondary/60",
-        )}
-      >
-        <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand-indigo-100 text-brand-indigo-700">
-          {isVm ? <Server className="size-5" /> : isWs ? <BrainCircuit className="size-5" /> : <Boxes className="size-5" />}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className={cn("truncate text-base font-semibold", serverId && "underline-offset-2 group-hover:underline")}>
-            {isVm ? (r.vmName || "가상머신") : isWs ? (r.workspaceName || "AI 워크스페이스") : (r.clusterName || "서비스 클러스터")}
-          </div>
-          {r.title && <div className="mt-0.5 break-words text-sm text-foreground">{r.title}</div>}
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-            {r.orgName && <><Building2 className="size-3" /><span>{r.orgName}</span><span className="text-muted-foreground/40">·</span></>}
-            <FolderKanban className="size-3" />
-            <span className="font-mono">{r.projectName}</span>
-            <span className="text-muted-foreground/40">·</span>
-            <span>{r.requestedByName}{r.requesterOrgName ? ` (${r.requesterOrgName})` : ""}</span>
-            <span className="text-muted-foreground/40">·</span>
-            <span className="font-mono">{fmtDt(r.requestedAt)}</span>
-          </div>
-        </div>
-      </div>
+    <>
+      <RequestHero r={r} onOpen={serverId ? () => router.push(`/iaas/instances/detail/?id=${serverId}`) : undefined} />
+      <ReasonBanner r={r} />
 
       {isVm ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {/* 스펙 */}
-          <div className="space-y-2.5 rounded-xl border border-border p-3.5">
-            <div className="flex items-center gap-1.5 text-xs font-semibold">
-              <Cpu className="size-3.5 text-rose-600" /> 스펙
-            </div>
-            <Field label="스펙"><span className="font-mono">{r.flavorName ?? "—"}</span></Field>
-            <Field label="vCPU / RAM"><span className="font-mono">{r.vcpu ?? "—"} vCPU / {r.ramGb ?? "—"} GB RAM</span></Field>
-            <Field label="디스크">
+        <div className="grid grid-cols-2 gap-[14px]">
+          <Section icon={<Cpu className="size-4 text-rose-600" />} title="스펙">
+            <InfoRow label="스펙"><span className="font-mono font-semibold">{r.flavorName ?? "—"}</span></InfoRow>
+            <InfoRow label="vCPU / RAM"><span className="font-mono">{r.vcpu ?? "—"} vCPU / {r.ramGb ?? "—"} GB RAM</span></InfoRow>
+            <InfoRow label="디스크">
               <span className="font-mono">{r.diskGb ? `${r.diskGb} GB` : r.volumeGb ? `부팅 볼륨 ${r.volumeGb} GB` : "—"}</span>
-            </Field>
-            <Field label="가속기">
+            </InfoRow>
+            <InfoRow label="가속기">
               {r.accelerators?.length || r.deviceProfile
                 ? <AccelBadges r={r} />
                 : r.acceleratorKind
                 ? <AccelBadge kind={r.acceleratorKind} count={r.acceleratorCount ?? 1} />
                 : <span className="text-muted-foreground">없음</span>}
-            </Field>
-          </div>
-
-          {/* 템플릿 · 접속 */}
-          <div className="space-y-2.5 rounded-xl border border-border p-3.5">
-            <div className="flex items-center gap-1.5 text-xs font-semibold">
-              <Disc3 className="size-3.5 text-indigo-600" /> 템플릿 · 접속
-            </div>
-            <Field label="템플릿"><span className="font-mono">{r.imageName ?? "—"}</span></Field>
-            <Field label="cloud-init">
+            </InfoRow>
+          </Section>
+          <Section icon={<Disc3 className="size-4 text-indigo-600" />} title="템플릿 · 접속">
+            <InfoRow label="템플릿"><span className="font-mono [overflow-wrap:anywhere]">{r.imageName ?? "—"}</span></InfoRow>
+            <InfoRow label="cloud-init">
               {r.cloudInit === false
                 ? <Badge variant="warning">없음 · 키페어 미적용</Badge>
                 : <span className="text-muted-foreground">포함</span>}
-            </Field>
-            <Field label="키페어">
-              <span className="inline-flex items-center gap-1 font-mono">
-                {r.keypairName ? <><KeyRound className="size-3 text-amber-600" />{r.keypairName}</> : <span className="text-muted-foreground">사용 안 함</span>}
-              </span>
-            </Field>
-            <Field label="희망 네트워크"><NetworkWish r={r} /></Field>
-          </div>
+            </InfoRow>
+            <InfoRow label="키페어">
+              {r.keypairName
+                ? <span className="inline-flex items-center gap-1 font-mono"><KeyRound className="size-3 text-amber-600" />{r.keypairName}</span>
+                : <span className="text-muted-foreground">사용 안 함</span>}
+            </InfoRow>
+            <InfoRow label="희망 네트워크"><NetworkWish r={r} /></InfoRow>
+          </Section>
         </div>
       ) : isWs ? (
-        <div className="space-y-2.5 rounded-xl border border-border p-3.5">
-          <div className="flex items-center gap-1.5 text-xs font-semibold">
-            <BrainCircuit className="size-3.5 text-brand-indigo-600" /> AI 워크스페이스
-          </div>
-          <Field label="워크스페이스 (네임스페이스)"><span className="font-mono">{r.result?.namespace ?? r.workspaceName ?? "—"}</span></Field>
-          <Field label="사용 목적">{r.purpose || <span className="text-muted-foreground">—</span>}</Field>
-          <Field label="신청 한도"><span className="font-mono">{limitsText(r)}</span></Field>
+        <Section icon={<BrainCircuit className="size-4 text-brand-indigo-600" />} title="AI 워크스페이스">
+          <InfoRow label="워크스페이스"><span className="font-mono">{r.result?.namespace ?? r.workspaceName ?? "—"}</span></InfoRow>
+          <InfoRow label="사용 목적">{r.purpose || <span className="text-muted-foreground">—</span>}</InfoRow>
+          <InfoRow label="신청 한도"><span className="font-mono">{limitsText(r)}</span></InfoRow>
           {/* 관리자가 생성 시작 때 조정한 한도 */}
-          {r.provisionSpec && <Field label="생성 한도"><span className="font-mono">{limitsText(limitsOf(r))}</span></Field>}
-        </div>
+          {r.provisionSpec && <InfoRow label="생성 한도"><span className="font-mono">{limitsText(limitsOf(r))}</span></InfoRow>}
+        </Section>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-2.5 rounded-xl border border-border p-3.5">
-            <div className="flex items-center gap-1.5 text-xs font-semibold">
-              <Boxes className="size-3.5 text-brand-indigo-600" /> 클러스터
-            </div>
-            <Field label="템플릿"><span className="font-mono">{r.templateName ?? "—"}</span></Field>
-            <Field label="Kubernetes 버전">
-              <span className="font-mono">{(r.kubeVersion ?? r.k8sVersion) ? `v${r.kubeVersion ?? r.k8sVersion}` : "—"}</span>
-            </Field>
-            <Field label="네임스페이스"><span className="font-mono">{r.result?.namespace ?? r.namespace ?? "—"}</span></Field>
-            <Field label="용도">{r.purpose || <span className="text-muted-foreground">—</span>}</Field>
-          </div>
-          <div className="space-y-2.5 rounded-xl border border-border p-3.5">
-            <div className="flex items-center gap-1.5 text-xs font-semibold">
-              <Server className="size-3.5 text-rose-600" /> 노드 (신청)
-            </div>
-            <Field label="Control Plane">
-              <span className="font-mono">{r.masterCount ?? 0}대 / {r.masterFlavorName ?? r.masterFlavorId ?? "—"}</span>
-            </Field>
-            <Field label="Worker"><span className="font-mono">{r.nodeCount ?? 0}대 / {r.flavorName ?? "—"}</span></Field>
-            <Field label="Worker 가속기"><AccelBadges r={r} /></Field>
-            <Field label="키페어">
-              <span className="inline-flex items-center gap-1 font-mono">
-                {r.keypairName ? <><KeyRound className="size-3 text-amber-600" />{r.keypairName}</>
-                  : tpl?.keypair_id ? <><KeyRound className="size-3 text-amber-600" />{tpl.keypair_id} (템플릿)</>
-                  : <span className="text-muted-foreground">{tplLoading ? "—" : "사용 안 함"}</span>}
-              </span>
-            </Field>
-          </div>
-        </div>
+        <ClusterRequestSections r={r} />
       )}
 
       {/* 클러스터 — 관리자가 고른 망·서브넷, 조정한 노드, 결과 */}
       {cp && (
-        <div className="space-y-2.5 rounded-xl border border-border p-3.5">
-          <div className="flex items-center gap-1.5 text-xs font-semibold">
-            <Network className="size-3.5 text-sky-600" /> 프로비저닝 설정
-          </div>
-          <Field label="네트워크 · 서브넷"><span className="font-mono">{cp.networkName} · {cp.subnetCidr}</span></Field>
-          <Field label="Control Plane"><span className="font-mono">{cp.masterCount}대 / {cp.masterFlavorName}</span></Field>
-          <Field label="Worker"><span className="font-mono">{cp.nodeCount}대 / {cp.flavorName}</span></Field>
-          {r.result?.apiAddress && <Field label="API 주소"><span className="font-mono text-brand-mint-700">{r.result.apiAddress}</span></Field>}
-          {r.result?.clusterId && <Field label="클러스터 ID"><span className="font-mono text-xs">{r.result.clusterId}</span></Field>}
-        </div>
+        <Section icon={<Network className="size-4 text-sky-600" />} title="프로비저닝 설정">
+          <InfoRow label="네트워크" sub={`서브넷 ${cp.subnetCidr}`}><span className="font-mono">{cp.networkName}</span></InfoRow>
+          <InfoRow label="Control Plane"><span className="font-mono">{cp.masterCount}대 / {cp.masterFlavorName}</span></InfoRow>
+          <InfoRow label="Worker"><span className="font-mono">{cp.nodeCount}대 / {cp.flavorName}</span></InfoRow>
+          {r.result?.apiAddress && <InfoRow label="API 주소"><span className="font-mono text-brand-mint-700">{r.result.apiAddress}</span></InfoRow>}
+          {r.result?.clusterId && <InfoRow label="클러스터 ID"><span className="font-mono text-xs [overflow-wrap:anywhere]">{r.result.clusterId}</span></InfoRow>}
+        </Section>
       )}
 
-      {/* 관리자 할당 · 프로비저닝 결과 */}
+      {/* VM — 관리자 할당 · 프로비저닝 결과 */}
       {isVm && p && (
-        <div className="space-y-2.5 rounded-xl border border-border p-3.5">
-          <div className="flex items-center gap-1.5 text-xs font-semibold">
-            <Network className="size-3.5 text-sky-600" /> 할당 네트워크
-          </div>
-          <Field label="네트워크">
+        <Section icon={<Network className="size-4 text-sky-600" />} title="할당 네트워크">
+          <InfoRow label="네트워크">
             <span className="inline-flex items-center gap-1.5">
               <NetBadge type={p.networkKind === "external" ? "internet" : "internal"} /><span className="font-mono">{p.networkName}</span>
             </span>
-          </Field>
-          <Field label="보안그룹"><span className="font-mono">{p.securityGroups.length ? p.securityGroups.join(", ") : "—"}</span></Field>
+          </InfoRow>
+          <InfoRow label="보안그룹"><span className="font-mono">{p.securityGroups.length ? p.securityGroups.join(", ") : "—"}</span></InfoRow>
           {/* 받은 IP(완료 전이면 직접 입력한 IP) — 직접 입력이면 고정 IP, 아니면 DHCP 자동 할당 */}
           {(r.result?.fixedIp ?? p.fixedIp) && (
-            <Field label="IP">
+            <InfoRow label="IP">
               <span className="inline-flex items-center gap-1.5">
                 <Badge variant="secondary" className="text-[10px]">{p.fixedIp ? "고정 IP" : "DHCP"}</Badge>
                 <span className="font-mono">{r.result?.fixedIp ?? p.fixedIp}</span>
               </span>
-            </Field>
+            </InfoRow>
           )}
-          {r.result?.floatingIp && <Field label="Floating IP"><span className="font-mono text-brand-mint-700">{r.result.floatingIp}</span></Field>}
-        </div>
+          {r.result?.floatingIp && <InfoRow label="Floating IP"><span className="font-mono text-brand-mint-700">{r.result.floatingIp}</span></InfoRow>}
+        </Section>
       )}
-
-    </div>
-  );
-}
-
-// 처리 결과 — 승인·프로비저닝·반려 기록과 실패 사유. 신청 상세의 맨 아래(버튼 바로 위)에 표시
-function ProcessResult({ r }: { r: ResourceRequest }) {
-  if (!(r.approvedByName || r.provisioningByName || r.approvedRejectByName || r.provisioningRejectByName || r.errorMessage)) return null;
-  return (
-    <div className="space-y-2.5 rounded-xl border border-border bg-secondary/30 p-3.5">
-      <div className="flex items-center gap-1.5 text-xs font-semibold">
-        <Clock className="size-3.5 text-muted-foreground" /> 처리 결과
-      </div>
-      {r.approvedByName && <Field label="승인">{r.approvedByName} · <span className="font-mono">{fmtDt(r.approvedAt ?? "")}</span></Field>}
-      {r.provisioningByName && <Field label="프로비저닝">{r.provisioningByName} · <span className="font-mono">{fmtDt(r.provisioningAt ?? "")}</span></Field>}
-      {r.approvedRejectByName && <Field label="반려 (승인 단계)">{r.approvedRejectByName} · <span className="font-mono">{fmtDt(r.approvedRejectAt ?? "")}</span></Field>}
-      {r.provisioningRejectByName && <Field label="반려 (프로비저닝 단계)">{r.provisioningRejectByName} · <span className="font-mono">{fmtDt(r.provisioningRejectAt ?? "")}</span></Field>}
-      {rejectReasonOf(r) && <Field label="반려 사유"><span className="text-rose-600">{rejectReasonOf(r)}</span></Field>}
-      {r.errorMessage && <Field label="실패 사유"><span className="text-rose-600">{r.errorMessage}</span></Field>}
-    </div>
+    </>
   );
 }
 
@@ -1555,50 +1449,30 @@ function AdminView() {
             onProvision={(s) => provision(s)}
           />
         ) : (
-        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              신청 상세 {detail && <StatusBadge status={detail.status} />}
-            </DialogTitle>
-            <DialogDescription>
-              {isPending ? "신청 내용을 확인하고 승인하거나 반려하세요."
-                : isApprovedVm ? "승인 설정(네트워크·보안그룹)을 지정해 프로비저닝하거나 반려하세요."
-                : isFailedVm ? "승인 설정을 확인·수정해 재시도하거나 반려하세요. 실패한 회차가 만든 자원은 정리되었습니다."
-                : canProvisionWs && detail.status === "failed" ? "워크스페이스 한도를 확인·수정해 재시도하거나 반려하세요."
-                : canProvisionWs ? "워크스페이스 한도(vCPU·메모리·가속기·저장)를 확인·조정한 뒤 생성을 시작하거나 반려하세요."
-                : "신청 내용입니다."}
-            </DialogDescription>
-          </DialogHeader>
-          {detail && <RequestDetailBody r={detail} />}
-          {canProvisionVm && <PlacementCapacity key={`placement-${detail.id}`} r={detail} onState={setPlacement} />}
-          {canProvisionVm && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
-          {canProvisionWs && !rejecting && wsLimits && (
-            <div className="space-y-2.5 rounded-xl border border-brand-indigo-200 bg-brand-indigo-50/30 p-3.5">
-              <div className="flex items-center gap-1.5 text-xs font-semibold">
-                <BrainCircuit className="size-3.5 text-brand-indigo-600" /> 워크스페이스 한도 (생성 시 적용)
-              </div>
-              <WorkspaceLimitFields value={wsLimits} onChange={setWsLimits} />
-              {!limitsOk(wsLimits) && (
-                <p className="text-xs text-rose-500">vCPU·메모리·저장은 1 이상, 가속기는 0 이상의 정수로 입력하세요.</p>
-              )}
-            </div>
-          )}
-          {canProcess && rejecting && (
-            <div className="space-y-2">
-              <label className="text-sm font-medium">반려 사유 <span className="text-rose-500">(필수)</span></label>
-              <textarea
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                rows={3}
-                placeholder="예: 프로젝트 쿼터 초과, 가속기 미할당 등"
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                autoFocus
-              />
-            </div>
-          )}
-          {detail && <ProcessResult r={detail} />}
+        <DialogContent className={cn(DETAIL_CONTENT, DETAIL_W.read)} onOpenAutoFocus={(e) => e.preventDefault()}>
+          <DetailHeader badge={detail && <StatusBadge status={detail.status} />} description={
+            isPending ? "신청 내용을 확인하고 승인하거나 반려하세요."
+              : isApprovedVm ? "승인 설정(네트워크·보안그룹)을 지정해 프로비저닝하거나 반려하세요."
+              : isFailedVm ? "승인 설정을 확인·수정해 재시도하거나 반려하세요. 실패한 회차가 만든 자원은 정리되었습니다."
+              : canProvisionWs && detail.status === "failed" ? "워크스페이스 한도를 확인·수정해 재시도하거나 반려하세요."
+              : canProvisionWs ? "워크스페이스 한도(vCPU·메모리·가속기·저장)를 확인·조정한 뒤 생성을 시작하거나 반려하세요."
+              : "신청 내용입니다."} />
+          <div className={DETAIL_BODY}>
+            {detail && <RequestDetailBody r={detail} />}
+            {canProvisionVm && <PlacementCapacity key={`placement-${detail.id}`} r={detail} onState={setPlacement} />}
+            {canProvisionVm && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
+            {canProvisionWs && !rejecting && wsLimits && (
+              <Section input icon={<BrainCircuit className="size-4 text-brand-indigo-600" />} title="워크스페이스 한도 (생성 시 적용)">
+                <WorkspaceLimitFields value={wsLimits} onChange={setWsLimits} />
+                {!limitsOk(wsLimits) && (
+                  <p className="text-xs text-rose-500">vCPU·메모리·저장은 1 이상, 가속기는 0 이상의 정수로 입력하세요.</p>
+                )}
+              </Section>
+            )}
+            {canProcess && rejecting && <RejectInput value={rejectReason} onChange={setRejectReason} />}
+          </div>
           {canProcess && (
-            <DialogFooter>
+            <DetailFooter>
               {rejecting ? (
                 <>
                   <Button variant="outline" onClick={() => setRejecting(false)}>취소</Button>
@@ -1632,14 +1506,15 @@ function AdminView() {
                   )}
                 </>
               )}
-            </DialogFooter>
+            </DetailFooter>
           )}
           {detail && IN_PROVISION.includes(detail.status) && detail.status !== "failed" && (
-            <DialogFooter>
+            <DetailFooter>
               <Button variant="outline" onClick={() => { setDetailOpen(false); openSheet(detail); }}>
-                <Server className="size-3.5" /> 진행 상황 보기
+                {detail.type === "cluster" ? <Boxes className="size-3.5" /> : detail.type === "ai-workspace" ? <BrainCircuit className="size-3.5" />
+                  : <Server className="size-3.5" />} 진행 보기
               </Button>
-            </DialogFooter>
+            </DetailFooter>
           )}
         </DialogContent>
         )}
@@ -1756,15 +1631,9 @@ function UserView({ username }: { username: string }) {
 
       {/* 내 신청 상세 (읽기 전용) — 완료 시 사용 키페어·할당 IP 확인 */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              신청 상세 {detail && <StatusBadge status={detail.status} />}
-            </DialogTitle>
-            <DialogDescription>내가 신청한 내용입니다.</DialogDescription>
-          </DialogHeader>
-          {detail && <RequestDetailBody r={detail} />}
-          {detail && <ProcessResult r={detail} />}
+        <DialogContent className={cn(DETAIL_CONTENT, DETAIL_W.read)} onOpenAutoFocus={(e) => e.preventDefault()}>
+          <DetailHeader badge={detail && <StatusBadge status={detail.status} />} description="내가 신청한 내용입니다." />
+          <div className={DETAIL_BODY}>{detail && <RequestDetailBody r={detail} />}</div>
         </DialogContent>
       </Dialog>
 
