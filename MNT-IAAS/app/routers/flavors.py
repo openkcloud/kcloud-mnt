@@ -220,10 +220,10 @@ def delete_device_profile(uuid: str, force: bool = Query(False)):
     return None
 
 
-@router.get("/accelerator-devices")
+@router.get("/accelerator-devices", dependencies=[Depends(require_admin)])
 def accelerator_devices(type: str | None = Query(None), vendor: str | None = Query(None),
                         hostname: str | None = Query(None)):
-    """물리 가속기 장치 현황 — 인벤토리 + Resource Class/Trait + 연결 VM + 사용 상태(조회 전용)."""
+    """물리 가속기 장치 현황 — 인벤토리 + Resource Class/Trait + 연결 VM + 사용 상태(조회 전용, 관리자 — 모든 프로젝트 VM 이 보임)."""
     try:
         devices = _cyborg("GET", "/devices").json().get("devices", [])
     except Exception as e:  # noqa: BLE001

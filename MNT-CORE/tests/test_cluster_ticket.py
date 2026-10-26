@@ -21,7 +21,7 @@ TEMPLATES = [
 SUBNETS = [{"id": "sub-on", "cidr": "10.0.1.0/24", "dhcp": True}, {"id": "sub-off", "cidr": "10.0.0.0/24", "dhcp": False}]
 QUOTA = {"instances": {"quota": 10, "used": 2}, "vcpu": {"quota": 20, "used": 3}, "ramGb": {"quota": 50, "used": 6}}
 BODY = {"projectId": PROJECT, "clusterName": "test-cl", "templateId": "t1", "masterCount": 1, "masterFlavorId": "m1.large",
-        "nodeCount": 2, "flavorId": "m1.rngd", "networkType": "internal", "purpose": "시험"}
+        "nodeCount": 2, "flavorId": "m1.rngd", "purpose": "시험"}
 
 
 @pytest.fixture(autouse=True)
@@ -52,8 +52,6 @@ def fake(monkeypatch):
             return {"quota": state["quota"]}
         if path == "/networks/net":
             return {"subnets": SUBNETS}
-        if path == "/networks/pub-shared":
-            return {"subnets": [{"id": "sub-pub", "cidr": "192.168.90.0/24", "dhcp": True}]}
         if path == "/keypairs":
             return {"items": state["keypairs"]}
         raise AssertionError(path)
@@ -82,7 +80,8 @@ def test_클러스터_신청(client, fake):
     assert (t["type"], t["status"], t["requestedBy"]) == ("cluster", "pending", "admin")
     assert (t["clusterName"], t["templateName"], t["kubeVersion"]) == ("test-cl", "ct-k8s-1.36.2", "1.36.2")
     assert (t["masterCount"], t["masterFlavorName"], t["nodeCount"], t["flavorName"]) == (1, "m1.large", 2, "m1.large.rngd")
-    assert t["accelerators"] == [{"kind": "NPU", "count": 1}] and t["networkType"] == "internal"
+    # 희망 망(내부망/인터넷망)은 받지 않는다 — 실제 망·서브넷은 관리자가 프로비저닝 때 고른다(헷갈릴 위험, 2026-10-22)
+    assert t["accelerators"] == [{"kind": "NPU", "count": 1}] and "networkType" not in t
     assert t["namespace"] == "okc-test-prj" and t["purpose"] == "시험"  # 프로젝트 이름 규칙(AI 워크스페이스와 같음)
     # 진행 중 신청과 같은 이름은 쓸 수 없다(모든 프로젝트 기준)
     chk = client.get("/api/core/tickets/cluster-name-check", params={"name": "test-cl"}, headers=ADMIN).json()
@@ -105,7 +104,6 @@ def test_클러스터_신청_권한(client, fake):
     ({"masterFlavorId": "m1.rngd"}, 400, "Control Plane 에는 가속기 스펙을 쓸 수 없습니다"),
     ({"flavorId": "m1.gone"}, 400, "연결된 디바이스 프로파일이 존재하지 않습니다"),
     ({"flavorId": "nope"}, 400, "선택한 스펙(플레이버)을 찾을 수 없습니다"),
-    ({"networkType": "bad"}, 400, "희망 네트워크는 internal 또는 external 이어야 합니다"),
 ])
 def test_클러스터_신청_확인(client, fake, change, status, detail):
     fake["taken"].add("test-taken")
@@ -182,21 +180,12 @@ def test_클러스터_프로비저닝(client, fake, started):
     assert inp | {"need": None} == {
         "ticketId": tid, "attempt": 1, "projectId": PROJECT, "projectName": "okc_test_prj", "clusterName": "test-cl",
         "templateId": "t1", "masterCount": 1, "masterFlavorId": "m1.large", "nodeCount": 2, "flavorId": "m1.rngd",
-        "networkId": "net", "subnetId": "sub-on", "floatingNetworkId": "pub", "externalNetwork": False,
+        "networkId": "net", "subnetId": "sub-on", "floatingNetworkId": "pub",
         "keypair": None, "namespace": "okc-test-prj", "need": None}  # keypair 없음 = 템플릿 키페어
     assert inp["need"] == {"instances": 3, "vcpu": 12, "ramGb": 24}
     assert any("subnetId=sub-on" in p for p in fake["iaas"])  # Floating IP 는 고른 서브넷 기준으로 판정
     spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
     assert (spec["networkName"], spec["subnetCidr"], spec["flavorName"]) == ("my-network", "10.0.1.0/24", "m1.large.rngd")
-
-
-def test_클러스터_프로비저닝_공유_외부망(client, fake, started):
-    # 공유된 외부망은 노드를 바로 붙일 수 있다 — API Floating IP 확인은 하지 않는다(공유 안 된 외부망 거부는 아래 확인 시험)
-    tid = _cluster_ticket()
-    body = {"provisionSpec": {"networkId": "pub-shared", "subnetId": "sub-pub"}}
-    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=body, headers=ADMIN).status_code == 200
-    assert started[0][1]["externalNetwork"] is True
-    assert not any("/fip-reachable" in p for p in fake["iaas"])
 
 
 def test_클러스터_프로비저닝_노드_조정(client, fake, started):
@@ -233,6 +222,18 @@ def test_클러스터_프로비저닝_신청_키페어가_OpenStack_에_없으�
     assert started[0][1]["keypair"] == "k1"
 
 
+def test_클러스터_프로비저닝_템플릿_키페어가_OpenStack_에_없으면(client, fake, started, monkeypatch):
+    # 키페어를 넘기지 않으면 Magnum 이 템플릿 키페어를 넣는다 — 없으면 시작하지 않는다(관리자가 다른 키페어를 고른다)
+    monkeypatch.setitem(TEMPLATES[0], "keypair_id", "k8s-key")
+    tid = _cluster_ticket()
+    r = client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (
+        409, "템플릿 키페어(k8s-key)가 OpenStack 에 없어 노드에 넣을 수 없습니다 — 프로비저닝 설정에서 다른 키페어를 고르세요")
+    body = {"provisionSpec": {**PROVISION["provisionSpec"], "novaKeypair": "gy-yang-pub"}}  # 다른 키페어를 고르면 시작
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=body, headers=ADMIN).status_code == 200
+    assert started[0][1]["keypair"] == "gy-yang-pub"
+
+
 def test_클러스터_프로비저닝_키페어_바꾸기(client, fake, started):
     # 관리자가 직접 고른 OpenStack 키페어 — 없으면 400, null 이면 템플릿 키페어
     tid = _cluster_ticket(requester="ek.lee")
@@ -254,7 +255,10 @@ def test_클러스터_프로비저닝_키페어_바꾸기(client, fake, started)
 @pytest.mark.parametrize("spec,setup,status,detail", [
     ({"subnetId": "sub-off"}, None, 400, "DHCP 가 꺼진 서브넷에는 노드가 주소를 받지 못합니다"),
     ({"subnetId": "nope"}, None, 400, "서브넷이 고른 네트워크에 속하지 않습니다"),
-    ({"networkId": "public"}, None, 400, "이 프로젝트에서 사용할 수 없는 네트워크입니다"),
+    ({"networkId": "nope"}, None, 400, "이 프로젝트에서 사용할 수 없는 네트워크입니다"),
+    # 외부망은 공유돼 있어도 안 된다 — API 로드밸런서(OVN) 주소에 밖에서 닿지 못함(2026-10-22 req-261022-007)
+    ({"networkId": "public"}, None, 400, "외부망에는 클러스터를 만들 수 없습니다 — 클러스터 API 주소(로드밸런서)에 밖에서 닿지 못합니다"),
+    ({"networkId": "pub-shared", "subnetId": "sub-pub"}, None, 400, "외부망에는 클러스터를 만들 수 없습니다 — 클러스터 API 주소(로드밸런서)에 밖에서 닿지 못합니다"),
     ({}, ("fip", {"reachable": False, "reason": "게이트웨이 없음"}), 400,
      "클러스터 API 에 Floating IP 를 붙일 수 없는 네트워크입니다\n게이트웨이 없음"),
     ({}, ("quota", {**QUOTA, "instances": {"quota": 4, "used": 2}}), 409,

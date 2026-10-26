@@ -157,7 +157,7 @@ async def _scenarios():
     create = next(c for c in calls if c[:2] == ("create", "wf-ok"))
     assert create[2] == "p-1" and create[3]["name"] == "cl-wf-ok" and create[3]["subnetId"] == "sub-1"
     assert create[3]["keypair"] == "gy-yang-pub"  # OpenStack 키페어 이름 그대로 — PAAS 가 찾아서 Magnum 에 넘긴다
-    assert create[3]["externalNetwork"] is False  # 입력에 없으면 프로젝트 망(라우터 + API Floating IP)
+    assert "externalNetwork" not in create[3]  # 노드는 프로젝트·공유 망만(라우터 + API Floating IP)
     assert sub_values("wf-ok") == {"check_name": "cl-wf-ok", "check_quota": "VM 3대 · vCPU 12 · RAM 24GB",
                                    "check_network": "my-network / 10.0.1.0/24", "send_request": "c-wf-ok",
                                    "prepare_api": API, "create_cp_vm": "1/1", "create_workers": "2/2",
