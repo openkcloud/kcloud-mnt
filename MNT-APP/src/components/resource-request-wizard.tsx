@@ -16,6 +16,7 @@ import {
   Boxes,
   Disc3,
   BrainCircuit,
+  Cpu,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -31,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { InfoRow, Section } from "@/components/request-detail";
 import { useAuth } from "@/lib/auth";
 import { useNovaKeypairs, useProjectFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
 import { useClusterTemplates } from "@/lib/paas-api";
@@ -665,45 +667,37 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground">아래 내용을 확인하고 신청하세요.</p>
 
-          <div className="rounded-xl border border-border overflow-hidden">
-            <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">기본 정보</div>
-            <div className="divide-y divide-border">
-              <ReviewRow label="가상머신 이름" value={vmName} />
-              <ReviewRow label="프로젝트" value={selectedProject?.name} mono />
-            </div>
-          </div>
+          <Section icon={<FolderKanban className="size-4 text-brand-indigo-600" />} title="기본 정보">
+            <ReviewRow label="가상머신 이름" value={vmName} />
+            {title.trim() && <ReviewRow label="신청 제목" value={title.trim()} />}
+            <ReviewRow label="프로젝트" value={selectedProject?.name} mono />
+          </Section>
 
-          <div className="rounded-xl border border-border overflow-hidden">
-            <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">네트워크 (희망)</div>
-            <div className="divide-y divide-border">
-              <ReviewRow label="유형" value={selectedNetworkObj ? `${selectedNetworkObj.label} (${selectedNetworkObj.sublabel})` : undefined} />
-              <ReviewRow label="공인 IP" value={floatingIp ? "희망" : "미희망"} accent={floatingIp ? "green" : undefined} />
-            </div>
-          </div>
+          <Section icon={<Network className="size-4 text-sky-600" />} title="네트워크 (희망)">
+            <ReviewRow label="유형" value={selectedNetworkObj ? `${selectedNetworkObj.label} (${selectedNetworkObj.sublabel})` : undefined} />
+            <ReviewRow label="공인 IP" value={floatingIp ? "희망" : "미희망"} accent={floatingIp ? "green" : undefined} />
+          </Section>
 
-          <div className="rounded-xl border border-border overflow-hidden">
-            <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">스펙 · 템플릿</div>
-            <div className="divide-y divide-border">
-              <ReviewRow label="스펙" value={selectedFlavor?.name} mono />
-              <ReviewRow label="vCPU / RAM" value={selectedFlavor ? `${selectedFlavor.vcpus} vCPU / ${selectedFlavor.ramMb / 1024} GB RAM` : undefined} mono />
-              <ReviewRow
-                label="디스크"
-                value={selectedFlavor ? (needVolume ? `부팅 볼륨 ${volumeGb} GB` : `${selectedFlavor.diskGb} GB`) : undefined}
-                mono
-              />
-              <ReviewRow
-                label="가속기"
-                value={selectedFlavor?.accelerator
-                  ? <span className="inline-flex gap-1"><AccelTags f={selectedFlavor} model={modelOf(selectedFlavor.accelerator)} /></span> : "없음"}
-              />
-              <ReviewRow label="템플릿" value={selectedImage?.name} mono />
-              <ReviewRow
-                label="SSH 키페어"
-                value={selectedImage && !selectedImage.cloudInit ? "미적용 (cloud-init 없음)" : keypair || "사용 안 함"}
-                mono
-              />
-            </div>
-          </div>
+          <Section icon={<Cpu className="size-4 text-rose-600" />} title="스펙 · 템플릿">
+            <ReviewRow label="스펙" value={selectedFlavor?.name} mono />
+            <ReviewRow label="vCPU / RAM" value={selectedFlavor ? `${selectedFlavor.vcpus} vCPU / ${selectedFlavor.ramMb / 1024} GB RAM` : undefined} mono />
+            <ReviewRow
+              label="디스크"
+              value={selectedFlavor ? (needVolume ? `부팅 볼륨 ${volumeGb} GB` : `${selectedFlavor.diskGb} GB`) : undefined}
+              mono
+            />
+            <ReviewRow
+              label="가속기"
+              value={selectedFlavor?.accelerator
+                ? <span className="inline-flex gap-1"><AccelTags f={selectedFlavor} model={modelOf(selectedFlavor.accelerator)} /></span> : "없음"}
+            />
+            <ReviewRow label="템플릿" value={selectedImage?.name} mono />
+            <ReviewRow
+              label="SSH 키페어"
+              value={selectedImage && !selectedImage.cloudInit ? "미적용 (cloud-init 없음)" : keypair || "사용 안 함"}
+              mono={!!keypair && selectedImage?.cloudInit !== false}
+            />
+          </Section>
 
           <div className="flex items-center justify-center gap-1.5 pt-1 text-[11px] text-muted-foreground">
             {["신청 접수", "관리자 승인", "가상머신 생성", "완료"].map((s, i, arr) => (
@@ -750,17 +744,12 @@ function ReviewRow({ label, value, mono, accent }: {
   mono?: boolean;
   accent?: "green";
 }) {
-  const valueClass = cn(
-    "text-right text-sm",
-    mono && "font-mono",
-    accent === "green" && "text-green-700 font-medium",
-    !value && "text-rose-500",
-  );
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-2.5">
-      <span className="text-xs text-muted-foreground shrink-0">{label}</span>
-      <span className={valueClass}>{value || "(미선택)"}</span>
-    </div>
+    <InfoRow label={label}>
+      <span className={cn(mono && "font-mono", accent === "green" && "font-medium text-green-700", !value && "text-rose-500")}>
+        {value || "(미선택)"}
+      </span>
+    </InfoRow>
   );
 }
 
@@ -1020,36 +1009,31 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground">아래 내용을 확인하고 신청하세요.</p>
 
-          <div className="overflow-hidden rounded-xl border border-border">
-            <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">기본 정보</div>
-            <div className="divide-y divide-border">
-              <ReviewRow label="프로젝트" value={selectedProject?.name} mono />
-              <ReviewRow label="클러스터 이름" value={clusterName} mono />
-              <ReviewRow label="템플릿" value={selectedTemplate?.name} mono />
-              <ReviewRow label="Kubernetes 버전" value={selectedTemplate?.kubeVersion ? `v${selectedTemplate.kubeVersion}` : "—"} mono />
-              <ReviewRow label="네임스페이스" value={selectedProject ? "프로젝트 이름으로 함께 생성" : undefined} />
-              <ReviewRow label="용도" value={purpose.trim() || "—"} />
-            </div>
-          </div>
+          <Section icon={<FolderKanban className="size-4 text-brand-indigo-600" />} title="기본 정보">
+            <ReviewRow label="프로젝트" value={selectedProject?.name} mono />
+            <ReviewRow label="클러스터 이름" value={clusterName} mono />
+            {title.trim() && <ReviewRow label="신청 제목" value={title.trim()} />}
+            <ReviewRow label="템플릿" value={selectedTemplate?.name} mono />
+            <ReviewRow label="Kubernetes 버전" value={selectedTemplate?.kubeVersion ? `v${selectedTemplate.kubeVersion}` : "—"} mono />
+            <ReviewRow label="네임스페이스" value={selectedProject ? "프로젝트 이름으로 함께 생성" : undefined} />
+            <ReviewRow label="용도" value={purpose.trim() || "—"} />
+          </Section>
 
-          <div className="overflow-hidden rounded-xl border border-border">
-            <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">노드 구성</div>
-            <div className="divide-y divide-border">
-              <ReviewRow label="Control Plane" value={masterFlavor ? `${nodes.masterCount}대 / ${masterFlavor.name}` : undefined} mono />
-              <ReviewRow label="Worker" value={workerFlavor ? `${nodes.nodeCount}대 / ${workerFlavor.name}` : undefined} mono />
-              <ReviewRow
-                label="Worker 가속기"
-                value={workerFlavor?.accelerator ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <AccelTags f={workerFlavor} model={modelOf(workerFlavor.accelerator)} />
-                    {workerFlavor.accelerators?.length ? `/ Worker ${nodes.nodeCount}대` : null}
-                  </span>
-                ) : "없음"}
-              />
-              <ReviewRow label="총 자원" value={totals ? `VM ${totals.vms}대 / ${totals.vcpu} vCPU / ${totals.ramGb} GB RAM / ${totals.diskGb} GB Disk` : undefined} mono />
-              <ReviewRow label="키페어" value={keypairLabel} mono />
-            </div>
-          </div>
+          <Section icon={<Server className="size-4 text-rose-600" />} title="노드 구성">
+            <ReviewRow label="Control Plane" value={masterFlavor ? `${nodes.masterCount}대 / ${masterFlavor.name}` : undefined} mono />
+            <ReviewRow label="Worker" value={workerFlavor ? `${nodes.nodeCount}대 / ${workerFlavor.name}` : undefined} mono />
+            <ReviewRow
+              label="Worker 가속기"
+              value={workerFlavor?.accelerator ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <AccelTags f={workerFlavor} model={modelOf(workerFlavor.accelerator)} />
+                  {workerFlavor.accelerators?.length ? `/ Worker ${nodes.nodeCount}대` : null}
+                </span>
+              ) : "없음"}
+            />
+            <ReviewRow label="총 자원" value={totals ? `VM ${totals.vms}대 / ${totals.vcpu} vCPU / ${totals.ramGb} GB RAM / ${totals.diskGb} GB Disk` : undefined} mono />
+            <ReviewRow label="키페어" value={keypairLabel} mono={keypairLabel !== "사용 안 함"} />
+          </Section>
 
           <div className="flex items-center justify-center gap-1.5 pt-1 text-[11px] text-muted-foreground">
             {["신청 접수", "관리자 승인", "노드 VM 생성", "클러스터 구성", "네임스페이스·접근 권한"].map((s, i, arr) => (
