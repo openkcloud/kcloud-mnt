@@ -1,4 +1,4 @@
-"""역할별 권한 — API 73개 전부. 사용자(gy.yang)는 소속 프로젝트(p-mine) 자원의 조회와
+"""역할별 권한 — API 75개 전부. 사용자(gy.yang)는 소속 프로젝트(p-mine) 자원의 조회와
 가상서버 상세의 사용자 기능(콘솔·전원·네트워크/볼륨 연결·분리)만, 나머지 쓰기와 라우터는 관리자만."""
 import httpx
 import pytest
@@ -69,6 +69,8 @@ CASES = [
     ("GET", "/images", None, A),
     ("GET", f"/projects/{MINE}/images", None, A), ("GET", f"/projects/{OTHER}/images", None, D),
     ("PATCH", "/images/i1", {"visibility": "public"}, D), ("DELETE", "/images/i1", None, D),
+    ("POST", "/images", {"name": "i", "url": "http://x/i.qcow2"}, D),           # URL 가져오기 등록
+    ("PATCH", "/images/i1/properties", {"set": {"os_distro": "ubuntu"}}, D),     # 속성(메타데이터) 편집
     # 플레이버
     ("GET", "/flavors", None, A), ("GET", "/device-profiles", None, A),
     ("GET", f"/projects/{MINE}/flavors", None, A), ("GET", f"/projects/{OTHER}/flavors", None, D),
