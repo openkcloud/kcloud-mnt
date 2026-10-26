@@ -351,6 +351,33 @@ def resize_revert(server_id: str):
     return {"ok": True}
 
 
+class ServerSecGroupBody(BaseModel):
+    name: str  # 보안그룹 이름 — Nova addSecurityGroup 은 이름 기준
+
+
+@router.post("/servers/{server_id}/security-groups", dependencies=[Depends(server_access)])
+def add_server_security_group(server_id: str, body: ServerSecGroupBody):
+    """가상서버에 보안그룹 추가(Nova addSecurityGroup, 이름 기준). Horizon '보안 그룹 편집'과 동일.
+
+    클러스터 노드처럼 Magnum/CAPI 가 관리하는 보안그룹의 규칙은 되돌려지므로,
+    별도 보안그룹을 서버에 직접 붙여 접속 규칙을 유지하는 용도."""
+    try:
+        _nova_req("POST", f"/servers/{server_id}/action", json={"addSecurityGroup": {"name": body.name}})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"보안그룹 추가 실패: {e}")
+    return {"ok": True}
+
+
+@router.delete("/servers/{server_id}/security-groups/{name}", dependencies=[Depends(server_access)])
+def remove_server_security_group(server_id: str, name: str):
+    """가상서버에서 보안그룹 제거(Nova removeSecurityGroup, 이름 기준)."""
+    try:
+        _nova_req("POST", f"/servers/{server_id}/action", json={"removeSecurityGroup": {"name": name}})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"보안그룹 제거 실패: {e}")
+    return {"ok": True}
+
+
 @router.get("/servers/{server_id}/diagnostics", dependencies=[Depends(server_access)])
 def diagnostics(server_id: str):
     """하이퍼바이저 진단(현재 카운터) — CPU time·메모리·디스크/NIC 누적. 시계열 아님(프론트가 폴링해 속도 계산).
