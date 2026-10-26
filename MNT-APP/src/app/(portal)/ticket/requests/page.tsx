@@ -1154,6 +1154,10 @@ function UserView({ username }: { username: string }) {
   const [q, setQ] = React.useState("");
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
+  const [sheetReq, setSheetReq] = React.useState<ResourceRequest | null>(null);
+  const [sheetOpen, setSheetOpen] = React.useState(false);
+  // 진행 보기(읽기 전용 — 재시도·예약 취소 없음): VM·클러스터의 생성 중·완료·실패. AI 워크스페이스는 이 화면 작업 대상 밖
+  const canWatch = (r: ResourceRequest) => r.type !== "ai-workspace" && IN_PROVISION.includes(r.status);
 
   // 내 신청 = MNT-CORE 실제 티켓 (목업 폴백 없음). 신청자는 서버가 토큰으로 정한다
   const filters: Record<string, string> = {};
@@ -1255,8 +1259,18 @@ function UserView({ username }: { username: string }) {
         <DialogContent className={cn(DETAIL_CONTENT, DETAIL_W.read)} onOpenAutoFocus={(e) => e.preventDefault()}>
           <DetailHeader badge={detail && <StatusBadge status={detail.status} />} description="내가 신청한 내용입니다." />
           <div className={DETAIL_BODY}>{detail && <RequestDetailBody r={detail} />}</div>
+          {detail && canWatch(detail) && (
+            <DetailFooter>
+              <Button variant="outline" onClick={() => { setDetailOpen(false); setSheetReq(detail); setSheetOpen(true); }}>
+                {detail.type === "cluster" ? <Boxes className="size-3.5" /> : <Server className="size-3.5" />} 진행 보기
+              </Button>
+            </DetailFooter>
+          )}
         </DialogContent>
       </Dialog>
+
+      {/* 프로비저닝 진행 사이드 시트(읽기 전용) */}
+      <ProvisioningSheet key={sheetReq?.id} req={sheetReq} open={sheetOpen} onClose={() => setSheetOpen(false)} />
 
       <ResourceRequestWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
     </div>
