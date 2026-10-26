@@ -133,7 +133,7 @@ function ServerDetailPage() {
         <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-brand-indigo-100 text-brand-indigo-700"><Server className="size-5" /></div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="truncate font-mono text-lg font-semibold">{s.name}</h1>
+            <h1 className="break-all font-mono text-lg font-semibold">{s.name}</h1>
             <Badge variant={stVariant(s.status)} className="shrink-0 text-[10px]">{s.status}</Badge>
           </div>
           <div className="truncate font-mono text-xs text-muted-foreground">{s.id} · 프로젝트 {projName(s.tenantId)}</div>
