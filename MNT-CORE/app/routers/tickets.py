@@ -272,6 +272,7 @@ class CreateTicketBody(BaseModel):
     projectId: str               # OpenStack 프로젝트 UUID
     title: str | None = None     # 신청 제목(선택) — 별도 컬럼
     vmName: str
+    purpose: str = ""            # 용도(선택, 300자)
     networkType: str             # 희망 망: internal(내부망) | external(인터넷망)
     floatingIp: bool = False     # 공인 IP 희망 (인터넷망일 때만)
     flavorId: str
@@ -351,6 +352,7 @@ def create_ticket(body: CreateTicketBody, user: CurrentUser = Depends(current_us
     spec = {
         "projectName": project["name"],
         "vmName": body.vmName,
+        "purpose": body.purpose.strip()[:300],
         "networkType": body.networkType,
         "floatingIp": body.floatingIp and body.networkType == "external",
         "flavorId": flavor["id"],

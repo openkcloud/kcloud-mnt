@@ -309,6 +309,7 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
                 : <span className="text-muted-foreground">사용 안 함</span>}
             </InfoRow>
             <InfoRow label="희망 네트워크"><NetworkWish r={r} /></InfoRow>
+            <InfoRow label="용도"><span title={r.purpose} className="max-w-full truncate">{r.purpose || "—"}</span></InfoRow>
           </Section>
         </div>
       ) : isWs ? (

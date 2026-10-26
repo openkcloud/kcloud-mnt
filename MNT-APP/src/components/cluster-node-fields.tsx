@@ -572,7 +572,7 @@ const SPEC_COLS = "grid grid-cols-[22px_minmax(0,1fr)_96px_96px_96px] items-cent
  * 오른쪽 영역 그리드의 자식들로 펼쳐진다. 검색어·정렬·페이지는 안에서 갖고, 대상(역할·출처)이 바뀌면 부모가 key 로 새로 그린다.
  */
 export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelect, accel, onAccel, refLabel, refId, refAccel,
-  sortSelect, compactFixed, groupAccel, zeroDisk = "0 GB Disk" }: {
+  sortSelect, compactFixed, groupAccel, zeroDisk = "0 GB Disk", extraBlock }: {
   flavors: FlavorSummary[];
   role: "cp" | "w";
   fixed: boolean;
@@ -588,6 +588,7 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
   compactFixed?: boolean;     // fixed 면 표 높이를 한 줄로
   groupAccel?: boolean;       // 가속기를 종류·모델·개수 묶음으로(프로파일 줄 없음) — 신청 화면
   zeroDisk?: string;          // 디스크 없는 스펙의 Disk 칸(VM 은 다음 단계에서 부팅 볼륨을 정함)
+  extraBlock?: (f: FlavorSummary) => string | null; // 화면별로 더 막을 이유(VM — 고른 템플릿의 최소 디스크보다 작은 스펙)
 }) {
   const [query, setQuery] = React.useState("");
   const [sort, setSort] = React.useState<{ key: SortKey; dir: 1 | -1 }>({ key: "cpu", dir: 1 });
@@ -597,7 +598,7 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
   const choices = accelChoices(flavors, modelOf);
   const same = groupAccel ? accelGroup(choices) : undefined;
 
-  const blockOf = (f: FlavorSummary) => (role === "w" ? workerFlavorBlock(f, accel, same) : masterFlavorBlock(f));
+  const blockOf = (f: FlavorSummary) => extraBlock?.(f) ?? (role === "w" ? workerFlavorBlock(f, accel, same) : masterFlavorBlock(f));
   const cmp = (a: FlavorSummary, b: FlavorSummary) => sort.dir * SORTS[sort.key](a, b);
   const q = query.trim().toLowerCase();
   const all = fixed ? flavors.filter((f) => f.id === refId)
