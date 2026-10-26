@@ -66,6 +66,7 @@ import {
   WorkspaceLimitFields, limitsBody, limitsOf, limitsOk, limitsText, toLimitsInput, type WorkspaceLimitsInput,
 } from "@/components/workspace-requests";
 import { ClusterReviewContent, isClusterReview, type ClusterProvisionValue } from "@/components/cluster-ticket-review";
+import { AccelBadge, useAccelModel } from "@/components/cluster-node-fields";
 import { accKindClass, cn, formatDateTime } from "@/lib/utils";
 import type {
   ClusterProvisionSpec, ProvisionSpec, ProvisionStep, ProvisionStepsResp, ProvStepStatus, ResourceRequest, RequestStatus,
@@ -206,23 +207,18 @@ function ProjectRequesterCell({ r }: { r: ResourceRequest }) {
 
 // 목록 스펙 칸 — VM: 플레이버 + 가속기 배지 / 클러스터: 노드 수 + Worker 플레이버 + 가속기 배지 / AI 워크스페이스: 한도
 function SpecCell({ r }: { r: ResourceRequest }) {
+  const modelOf = useAccelModel();
   if (r.type === "ai-workspace") return <>{limitsText(limitsOf(r))}</>;
   const accels = r.accelerators?.length ? r.accelerators
     : r.acceleratorKind ? [{ kind: r.acceleratorKind, count: r.acceleratorCount ?? 1 }] // 목업 티켓
     : [];
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
-      {r.type === "cluster" && <span className="text-muted-foreground">CP×{r.masterCount ?? 0} · Worker×{r.nodeCount ?? 0}</span>}
+      {r.type === "cluster" && <span className="text-muted-foreground">CP×{r.masterCount ?? 0} / Worker×{r.nodeCount ?? 0}</span>}
       {r.flavorName ?? "—"}
-      {accels.map((a) => (
-        <Badge key={a.kind} variant="ghost" className={cn("h-5 gap-1 px-1.5 text-[10px]", accKindClass(a.kind))}>
-          <Cpu className="size-3" />{a.kind} × {a.count}
-        </Badge>
-      ))}
+      {accels.map((a) => <AccelBadge key={a.kind} kind={a.kind} model={modelOf(r.deviceProfile)} count={a.count} />)}
       {/* 가속기는 있으나 종류를 모를 때(종류 저장 전 티켓) */}
-      {!accels.length && r.deviceProfile && (
-        <Badge variant="ghost" className={cn("h-5 gap-1 px-1.5 text-[10px]", accKindClass())}><Cpu className="size-3" />가속기</Badge>
-      )}
+      {!accels.length && r.deviceProfile && <AccelBadge />}
     </span>
   );
 }
@@ -267,18 +263,15 @@ function NetworkWish({ r }: { r: ResourceRequest }) {
 
 // 가속기 배지 묶음 — VM·클러스터 Worker 스펙 공용
 function AccelBadges({ r }: { r: ResourceRequest }) {
+  const modelOf = useAccelModel();
   return r.accelerators?.length
     ? (
       <span className="inline-flex flex-wrap items-center justify-end gap-1">
-        {r.accelerators.map((a) => (
-          <Badge key={a.kind} variant="ghost" className={cn("gap-1 font-mono", accKindClass(a.kind))}>
-            <Cpu className="size-3" />{a.kind} × {a.count}
-          </Badge>
-        ))}
+        {r.accelerators.map((a) => <AccelBadge key={a.kind} kind={a.kind} model={modelOf(r.deviceProfile)} count={a.count} />)}
       </span>
     )
     : r.deviceProfile
-    ? <Badge variant="ghost" className={cn("gap-1 font-mono", accKindClass())}><Cpu className="size-3" />가속기</Badge>
+    ? <AccelBadge />
     : <span className="text-muted-foreground">없음</span>;
 }
 
@@ -328,25 +321,15 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
               <Cpu className="size-3.5 text-rose-600" /> 스펙
             </div>
             <Field label="스펙"><span className="font-mono">{r.flavorName ?? "—"}</span></Field>
-            <Field label="vCPU · 메모리"><span className="font-mono">{r.vcpu ?? "—"} vCPU · {r.ramGb ?? "—"} GB</span></Field>
+            <Field label="vCPU · 메모리"><span className="font-mono">{r.vcpu ?? "—"} vCPU / {r.ramGb ?? "—"} GB</span></Field>
             <Field label="디스크">
               <span className="font-mono">{r.diskGb ? `${r.diskGb} GB` : r.volumeGb ? `부팅 볼륨 ${r.volumeGb} GB` : "—"}</span>
             </Field>
             <Field label="가속기">
-              {r.accelerators?.length
-                ? (
-                  <span className="inline-flex flex-wrap items-center justify-end gap-1">
-                    {r.accelerators.map((a) => (
-                      <Badge key={a.kind} variant="ghost" className={cn("gap-1 font-mono", accKindClass(a.kind))}>
-                        <Cpu className="size-3" />{a.kind} × {a.count}
-                      </Badge>
-                    ))}
-                  </span>
-                )
-                : r.deviceProfile
-                ? <Badge variant="ghost" className={cn("gap-1 font-mono", accKindClass())}><Cpu className="size-3" />가속기</Badge>
+              {r.accelerators?.length || r.deviceProfile
+                ? <AccelBadges r={r} />
                 : r.acceleratorKind
-                ? <Badge variant="ghost" className={cn("gap-1 font-mono", accKindClass(r.acceleratorKind))}><Cpu className="size-3" />{r.acceleratorKind} × {r.acceleratorCount ?? 1}</Badge>
+                ? <AccelBadge kind={r.acceleratorKind} count={r.acceleratorCount ?? 1} />
                 : <span className="text-muted-foreground">없음</span>}
             </Field>
           </div>
@@ -392,7 +375,6 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
               <span className="font-mono">{(r.kubeVersion ?? r.k8sVersion) ? `v${r.kubeVersion ?? r.k8sVersion}` : "—"}</span>
             </Field>
             <Field label="네임스페이스"><span className="font-mono">{r.result?.namespace ?? r.namespace ?? "—"}</span></Field>
-            <Field label="희망 네트워크"><NetworkWish r={r} /></Field>
             <Field label="용도">{r.purpose || <span className="text-muted-foreground">—</span>}</Field>
           </div>
           <div className="space-y-2.5 rounded-xl border border-border p-3.5">
@@ -400,9 +382,9 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
               <Server className="size-3.5 text-rose-600" /> 노드 (신청)
             </div>
             <Field label="Control Plane">
-              <span className="font-mono">{r.masterCount ?? 0} 대 · {r.masterFlavorName ?? r.masterFlavorId ?? "—"}</span>
+              <span className="font-mono">{r.masterCount ?? 0} 대 / {r.masterFlavorName ?? r.masterFlavorId ?? "—"}</span>
             </Field>
-            <Field label="Worker"><span className="font-mono">{r.nodeCount ?? 0} 대 · {r.flavorName ?? "—"}</span></Field>
+            <Field label="Worker"><span className="font-mono">{r.nodeCount ?? 0} 대 / {r.flavorName ?? "—"}</span></Field>
             <Field label="Worker 가속기"><AccelBadges r={r} /></Field>
             <Field label="키페어">
               <span className="inline-flex items-center gap-1 font-mono">
@@ -420,8 +402,8 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
             <Network className="size-3.5 text-sky-600" /> 프로비저닝 설정
           </div>
           <Field label="네트워크 · 서브넷"><span className="font-mono">{cp.networkName} · {cp.subnetCidr}</span></Field>
-          <Field label="Control Plane"><span className="font-mono">{cp.masterCount} 대 · {cp.masterFlavorName}</span></Field>
-          <Field label="Worker"><span className="font-mono">{cp.nodeCount} 대 · {cp.flavorName}</span></Field>
+          <Field label="Control Plane"><span className="font-mono">{cp.masterCount} 대 / {cp.masterFlavorName}</span></Field>
+          <Field label="Worker"><span className="font-mono">{cp.nodeCount} 대 / {cp.flavorName}</span></Field>
           {r.result?.apiAddress && <Field label="API 주소"><span className="font-mono text-brand-mint-700">{r.result.apiAddress}</span></Field>}
           {r.result?.clusterId && <Field label="클러스터 ID"><span className="font-mono text-xs">{r.result.clusterId}</span></Field>}
         </div>

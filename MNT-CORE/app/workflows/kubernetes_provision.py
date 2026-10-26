@@ -122,8 +122,7 @@ class KubernetesProvision(ProvisionSteps):
 
         # 생성 요청(1회) — 다시 보내면 중복 생성 위험. 응답이 끊기면 정리 때 이름으로 찾아 지운다
         self.requested = True
-        spec = {"name": inp["clusterName"], "keypair": inp.get("keypair"),
-                "externalNetwork": inp.get("externalNetwork", False), **{k: inp[k] for k in (
+        spec = {"name": inp["clusterName"], "keypair": inp.get("keypair"), **{k: inp[k] for k in (
             "templateId", "masterCount", "masterFlavorId", "nodeCount", "flavorId", "networkId", "subnetId")}}
         self.cluster_id = await self._paas("paas.create_cluster", inp["projectId"], spec, retry=NO_RETRY,
                                            timeout=timedelta(seconds=90))

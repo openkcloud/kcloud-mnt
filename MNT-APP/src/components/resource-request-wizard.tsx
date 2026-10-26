@@ -42,7 +42,7 @@ import {
 import { useSshKeys, type SshKey } from "@/lib/sshkey-api";
 import { WorkspaceRequestForm } from "@/components/workspace-requests";
 import {
-  ClusterNodeConfigPanel, EMPTY_NODE_CONFIG, effectiveNodes, nodeConfigMissing, nodeTotals, nodesValid,
+  AccelTags, ClusterNodeConfigPanel, EMPTY_NODE_CONFIG, effectiveNodes, nodeConfigMissing, nodeTotals, nodesValid, useAccelModel,
   type ClusterNodeConfig,
 } from "@/components/cluster-node-fields";
 
@@ -149,7 +149,7 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
 const CLUSTER_STEPS = [
   { key: "basic", title: "기본", icon: FolderKanban, desc: "프로젝트 · 이름 · 용도" },
   { key: "template", title: "템플릿", icon: Boxes, desc: "클러스터 템플릿 · K8s 버전" },
-  { key: "nodes", title: "노드", icon: Server, desc: "희망 망 · Control Plane · Worker · 키페어" },
+  { key: "nodes", title: "노드", icon: Server, desc: "Control Plane · Worker · 키페어" },
   { key: "review", title: "확인", icon: CheckCircle2, desc: "신청 검토 및 제출" },
 ] as const;
 
@@ -727,15 +727,14 @@ function LoadError({ what, message }: { what: string; message: string }) {
 
 function ReviewRow({ label, value, mono, accent }: {
   label: string;
-  value?: string;
+  value?: React.ReactNode;
   mono?: boolean;
-  accent?: "green" | "purple" | "indigo" | "mint";
+  accent?: "green" | "indigo" | "mint";
 }) {
   const valueClass = cn(
     "text-right text-sm",
     mono && "font-mono",
     accent === "green" && "text-green-700 font-medium",
-    accent === "purple" && "text-purple-700 font-medium",
     accent === "indigo" && "text-brand-indigo-700 font-medium",
     accent === "mint" && "text-brand-mint-700 font-medium",
     !value && "text-rose-500",
@@ -749,8 +748,9 @@ function ReviewRow({ label, value, mono, accent }: {
 }
 
 // ── 서비스 클러스터 신청 탭 ───────────────────────────────────
-// 사용자는 클러스터를 직접 만들지 않고 템플릿·노드 구성(가속기 포함)·희망 망을 정해 신청한다. 승인 뒤 관리자가 실제 망·서브넷을
-// 골라 프로비저닝하면 Magnum 클러스터 + 프로젝트 네임스페이스 + 접근 권한(프로젝트 멤버)이 만들어진다.
+// 사용자는 클러스터를 직접 만들지 않고 템플릿·노드 구성(가속기 포함)을 정해 신청한다(망은 묻지 않는다 — 내부망/인터넷망 선택은
+// 헷갈릴 위험). 승인 뒤 관리자가 망·서브넷을 골라 프로비저닝하면 Magnum 클러스터 + 프로젝트 네임스페이스 + 접근 권한(프로젝트
+// 멤버)이 만들어진다.
 // 프로젝트·이름 확인 = 포털 DB·MNT-PAAS, 템플릿 = MNT-PAAS, 스펙 = 프로젝트 플레이버(MNT-IAAS) — 목업으로 폴백하지 않는다.
 function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const user = useAuth((s) => s.user);
@@ -764,11 +764,11 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const [purpose, setPurpose] = React.useState("");
   const [templateId, setTemplateId] = React.useState("");
   const [nodeCfg, setNodeCfg] = React.useState<ClusterNodeConfig>(EMPTY_NODE_CONFIG);
-  const [network, setNetwork] = React.useState("");
 
   const { data: flavors = [], isLoading: flavorLoading, error: flavorError } = useProjectFlavors(project || undefined);
   const { isAdmin, data: myKeypairs = [], isLoading: keyLoading, error: keyError } = useRequestKeypairs();
   const templates = allTemplates.filter((t) => t.public && !t.hidden);
+  const modelOf = useAccelModel();
 
   // 이름 형식 검사 후 입력이 멈추면(0.4초) 중복 확인 — 모든 프로젝트의 클러스터 + 진행 중 신청
   const [debouncedName, setDebouncedName] = React.useState("");
@@ -786,10 +786,9 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const stepIdx = CLUSTER_STEPS.findIndex((s) => s.key === step);
   const selectedProject = projects.find((p) => p.id === project);
   const selectedTemplate = templates.find((t) => t.id === templateId);
-  const selectedNetworkObj = USER_NETWORKS.find((n) => n.id === network);
   // 실제로 신청할 노드 — 항목별로 템플릿 값 또는 직접 고른 값
   const nodes = effectiveNodes(flavors, nodeCfg, selectedTemplate ?? { master_flavor_id: null, flavor_id: null });
-  const nodesMissing = [!network && "네트워크", ...nodeConfigMissing(nodes)].filter((x): x is string => !!x);
+  const nodesMissing = nodeConfigMissing(nodes);
   // 직접 고른 키 — 템플릿 값이거나 고르지 않았으면 템플릿 키페어
   const chosenKey = nodeCfg.source.key === "custom" ? nodeCfg.keypairId || undefined : undefined;
   const keypairLabel = chosenKey ? myKeypairs.find((k) => k.id === chosenKey)?.name : `${selectedTemplate?.keypair_id || "없음"} (템플릿)`;
@@ -804,10 +803,17 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
     setNodeCfg(EMPTY_NODE_CONFIG);
   }
 
+  // 템플릿을 (새로) 고르면 노드 구성은 '템플릿 그대로 생성'(모든 항목 템플릿 값)에서 시작한다 — 같은 템플릿이면 고친 값 유지
+  function handleTemplateSelect(id: string) {
+    if (id === templateId) return;
+    setTemplateId(id);
+    setNodeCfg({ ...EMPTY_NODE_CONFIG, source: { cp: "tpl", w: "tpl", key: "tpl" } });
+  }
+
   const canProceed: Record<ClusterStepKey, boolean> = {
     basic: !!project && nameOk && purpose.length <= PURPOSE_MAX,
     template: !!templateId,
-    nodes: nodesValid(nodes) && nodesMissing.length === 0, // 희망 망 포함
+    nodes: nodesValid(nodes) && nodesMissing.length === 0,
     review: true,
   };
 
@@ -826,7 +832,6 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
         // 직접 선택 — 사용자는 본인 키(id), 관리자는 OpenStack 키페어(이름). 없으면 템플릿 키페어
         keypairId: isAdmin ? undefined : chosenKey,
         novaKeypair: isAdmin ? chosenKey : undefined,
-        networkType: network,
         purpose: purpose.trim(),
       },
       {
@@ -943,7 +948,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
               <button
                 key={t.id}
                 type="button"
-                onClick={() => setTemplateId(t.id)}
+                onClick={() => handleTemplateSelect(t.id)}
                 className={cn(
                   "flex cursor-pointer items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors",
                   templateId === t.id ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
@@ -956,7 +961,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
                     {t.kubeVersion && <Badge variant="secondary" className="font-mono text-[10px]">v{t.kubeVersion}</Badge>}
                   </div>
                   <div className="font-mono text-[11px] text-muted-foreground">
-                    Control Plane {t.master_flavor_id ?? "—"} · Worker {t.flavor_id ?? "—"}
+                    Control Plane {t.master_flavor_id ?? "—"} / Worker {t.flavor_id ?? "—"}
                   </div>
                 </div>
                 {templateId === t.id && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
@@ -966,15 +971,14 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
         </div>
       )}
 
-      {/* ── 3. 노드 — 희망 망 · Control Plane · Worker(가속기) · 키페어, 항목별로 직접 선택 또는 템플릿 값 ── */}
+      {/* ── 3. 노드 — Control Plane · Worker(가속기) · 키페어, 항목별로 직접 선택 또는 템플릿 값 ── */}
       {step === "nodes" && selectedTemplate && (
         <div className="space-y-2">
           {(flavorLoading || keyLoading) && <p className="text-xs text-muted-foreground">스펙·키페어를 불러오는 중…</p>}
           {flavorError && <LoadError what="스펙" message={flavorError.message} />}
           {keyError && <LoadError what="키페어" message={keyError.message} />}
           {!flavorLoading && !keyLoading && !flavorError && !keyError && (
-            <ClusterNodeConfigPanel flavors={flavors} keypairs={myKeypairs} template={selectedTemplate} value={nodeCfg} onChange={setNodeCfg}
-              wish={{ value: network, onChange: setNetwork, options: USER_NETWORKS }} />
+            <ClusterNodeConfigPanel flavors={flavors} keypairs={myKeypairs} template={selectedTemplate} value={nodeCfg} onChange={setNodeCfg} />
           )}
         </div>
       )}
@@ -991,6 +995,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
               <ReviewRow label="클러스터 이름" value={clusterName} mono />
               <ReviewRow label="템플릿" value={selectedTemplate?.name} mono />
               <ReviewRow label="Kubernetes 버전" value={selectedTemplate?.kubeVersion ? `v${selectedTemplate.kubeVersion}` : "—"} mono />
+              <ReviewRow label="네임스페이스" value={selectedProject ? "프로젝트 이름으로 함께 생성" : undefined} />
               <ReviewRow label="용도" value={purpose.trim() || "—"} />
             </div>
           </div>
@@ -998,23 +1003,19 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
           <div className="overflow-hidden rounded-xl border border-border">
             <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">노드 구성</div>
             <div className="divide-y divide-border">
-              <ReviewRow label="Control Plane" value={masterFlavor ? `${nodes.masterCount} 대 · ${masterFlavor.name}` : undefined} mono />
-              <ReviewRow label="Worker" value={workerFlavor ? `${nodes.nodeCount} 대 · ${workerFlavor.name}` : undefined} mono />
+              <ReviewRow label="Control Plane" value={masterFlavor ? `${nodes.masterCount} 대 / ${masterFlavor.name}` : undefined} mono />
+              <ReviewRow label="Worker" value={workerFlavor ? `${nodes.nodeCount} 대 / ${workerFlavor.name}` : undefined} mono />
               <ReviewRow
                 label="가속기 (Worker)"
-                value={workerFlavor?.accelerators?.length ? `${accelSummary(workerFlavor)} · Worker ${nodes.nodeCount}대` : workerFlavor?.accelerator ? "가속기" : "없음"}
-                accent={workerFlavor?.accelerator ? (workerFlavor.accelerators?.[0]?.kind === "GPU" ? "green" : "purple") : undefined}
+                value={workerFlavor?.accelerator ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <AccelTags f={workerFlavor} model={modelOf(workerFlavor.accelerator)} />
+                    {workerFlavor.accelerators?.length ? `/ Worker ${nodes.nodeCount}대` : null}
+                  </span>
+                ) : "없음"}
               />
-              <ReviewRow label="합계" value={totals ? `VM ${totals.vms}대 · ${totals.vcpu} vCPU · ${totals.ramGb} GB` : undefined} mono />
+              <ReviewRow label="합계" value={totals ? `VM ${totals.vms}대 / ${totals.vcpu} vCPU / ${totals.ramGb} GB` : undefined} mono />
               <ReviewRow label="키페어" value={keypairLabel} mono />
-            </div>
-          </div>
-
-          <div className="overflow-hidden rounded-xl border border-border">
-            <div className="bg-secondary/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">네트워크</div>
-            <div className="divide-y divide-border">
-              <ReviewRow label="희망 망" value={selectedNetworkObj ? `${selectedNetworkObj.label} (${selectedNetworkObj.sublabel})` : undefined} />
-              <ReviewRow label="네임스페이스" value={selectedProject ? "프로젝트 이름으로 함께 생성" : undefined} />
             </div>
           </div>
 
@@ -1034,11 +1035,6 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
       <Button variant="outline" onClick={() => stepIdx > 0 && setStep(CLUSTER_STEPS[stepIdx - 1].key)} disabled={stepIdx === 0}>
         <ChevronLeft className="size-3.5" /> 이전
       </Button>
-      {step === "nodes" && (
-        <p className={cn("flex-1 self-center px-3 text-[13px]", nodesMissing.length ? "text-orange-700" : "text-brand-mint-700")}>
-          {nodesMissing.length ? `선택 필요: ${nodesMissing.join(", ")}` : `노드 ${nodes.masterCount + nodes.nodeCount}대 구성 준비됨`}
-        </p>
-      )}
       {step === "review" ? (
         <Button onClick={submit} disabled={createTicket.isPending}>
           <CheckCircle2 className="size-3.5" /> {createTicket.isPending ? "제출 중…" : "클러스터 신청 제출"}

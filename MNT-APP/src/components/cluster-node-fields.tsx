@@ -9,10 +9,11 @@
  * 스펙 표·키페어 표·페이지네이션 등)을 함께 쓴다.
  */
 import * as React from "react";
-import { ChevronDown, KeyRound, Network, Search, Server, Wifi } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Cpu, KeyRound, Search, Server } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { accKindClass, cn } from "@/lib/utils";
-import type { FlavorSummary } from "@/lib/iaas-api";
+import { accelLabelResolver, useAccelModels, useDeviceProfiles, type FlavorSummary } from "@/lib/iaas-api";
 import type { ClusterTemplate } from "@/lib/paas-api";
 import type { SshKey } from "@/lib/sshkey-api";
 
@@ -26,27 +27,50 @@ export interface ClusterNodes {
 
 export const MAX_WORKERS = 20;
 
-// 예) "NPU × 1" — 종류를 모르면 "가속기"
-export function accelText(f: FlavorSummary) {
-  return (f.accelerators ?? []).map((a) => `${a.kind} × ${a.count}`).join(" + ") || "가속기";
+/** device-profile → 가속기 모델명(RNGD·ATOM·A30 … — IaaS 가속기 장치 현황과 같은 매핑). 모르면 null. */
+export function useAccelModel() {
+  const { data: profiles } = useDeviceProfiles();
+  const { data: models } = useAccelModels();
+  const label = accelLabelResolver(profiles, models);
+  return (dp: string | null | undefined) => {
+    const m = label(dp);
+    return m && m !== dp ? m : null;
+  };
 }
 
-/** 가속기 선택지 — 프로젝트 플레이버들에 달린 device-profile(Cyborg 에 있는 것). */
-export function accelOptions(flavors: FlavorSummary[]) {
-  const seen = new Map<string, string>();
-  for (const f of flavors) if (f.accelerator && !f.deviceProfileMissing && !seen.has(f.accelerator)) seen.set(f.accelerator, accelText(f));
-  return [...seen].map(([dp, label]) => ({ dp, label }));
+/** 가속기 선택지 — 프로젝트 플레이버들에 달린 device-profile(Cyborg 에 있는 것)을 종류·모델·노드당 개수로 푼 것. */
+export interface AccelChoice { dp: string; kind: string; model: string; count: string }
+export function accelChoices(flavors: FlavorSummary[], modelOf: (dp: string) => string | null): AccelChoice[] {
+  const seen = new Map<string, AccelChoice>();
+  for (const f of flavors) {
+    if (!f.accelerator || f.deviceProfileMissing || seen.has(f.accelerator)) continue;
+    const list = f.accelerators ?? [];
+    seen.set(f.accelerator, {
+      dp: f.accelerator,
+      kind: list.map((a) => a.kind).join("+") || "가속기",
+      model: modelOf(f.accelerator) ?? "모델 미상",
+      count: list.map((a) => a.count).join("+") || "?",
+    });
+  }
+  return [...seen.values()];
+}
+
+/** 같은 가속기 묶음인지 — 종류·모델·노드당 개수가 같으면 프로파일이 달라도 같다(신청 화면 — 사용자는 프로파일을 몰라도 된다). */
+export function accelGroup(choices: AccelChoice[]) {
+  const key = new Map(choices.map((c) => [c.dp, `${c.kind}|${c.model}|${c.count}`]));
+  return (a: string, b: string) => a === b || (key.has(a) && key.get(a) === key.get(b));
 }
 
 export function masterFlavorBlock(f: FlavorSummary): string | null {
   return f.accelerator ? "Control Plane 에는 가속기 스펙을 쓸 수 없습니다" : null;
 }
 
-export function workerFlavorBlock(f: FlavorSummary, accel: string): string | null {
+/** Worker 로 쓸 수 없는 이유 — same 은 가속기(device-profile) 비교(기본 = 같은 프로파일, 신청 화면 = 같은 묶음 accelGroup). */
+export function workerFlavorBlock(f: FlavorSummary, accel: string, same: (a: string, b: string) => boolean = (a, b) => a === b): string | null {
   if (f.deviceProfileMissing) return "연결된 디바이스 프로파일이 존재하지 않습니다";
   if (!accel) return f.accelerator ? "가속기가 있는 스펙" : null;
   if (!f.accelerator) return "가속기가 없는 스펙";
-  return f.accelerator === accel ? null : `선택한 가속기와 다른 스펙 (${f.accelerator})`;
+  return same(f.accelerator, accel) ? null : "선택한 가속기와 다른 스펙";
 }
 
 export function nodesValid(v: ClusterNodes) {
@@ -66,10 +90,10 @@ export function nodeTotals(flavors: FlavorSummary[], v: ClusterNodes) {
   };
 }
 
-/** Worker 가속기 합계 — 예) "NPU × 3". 가속기가 없으면 "없음". */
-export function accelTotal(worker: FlavorSummary, nodeCount: number) {
+/** Worker 가속기 합계 — 예) "NPU(RNGD) × 3". 가속기가 없으면 "없음". */
+export function accelTotal(worker: FlavorSummary, nodeCount: number, model?: string | null) {
   return worker.accelerators?.length
-    ? worker.accelerators.map((a) => `${a.kind} × ${a.count * nodeCount}`).join(" + ")
+    ? worker.accelerators.map((a) => `${a.kind}${model ? `(${model})` : ""} × ${a.count * nodeCount}`).join(" + ")
     : worker.accelerator ? `가속기 × ${nodeCount}` : "없음";
 }
 
@@ -84,12 +108,13 @@ export function keyType(publicKey: string) {
 
 // ── 공용 조각 ─────────────────────────────────────────────────────
 
-export const PER_PAGE = 5;
+export const PER_PAGE = 4; // 표 본문 높이 h-[184px] = 4줄 × 46px
 
-/** 한 쪽 rows — 페이지가 줄어 범위를 넘으면 마지막 페이지. */
-export function paginate<T>(all: T[], page: number) {
+/** 한 쪽 rows — 페이지가 줄어 범위를 넘으면 마지막 페이지. page 가 null(쪽을 아직 넘기지 않음)이면 골라진 행이 있는 쪽. */
+export function paginate<T>(all: T[], page: number | null, isSelected?: (row: T) => boolean) {
   const pages = Math.max(1, Math.ceil(all.length / PER_PAGE));
-  const now = Math.min(page, pages - 1);
+  const at = page ?? Math.max(0, Math.floor(all.findIndex((r) => !!isSelected?.(r)) / PER_PAGE));
+  const now = Math.min(at, pages - 1);
   return { rows: all.slice(now * PER_PAGE, now * PER_PAGE + PER_PAGE), page: now, pages };
 }
 
@@ -116,14 +141,46 @@ export function Radio({ on, off }: { on: boolean; off?: boolean }) {
   );
 }
 
-function AccelTags({ f }: { f: FlavorSummary }) {
+/** 가속기 배지 — [아이콘] NPU(모델명) × N, 종류를 모르면 '가속기'. 신청 목록·신청·승인 화면 공용. */
+export function AccelBadge({ kind, model, count, title }: { kind?: string; model?: string | null; count?: number; title?: string }) {
+  return (
+    <Badge variant="ghost" title={title} className={cn("h-5 w-fit shrink-0 gap-1 px-1.5 font-mono text-[10px]", accKindClass(kind))}>
+      <Cpu className="size-3" />{kind ? `${kind}${model ? `(${model})` : ""} × ${count}` : "가속기"}
+    </Badge>
+  );
+}
+
+/** 플레이버의 가속기 배지 — n 은 노드 수(총 자원). */
+export function AccelTags({ f, model, n = 1 }: { f: FlavorSummary; model: string | null; n?: number }) {
   if (!f.accelerator) return null;
   const list = f.accelerators?.length ? f.accelerators : [{ kind: "", count: 0 }];
-  return list.map((a) => (
-    <span key={a.kind || "acc"} className={cn("rounded px-1.5 py-px font-mono text-[11px] whitespace-nowrap", accKindClass(a.kind))}>
-      {a.kind ? `${a.kind} × ${a.count}` : "가속기"}
+  return list.map((a) => <AccelBadge key={a.kind || "acc"} kind={a.kind} model={model} count={a.count * n} title={f.accelerator ?? undefined} />);
+}
+
+/** 노드 카드 스펙 줄 아래 가속기 배지 — 가속기 스펙일 때만. */
+export function WorkerAccel({ f, model }: { f: FlavorSummary; model: string | null }) {
+  return f.accelerator ? <span className="mt-1 flex flex-wrap gap-1"><AccelTags f={f} model={model} /></span> : null;
+}
+
+/** 총 자원의 가속기 — 노드 수만큼 곱한 배지, 없으면 '없음'. */
+export function TotalAccel({ f, model, n }: { f: FlavorSummary; model: string | null; n: number }) {
+  return f.accelerator ? <span className="flex flex-wrap justify-end gap-1"><AccelTags f={f} model={model} n={n} /></span> : "없음";
+}
+
+/** 스펙 표의 스펙명 칸 — 1행 스펙명(+기준 태그), 2행 가속기 NPU(모델명) × N, 3행 사유(쓸 수 없는 스펙). */
+function SpecNameCell({ f, model, tag, reason, dim }: {
+  f: FlavorSummary; model: string | null; tag?: React.ReactNode; reason?: string | null; dim?: boolean;
+}) {
+  return (
+    <span className="flex min-w-0 flex-col gap-0.5">
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className={cn("truncate font-mono text-[13px] font-semibold", dim && "text-muted-foreground/70")}>{f.name}</span>
+        {tag}
+      </span>
+      {f.accelerator && <span className={cn("flex flex-wrap gap-1", dim && "opacity-60")}><AccelTags f={f} model={model} /></span>}
+      {reason && <span className="text-[11px] text-orange-500">{reason}</span>}
     </span>
-  ));
+  );
 }
 
 function Bar({ label, ratio, color, dim }: { label: string; ratio: number; color: string; dim?: boolean }) {
@@ -137,21 +194,28 @@ function Bar({ label, ratio, color, dim }: { label: string; ratio: number; color
   );
 }
 
-function PageButton({ onClick, dim, children }: { onClick: () => void; dim: boolean; children: React.ReactNode }) {
+function PageButton({ onClick, dim, title, children }: { onClick: () => void; dim: boolean; title?: string; children: React.ReactNode }) {
   return (
-    <button type="button" onClick={onClick} className={cn("size-7 cursor-pointer rounded-md text-[15px] text-muted-foreground hover:bg-secondary", dim && "opacity-30")}>
+    <button type="button" onClick={dim ? undefined : onClick} title={title} aria-label={title}
+      className={cn("size-7 rounded-md text-[15px] text-muted-foreground", dim ? "cursor-default opacity-30" : "cursor-pointer hover:bg-secondary")}>
       {children}
     </button>
   );
 }
 
-/** 페이지네이션 줄 — "총 N 개 · 현재페이지 p/P"  ‹ 1 2 › */
+const PAGE_GROUP = 5; // 페이지 번호는 5개씩 묶어 보인다
+
+/** 페이지네이션 줄 — "총 N 개 · 현재페이지 p/P"  « ‹ 1 2 3 4 5 › ». 번호는 현재 페이지가 속한 5개 묶음만,
+ *  5쪽이 넘으면 « » 로 앞·뒤 묶음의 첫 쪽으로 간다. */
 export function Pager({ total, page, pages, onPage }: { total: number; page: number; pages: number; onPage: (p: number) => void }) {
+  const start = Math.floor(page / PAGE_GROUP) * PAGE_GROUP;
+  const end = Math.min(pages, start + PAGE_GROUP);
   return (
     <div className="flex items-center gap-1 border-b border-border/60 py-2 pr-3 pl-4">
       <span className="flex-1 text-xs text-muted-foreground">총 {total} 개 · 현재페이지 {page + 1}/{pages}</span>
+      {pages > PAGE_GROUP && <PageButton onClick={() => onPage(start - PAGE_GROUP)} dim={start === 0} title="이전 5페이지">«</PageButton>}
       <PageButton onClick={() => onPage(Math.max(0, page - 1))} dim={page === 0}>‹</PageButton>
-      {Array.from({ length: pages }, (_, i) => (
+      {Array.from({ length: end - start }, (_, k) => start + k).map((i) => (
         <button
           key={i}
           type="button"
@@ -163,6 +227,7 @@ export function Pager({ total, page, pages, onPage }: { total: number; page: num
         </button>
       ))}
       <PageButton onClick={() => onPage(Math.min(pages - 1, page + 1))} dim={page === pages - 1}>›</PageButton>
+      {pages > PAGE_GROUP && <PageButton onClick={() => onPage(end)} dim={end === pages} title="다음 5페이지">»</PageButton>}
     </div>
   );
 }
@@ -216,23 +281,29 @@ export function PickerHeader({ title, hint, children }: { title: React.ReactNode
   );
 }
 
-/** 왼쪽 노드 카드 — 누르면 오른쪽 피커 대상이 바뀐다. 범위 문구는 머리(신청 화면) 또는 수량 줄 끝(관리자 화면). */
-export function NodeCard({ icon, title, required, tag, range, rangeAt = "head", value, line, lineWarn, was, count, selected, onSelect, className }: {
+/** 왼쪽 노드 카드 — 누르면 오른쪽 피커 대상이 바뀐다. 범위 문구는 머리(신청 화면) 또는 수량 줄 끝(관리자 화면).
+ *  status(신청 화면): done = 초록 체크, missing = 빨간 카드 + 느낌표(값 자리에 placeholder). optional = '옵션' 태그. */
+export function NodeCard({ icon, title, required, optional, tag, range, rangeAt = "head", value, valueMuted, placeholder = "선택 필요",
+  line, was, count, status, selected, onSelect, className }: {
   icon: React.ReactNode;
   title: string;
   required?: boolean;
+  optional?: boolean;
   tag?: React.ReactNode;
   range?: string;
   rangeAt?: "head" | "count";
   value?: string | null;
-  line?: string;
-  lineWarn?: boolean;
+  valueMuted?: boolean;                      // 값이 '사용 안 함' 같은 안내 — 흐린 보통 글자
+  placeholder?: string;                      // 값이 없을 때(빨간 글자)
+  line?: React.ReactNode;
   was?: string;                              // 바꾸기 전 값(취소선)
   count?: [number, () => void, () => void];  // [수, −, +]
+  status?: "done" | "missing";
   selected: boolean;
   onSelect: () => void;
   className?: string;
 }) {
+  const missing = status === "missing";
   return (
     <div
       role="button"
@@ -240,22 +311,32 @@ export function NodeCard({ icon, title, required, tag, range, rangeAt = "head", 
       onClick={onSelect}
       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onSelect()}
       className={cn(
-        "flex flex-none cursor-pointer flex-col gap-2.5 rounded-[10px] border-[1.5px] bg-card p-3.5 transition-[border-color,box-shadow] duration-150",
-        selected ? "border-primary shadow-[0_4px_12px_rgba(31,58,122,.12)]" : "border-border",
+        "flex flex-none cursor-pointer flex-col gap-2.5 rounded-[10px] border-[1.5px] p-3.5 transition-[border-color,background-color] duration-150",
+        // 테두리 색은 important — globals.css 의 레이어 밖 `* { border-color }` 가 Tailwind 유틸리티(@layer)를 이긴다
+        selected ? "border-primary!" : missing ? "border-[#f1aca5]!" : "border-border hover:border-primary/40!",
+        missing ? "bg-[#fff5f4]" : selected ? "bg-brand-indigo-50/50" : "bg-card",
         className,
       )}
     >
       <div className="flex items-center gap-1.5">
         {icon}
-        <span className="flex-1 whitespace-nowrap text-sm font-semibold">
-          {title}{required && <span className="ml-0.5 text-[#d92d20]">*</span>}
+        <span className={cn("flex flex-1 items-center gap-1.5 whitespace-nowrap text-sm font-semibold", missing && "text-[#b42318]")}>
+          <span>{title}{required && <span className="ml-0.5 text-[#d92d20]">*</span>}</span>
+          {optional && <span className="rounded bg-[#eceff3] px-[5px] py-px text-[10px] font-semibold text-[#5b6470]">옵션</span>}
         </span>
         {tag}
         {range && rangeAt === "head" && <span className="whitespace-nowrap text-[11px] text-muted-foreground">{range}</span>}
+        {status === "done" && <CheckCircle2 className="size-[18px] flex-none fill-brand-mint-500 text-white" />}
+        {missing && <AlertCircle className="size-[18px] flex-none fill-[#d92d20] text-white" />}
+        {selected && <ChevronRight className="-mr-1 size-4 flex-none text-primary" />}
       </div>
       <div className="flex flex-col gap-0.5">
-        <span title={value ?? undefined} className={cn("truncate font-mono text-[13px] font-semibold", !value && "text-orange-700")}>{value || "선택 필요"}</span>
-        {line && <span className={cn("text-xs", lineWarn ? "text-orange-700" : "text-muted-foreground")}>{line}</span>}
+        {value ? (
+          <span title={value} className={cn("truncate text-[13px]", valueMuted ? "text-muted-foreground" : "font-mono font-semibold")}>{value}</span>
+        ) : (
+          <span className="text-[13px] font-semibold text-[#d92d20]">{placeholder}</span>
+        )}
+        {line && <span className={cn("text-xs", missing ? "text-[#d92d20]" : "text-muted-foreground")}>{line}</span>}
         {was && <span title={was} className="truncate font-mono text-[11px] text-[#9aa3ad] line-through">신청 {was}</span>}
       </div>
       {count && (
@@ -273,11 +354,26 @@ export function NodeCard({ icon, title, required, tag, range, rangeAt = "head", 
   );
 }
 
+/** 노드 구성 머리 — 제목 + '필수 n/m 완료' + 필수 항목별 진행 막대(고르면 초록). 신청 화면·관리자 화면 공용. */
+export function RequiredProgress({ title, items }: { title: string; items: boolean[] }) {
+  return (
+    <>
+      <div className="flex items-baseline justify-between px-1">
+        <span className="text-[17px] font-bold">{title}</span>
+        <span className="text-xs text-muted-foreground">필수 <b className="text-foreground">{items.filter(Boolean).length}/{items.length}</b> 완료</span>
+      </div>
+      <div className="mb-1 grid gap-1.5 px-1" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
+        {items.map((ok, i) => <span key={i} className={cn("h-1 rounded-full", ok ? "bg-brand-mint-500" : "bg-border")} />)}
+      </div>
+    </>
+  );
+}
+
 export const serverIcon = <Server className="size-4 text-rose-600" />;
 export const keyIcon = <KeyRound className="size-4 text-amber-600" />;
 
 /** 왼쪽 아래 총 자원 — was 가 있으면 바뀐 값(신청 값 취소선 + 주황 글자). */
-export function TotalsBlock({ rows }: { rows: { k: string; v?: string | null; was?: string }[] }) {
+export function TotalsBlock({ rows }: { rows: { k: string; v?: React.ReactNode; was?: string }[] }) {
   return (
     <div className="mt-auto flex flex-none flex-col gap-2 border-t border-border px-1 pt-3.5">
       <div className="text-xs text-muted-foreground">총 자원</div>
@@ -344,7 +440,7 @@ export function Collapse({ open, children }: { open: boolean; children: React.Re
 
 /** 그룹별 키-값 2열 표(템플릿 상세 · 신청 내용). 키·값이 길면 말줄임 + title. */
 export function MetaGrid({ groups, keyCol = "grid-cols-[120px_minmax(0,1fr)]" }: {
-  groups: { group: string; items: { k: React.ReactNode; v: string; key?: string }[] }[];
+  groups: { group: string; items: { k: React.ReactNode; v: React.ReactNode; key?: string }[] }[];
   keyCol?: string;
 }) {
   return (
@@ -355,11 +451,93 @@ export function MetaGrid({ groups, keyCol = "grid-cols-[120px_minmax(0,1fr)]" }:
           {g.items.map(({ k, v, key }) => (
             <div key={key ?? String(k)} className={cn("grid gap-2 text-[11px]", keyCol)}>
               <span title={typeof k === "string" ? k : undefined} className="truncate text-muted-foreground">{k}</span>
-              <span title={v} className="truncate font-mono">{v}</span>
+              <span title={typeof v === "string" ? v : undefined} className="truncate font-mono">{v}</span>
             </div>
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+/** 가속기 칩 — 고르면 남색 테두리·바탕, 기준 값이면 태그. */
+function AccelChip({ on, onClick, tag, title, children }: {
+  on: boolean; onClick: () => void; tag?: React.ReactNode; title?: string; children: React.ReactNode;
+}) {
+  return (
+    <button type="button" onClick={onClick} title={title}
+      className={cn("flex cursor-pointer items-center gap-1.5 rounded-lg border-[1.5px] px-3.5 py-[7px] text-[13px]",
+        on ? "border-primary! bg-brand-indigo-50 font-semibold text-primary" : "bg-card hover:bg-secondary/60")}>
+      {children}{tag}
+    </button>
+  );
+}
+
+/**
+ * Worker 가속기 고르기(펼치기·접기, 처음엔 펼침) — 가속기 종류 → 모델 → 노드당 개수(showProfile 이면 같은 셋인 프로파일이 여럿일 때
+ * 프로파일까지 — 관리자 화면). 값은 device-profile 하나: 위 단계를 바꾸면 아래는 기준 값(refAccel) → 지금 값과 같은 모델·개수 →
+ * 첫 번째 순으로 채운다. 기준 값과 같은 칩에는 refLabel 태그.
+ */
+function AccelPicker({ choices, accel, onAccel, refAccel, refLabel, showProfile }: {
+  choices: AccelChoice[]; accel: string; onAccel: (dp: string) => void; refAccel?: string; refLabel: string; showProfile: boolean;
+}) {
+  const [open, setOpen] = React.useState(true);
+  const cur = choices.find((c) => c.dp === accel);
+  const ref = choices.find((c) => c.dp === refAccel);
+  const uniq = (xs: string[]) => [...new Set(xs)].sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
+  const tag = (match: boolean) => (match ? <RefTag label={refLabel} /> : undefined);
+  function pick(match: (c: AccelChoice) => boolean) {
+    const cands = choices.filter(match);
+    const c = cands.find((x) => x.dp === refAccel) ?? cands.find((x) => cur && x.model === cur.model && x.count === cur.count)
+      ?? cands.find((x) => cur && x.count === cur.count) ?? cands[0];
+    if (c) onAccel(c.dp);
+  }
+  const sameKind = (c: AccelChoice) => !!cur && c.kind === cur.kind;
+  const sameModel = (c: AccelChoice) => sameKind(c) && c.model === cur!.model;
+  const sameCount = (c: AccelChoice) => sameModel(c) && c.count === cur!.count;
+  const profiles = showProfile ? choices.filter(sameCount) : [];
+  const row = (label: string, chips: React.ReactNode) => (
+    <>
+      <span className="text-[13px] text-muted-foreground">{label}</span>
+      <div className="flex flex-wrap gap-2">{chips}</div>
+    </>
+  );
+  const summary = cur ? `${cur.kind}(${cur.model}) × ${cur.count}` : accel === "" ? "없음" : "—";
+  return (
+    <div className="rounded-[10px] border border-border bg-secondary/30">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full cursor-pointer items-center gap-2 px-4 py-2.5 text-left">
+        <span className="text-sm font-semibold">가속기</span>
+        <span className="flex-1 truncate font-mono text-xs text-muted-foreground">{summary}</span>
+        <span className="text-xs text-primary">{open ? "접기" : "펼치기"}</span>
+        <ChevronDown className={cn("size-3 text-primary transition-transform duration-300", open && "rotate-180")} />
+      </button>
+      <div className={cn("grid transition-[grid-template-rows,opacity] duration-[350ms] ease-[cubic-bezier(.3,.7,.3,1)]",
+        open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
+        <div className="min-h-0 overflow-hidden">
+          <div className="grid grid-cols-[84px_minmax(0,1fr)] items-center gap-x-3 gap-y-2.5 border-t border-border px-4 py-3">
+      {row("가속기 종류", <>
+        <AccelChip on={accel === ""} onClick={() => onAccel("")} tag={tag(refAccel === "")}>없음</AccelChip>
+        {uniq(choices.map((c) => c.kind)).map((k) => (
+          <AccelChip key={k} on={cur?.kind === k} onClick={() => pick((c) => c.kind === k)} tag={tag(ref?.kind === k)}>{k}</AccelChip>
+        ))}
+      </>)}
+      {cur && row("모델", uniq(choices.filter(sameKind).map((c) => c.model)).map((m) => (
+        <AccelChip key={m} on={cur.model === m} onClick={() => pick((c) => sameKind(c) && c.model === m)}
+          tag={tag(!!ref && sameKind(ref) && ref.model === m)}>{m}</AccelChip>
+      )))}
+      {cur && row("노드당 개수", uniq(choices.filter(sameModel).map((c) => c.count)).map((n) => (
+        <AccelChip key={n} on={cur.count === n} onClick={() => pick((c) => sameModel(c) && c.count === n)}
+          tag={tag(!!ref && sameModel(ref) && ref.count === n)}>{n}개</AccelChip>
+      )))}
+      {/* 종류·모델·개수가 같은 프로파일이 여럿일 때만(관리자 화면) — 어느 프로파일인지 고른다 */}
+      {profiles.length > 1 && row("프로파일", profiles.map((c) => (
+        <AccelChip key={c.dp} on={accel === c.dp} onClick={() => onAccel(c.dp)} tag={tag(refAccel === c.dp)}>
+          <span className="font-mono text-xs">{c.dp}</span>
+        </AccelChip>
+      )))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -378,7 +556,7 @@ const SPEC_COLS = "grid grid-cols-[22px_minmax(0,1fr)_96px_96px_96px] items-cent
  * 오른쪽 영역 그리드의 자식들로 펼쳐진다. 검색어·정렬·페이지는 안에서 갖고, 대상(역할·출처)이 바뀌면 부모가 key 로 새로 그린다.
  */
 export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelect, accel, onAccel, refLabel, refId, refAccel,
-  sortSelect, accelTitle, compactFixed }: {
+  sortSelect, compactFixed, groupAccel }: {
   flavors: FlavorSummary[];
   role: "cp" | "w";
   fixed: boolean;
@@ -391,20 +569,23 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
   refId: string;              // 기준 스펙 — 태그가 붙고, fixed 면 이 한 줄
   refAccel?: string;          // 기준 가속기(칩 태그) — 없으면 태그 없음
   sortSelect?: boolean;       // 검색 옆 정렬 선택
-  accelTitle?: boolean;       // 칩 앞 "가속기" 라벨
   compactFixed?: boolean;     // fixed 면 표 높이를 한 줄로
+  groupAccel?: boolean;       // 가속기를 종류·모델·개수 묶음으로(프로파일 줄 없음) — 신청 화면
 }) {
   const [query, setQuery] = React.useState("");
   const [sort, setSort] = React.useState<{ key: SortKey; dir: 1 | -1 }>({ key: "cpu", dir: 1 });
-  const [page, setPage] = React.useState(0);
+  const [page, setPage] = React.useState<number | null>(null);
   const [showUnavailable, setShowUnavailable] = React.useState(false);
+  const modelOf = useAccelModel();
+  const choices = accelChoices(flavors, modelOf);
+  const same = groupAccel ? accelGroup(choices) : undefined;
 
-  const blockOf = (f: FlavorSummary) => (role === "w" ? workerFlavorBlock(f, accel) : masterFlavorBlock(f));
+  const blockOf = (f: FlavorSummary) => (role === "w" ? workerFlavorBlock(f, accel, same) : masterFlavorBlock(f));
   const cmp = (a: FlavorSummary, b: FlavorSummary) => sort.dir * SORTS[sort.key](a, b);
   const q = query.trim().toLowerCase();
   const all = fixed ? flavors.filter((f) => f.id === refId)
     : flavors.filter((f) => !blockOf(f) && f.name.toLowerCase().includes(q)).sort(cmp);
-  const { rows, page: pageNow, pages } = paginate(all, page);
+  const { rows, page: pageNow, pages } = paginate(all, page, (f) => f.id === selected);
   const unavailable = fixed ? [] : flavors.filter((f) => blockOf(f)).sort(cmp);
   const max = {
     cpu: Math.max(1, ...flavors.map((f) => f.vcpus)),
@@ -436,29 +617,8 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
       )}
 
       {role === "w" && !fixed && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          {accelTitle && <span className="mr-0.5 text-xs text-muted-foreground">가속기</span>}
-          {[{ dp: "", label: "없음" }, ...accelOptions(flavors)].map((a) => {
-            const on = accel === a.dp;
-            return (
-              <button
-                key={a.dp || "none"}
-                type="button"
-                onClick={() => { onAccel(a.dp); setPage(0); }}
-                className={cn(
-                  "flex cursor-pointer items-center gap-[5px] rounded-full border px-[9px] py-[5px] text-xs",
-                  on ? "border-primary bg-primary text-primary-foreground" : "border-input bg-card",
-                )}
-              >
-                <span className="font-semibold">{a.label}</span>
-                {a.dp && <span className="font-mono text-[11px] opacity-80">{a.dp}</span>}
-                {refAccel !== undefined && refAccel === a.dp && (
-                  <span className="rounded border border-current px-1 text-[10px] opacity-85">{refLabel}</span>
-                )}
-              </button>
-            );
-          })}
-        </div>
+        <AccelPicker choices={choices} accel={accel} onAccel={(dp) => { onAccel(dp); setPage(0); }}
+          refAccel={refAccel} refLabel={refLabel} showProfile={!groupAccel} />
       )}
 
       <div className="flex flex-col overflow-hidden rounded-[10px] border border-border">
@@ -476,7 +636,7 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
             </button>
           ))}
         </div>
-        <div className={cn("border-b border-border/60", fixed && compactFixed ? "" : "h-[230px]")}>
+        <div className={cn("border-b border-border/60", fixed && compactFixed ? "" : "h-[184px]")}>
           {rows.map((f) => {
             const sel = selected === f.id;
             return (
@@ -487,11 +647,7 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
                   sel ? "bg-brand-indigo-50/60" : !fixed && "hover:bg-secondary/40")}
               >
                 <Radio on={sel} />
-                <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-                  <span className="font-mono text-[13px] font-semibold">{f.name}</span>
-                  <AccelTags f={f} />
-                  {f.id === refId && <RefTag label={refLabel} />}
-                </span>
+                <SpecNameCell f={f} model={modelOf(f.accelerator)} tag={f.id === refId && <RefTag label={refLabel} />} />
                 <Bar label={`${f.vcpus} vCPU`} ratio={f.vcpus / max.cpu} color="bg-[#7d93c9]" />
                 <Bar label={`${f.ramMb / 1024} GB RAM`} ratio={f.ramMb / max.ram} color="bg-[#5fc9a5]" />
                 <Bar label={`${f.diskGb} GB Disk`} ratio={f.diskGb / max.disk} color="bg-[#c3a0e0]" />
@@ -516,13 +672,7 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
             {showUnavailable && unavailable.map((f) => (
               <div key={f.id} className={cn(SPEC_COLS, "min-h-[46px] cursor-not-allowed border-t border-border/60 bg-secondary/30 py-1.5")}>
                 <Radio on={false} off />
-                <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-mono text-[13px] font-semibold text-muted-foreground/70">{f.name}</span>
-                    <span className="opacity-60"><AccelTags f={f} /></span>
-                  </span>
-                  <span className="text-[11px] text-orange-500">{blockOf(f)}</span>
-                </span>
+                <SpecNameCell f={f} model={modelOf(f.accelerator)} reason={blockOf(f)} dim />
                 <Bar label={`${f.vcpus} vCPU`} ratio={f.vcpus / max.cpu} color="bg-[#7d93c9]" dim />
                 <Bar label={`${f.ramMb / 1024} GB RAM`} ratio={f.ramMb / max.ram} color="bg-[#5fc9a5]" dim />
                 <Bar label={`${f.diskGb} GB Disk`} ratio={f.diskGb / max.disk} color="bg-[#c3a0e0]" dim />
@@ -552,10 +702,10 @@ export function KeypairTable({ rows: list, selected, onSelect, refId, refLabel, 
   nameCol?: string;
 }) {
   const [query, setQuery] = React.useState("");
-  const [page, setPage] = React.useState(0);
+  const [page, setPage] = React.useState<number | null>(null);
   const q = query.trim().toLowerCase();
   const all = paged ? list.filter((k) => k.name.toLowerCase().includes(q)) : list;
-  const { rows, page: pageNow, pages } = paged ? paginate(all, page) : { rows: all, page: 0, pages: 1 };
+  const { rows, page: pageNow, pages } = paged ? paginate(all, page, (k) => k.id === selected) : { rows: all, page: 0, pages: 1 };
   const cols = { gridTemplateColumns: `22px ${nameCol} minmax(0,1fr) 70px` };
   const colsClass = "grid items-center gap-[14px] px-4";
 
@@ -566,7 +716,7 @@ export function KeypairTable({ rows: list, selected, onSelect, refId, refLabel, 
         <div style={cols} className={cn(colsClass, "border-b border-border bg-secondary/50 py-[9px] text-xs text-muted-foreground")}>
           <span /><span>이름</span><span>지문(FINGERPRINT)</span><span>타입</span>
         </div>
-        <div className={cn(paged && "h-[230px] border-b border-border/60")}>
+        <div className={cn(paged && "h-[184px] border-b border-border/60")}>
           {rows.map((k) => {
             const sel = selected === k.id;
             return (
@@ -597,7 +747,7 @@ export function KeypairTable({ rows: list, selected, onSelect, refId, refLabel, 
 }
 
 // ── 신청 화면 노드 구성(시안 2c) ─────────────────────────────────
-// 왼쪽 = 노드 카드(Control Plane·Worker·키페어, 클릭하면 오른쪽 대상이 바뀜) + 총 자원, 오른쪽 = 템플릿 상세·템플릿 그대로 생성 +
+// 왼쪽 = 노드 카드(Control Plane·Worker·키페어, 클릭하면 오른쪽 대상이 바뀜) + 총 자원, 오른쪽 = 템플릿 그대로 생성·템플릿 상세 +
 // 대상의 선택 목록(스펙 표 또는 키페어 표). 본문 높이는 고정이고 오른쪽만 스크롤한다.
 
 export type NodeRole = "cp" | "w" | "key";
@@ -673,19 +823,17 @@ function templateMeta(t: ClusterTemplate) {
   ];
 }
 
-/** 희망 망 선택지 — 실제 망·서브넷은 관리자가 프로비저닝 때 고른다. */
-export interface NetworkWishOption { id: string; label: string; sublabel: string; description: string }
-
-export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onChange, wish }: {
+/** 신청 화면 노드 구성 — 망·서브넷은 묻지 않는다(관리자가 프로비저닝 때 고른다 — 사용자가 내부망/인터넷망을 고르면 헷갈릴 위험). */
+export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onChange }: {
   flavors: FlavorSummary[];
   keypairs: SshKey[];
   template: ClusterTemplate;
   value: ClusterNodeConfig;
   onChange: (v: ClusterNodeConfig) => void;
-  wish: { value: string; onChange: (id: string) => void; options: NetworkWishOption[] };
 }) {
-  const [role, setRole] = React.useState<"net" | NodeRole>("net");
+  const [role, setRole] = React.useState<NodeRole>("cp");
   const [showMeta, setShowMeta] = React.useState(false);
+  const modelOf = useAccelModel();
 
   const src = value.source;
   const allTpl = Object.values(src).every((s) => s === "tpl");
@@ -694,18 +842,25 @@ export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onC
   const tplWorker = findFlavor(flavors, template.flavor_id);
   const masterF = flavors.find((f) => f.id === nodes.masterFlavorId);
   const workerF = flavors.find((f) => f.id === nodes.flavorId);
-  const wishOpt = wish.options.find((o) => o.id === wish.value);
   const totals = nodeTotals(flavors, nodes);
   // 키페어 — 템플릿 값이거나 고르지 않으면 템플릿 키페어(없으면 노드에 SSH 키를 넣지 않음)
   const keyName = src.key === "custom" ? keypairs.find((k) => k.id === value.keypairId)?.name : undefined;
-  const keyNone = template.keypair_id ? `템플릿 키페어(${template.keypair_id})가 들어갑니다` : "노드에 SSH 키를 넣지 않습니다";
+  const keyNone = template.keypair_id ? `템플릿 키페어(${template.keypair_id})가 적용됩니다` : "노드에 SSH 키를 넣지 않습니다";
+  // 필수 항목(Control Plane·Worker 스펙) 진행 — 빠진 카드는 빨갛게, 템플릿 값을 못 쓰면 직접 선택으로 안내
+  const required = [!!nodes.masterFlavorId, !!nodes.flavorId];
+  const missingLine = (r: "cp" | "w") => src[r] === "tpl" ? "템플릿 스펙을 사용할 수 없습니다" : "필수 항목입니다. 오른쪽 목록에서 고르세요";
 
   function setSource(r: NodeRole, s: NodeSource) {
     onChange({ ...value, source: { ...src, [r]: s } });
   }
+  // 가속기는 종류·모델·개수 묶음으로 본다 — 같은 묶음이면 고른 스펙을 두고, 스펙을 고르면 그 스펙의 프로파일을 값으로
+  const sameAccel = accelGroup(accelChoices(flavors, modelOf));
   function selectAccel(dp: string) {
     const cur = flavors.find((f) => f.id === value.flavorId);
-    onChange({ ...value, accel: dp, flavorId: cur && !workerFlavorBlock(cur, dp) ? cur.id : "" });
+    onChange({ ...value, accel: dp, flavorId: cur && !workerFlavorBlock(cur, dp, sameAccel) ? cur.id : "" });
+  }
+  function selectWorker(id: string) {
+    onChange({ ...value, flavorId: id, accel: flavors.find((f) => f.id === id)?.accelerator ?? value.accel });
   }
 
   const tplRef = role === "w" ? template.flavor_id : template.master_flavor_id;
@@ -717,111 +872,82 @@ export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onC
 
   return (
     <div className="grid h-[652px] grid-cols-[270px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden rounded-xl border border-border [&_*]:leading-[1.2]">
-      {/* 왼쪽 — 네트워크 + 노드 카드 + 총 자원(승인 화면 1b 와 같은 배치). 높이 652px 은 가장 긴 경우(가속기 Worker 스펙 줄
-          두 줄 + 키페어 비움 안내, 레티나 카드 테두리 1.5px)에 맞춘 값, 그보다 길면 왼쪽만 스크롤 */}
+      {/* 왼쪽 — 노드 카드 + 총 자원(승인 화면 1b 와 같은 배치). 높이 652px 은 네트워크 카드가 있던 때 가장 긴 경우(가속기
+          Worker 스펙 줄 두 줄 + 키페어 비움 안내)에 맞춘 값 — 오른쪽 스펙 표 높이와 맞아 그대로 둔다. 그보다 길면 왼쪽만 스크롤 */}
       <div className="flex min-h-0 flex-col gap-2 overflow-y-auto border-r border-border bg-secondary/50 px-4 py-[18px] [scrollbar-width:thin]">
-        <div className="px-1 pb-1 text-[17px] font-bold">노드 구성</div>
-        <NodeCard className={card} icon={<Network className="size-4 text-primary" />} title="네트워크" required tag={<ManualTag />}
-          value={wishOpt?.label} line={wishOpt?.sublabel} selected={role === "net"} onSelect={() => setRole("net")} />
+        <RequiredProgress title="노드 구성" items={required} />
         <NodeCard className={card} icon={serverIcon} title="Control Plane" required range="1 또는 3대" rangeAt="count"
-          tag={src.cp === "tpl" && <RefTag label="템플릿" />}
-          value={masterF?.name} line={masterF && specLine(masterF)} selected={role === "cp"} onSelect={() => setRole("cp")}
+          tag={src.cp === "tpl" && <RefTag label="템플릿" />} status={masterF ? "done" : "missing"} placeholder="스펙을 고르세요"
+          value={masterF?.name} line={masterF ? specLine(masterF) : missingLine("cp")} selected={role === "cp"} onSelect={() => setRole("cp")}
           count={[value.masterCount, () => onChange({ ...value, masterCount: 1 }), () => onChange({ ...value, masterCount: 3 })]} />
         <NodeCard className={card} icon={serverIcon} title="Worker" required range={`1~${MAX_WORKERS}대`} rangeAt="count"
-          tag={src.w === "tpl" && <RefTag label="템플릿" />}
-          value={workerF?.name} line={workerF && specLine(workerF) + (workerF.accelerator ? ` / ${accelText(workerF)}` : "")}
+          tag={src.w === "tpl" && <RefTag label="템플릿" />} status={workerF ? "done" : "missing"} placeholder="스펙을 고르세요"
+          value={workerF?.name} line={workerF ? <>{specLine(workerF)}<WorkerAccel f={workerF} model={modelOf(workerF.accelerator)} /></>
+            : missingLine("w")}
           selected={role === "w"} onSelect={() => setRole("w")}
           count={[value.nodeCount, () => onChange({ ...value, nodeCount: Math.max(1, value.nodeCount - 1) }),
             () => onChange({ ...value, nodeCount: Math.min(MAX_WORKERS, value.nodeCount + 1) })]} />
-        <NodeCard className={card} icon={keyIcon} title="키페어" tag={src.key === "tpl" && <RefTag label="템플릿" />}
-          value={src.key === "tpl" ? (template.keypair_id || "키페어 없음") : keyName ?? "선택 안 함"}
+        <NodeCard className={card} icon={keyIcon} title="키페어" optional tag={src.key === "tpl" && <RefTag label="템플릿" />}
+          value={src.key === "tpl" ? (template.keypair_id || "키페어 없음") : keyName ?? "사용 안 함"}
+          valueMuted={src.key === "tpl" ? !template.keypair_id : !keyName}
           line={src.key === "tpl" ? (template.keypair_id ? undefined : "노드 SSH 미설정") : keyName ? undefined : keyNone}
           selected={role === "key"} onSelect={() => setRole("key")} />
         <TotalsBlock rows={[
           { k: "vCPU", v: totals && `${totals.vcpu}` }, { k: "RAM", v: totals && `${totals.ramGb} GB` },
-          { k: "Disk", v: totals && `${totals.diskGb} GB` }, { k: "가속기", v: totals && workerF && accelTotal(workerF, nodes.nodeCount) },
+          { k: "Disk", v: totals && `${totals.diskGb} GB` },
+          { k: "가속기", v: totals && workerF && <TotalAccel f={workerF} model={modelOf(workerF.accelerator)} n={nodes.nodeCount} /> },
         ]} />
       </div>
 
       {/* 오른쪽 — 넘치면 여기만 스크롤 */}
       <div className="grid min-h-0 min-w-0 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-[14px] overflow-y-auto px-6 py-5 [scrollbar-width:thin]">
         <div className="grid grid-cols-2 gap-3">
-          <ExpandCard title="템플릿 상세" sub={template.name} open={showMeta} onToggle={() => setShowMeta((o) => !o)} />
-          <SwitchCard title="템플릿 그대로 생성" desc="템플릿 사양 그대로 생성합니다. 네트워크는 직접 고릅니다." checked={allTpl}
+          <SwitchCard title="템플릿 그대로 생성" desc="템플릿 사양 그대로 생성합니다." checked={allTpl}
             onCheckedChange={(on) => onChange({ ...value, source: on ? { cp: "tpl", w: "tpl", key: "tpl" } : { cp: "custom", w: "custom", key: "custom" } })} />
+          <ExpandCard title="템플릿 상세" sub={template.name} open={showMeta} onToggle={() => setShowMeta((o) => !o)} />
         </div>
         <Collapse open={showMeta}><MetaGrid groups={templateMeta(template)} /></Collapse>
 
-        {role === "net" ? (
-          <>
-            <PickerHeader title="네트워크" hint="노드 VM 이 연결될 망의 용도" />
-            <p className="-mt-1.5 text-xs text-muted-foreground">
-              실제 네트워크·서브넷은 관리자가 프로비저닝 때 지정하고, 클러스터 API 에는 외부 접속용 공인 IP 가 자동으로 붙습니다.
-            </p>
-            <div className="flex flex-col overflow-hidden rounded-[10px] border border-border">
-              {wish.options.map((o) => {
-                const sel = wish.value === o.id;
-                return (
-                  <div
-                    key={o.id}
-                    onClick={() => wish.onChange(o.id)}
-                    className={cn("flex min-h-[46px] cursor-pointer items-center gap-[14px] border-b border-border/60 px-4 py-3 last:border-b-0",
-                      sel ? "bg-brand-indigo-50/60" : "hover:bg-secondary/40")}
-                  >
-                    <Radio on={sel} />
-                    <Wifi className="size-4 flex-none text-sky-600" />
-                    <span className="flex min-w-0 flex-col gap-1">
-                      <span className="text-sm font-semibold">{o.label} <span className="text-[11px] font-normal text-muted-foreground">{o.sublabel}</span></span>
-                      <span className="text-xs text-muted-foreground">{o.description}</span>
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        ) : (
-          <>
-            <PickerHeader
-              title={{ cp: "Control Plane 스펙", w: "Worker 스펙", key: "키페어" }[role]}
-              hint={src[role] === "tpl" ? "템플릿 값을 사용합니다"
-                : { cp: "가속기 없는 스펙만 쓸 수 있습니다", w: "가속기를 고르면 맞는 스펙만 보입니다", key: "노드에 주입할 SSH 키페어 · 다시 누르면 선택 해제" }[role]}
-            >
-              <Segment options={[["custom", "직접 선택"], ["tpl", "템플릿 값"]] as const} value={src[role]} onChange={(s) => setSource(role, s)} />
-            </PickerHeader>
+        <PickerHeader
+          title={{ cp: "Control Plane 스펙", w: "Worker 스펙", key: "키페어" }[role]}
+          hint={src[role] === "tpl" ? "템플릿 값을 사용합니다"
+            : { cp: "가속기 없는 스펙만 쓸 수 있습니다", w: "가속기를 고르면 맞는 스펙만 보입니다", key: "노드에 주입할 SSH 키페어 · 다시 누르면 선택 해제" }[role]}
+        >
+          <Segment options={[["custom", "직접 선택"], ["tpl", "템플릿 값"]] as const} value={src[role]} onChange={(s) => setSource(role, s)} />
+        </PickerHeader>
 
-            {role !== "key" ? (
-              <SpecPicker
-                key={`${role}-${src[role]}`}
-                flavors={flavors}
-                role={role}
-                fixed={src[role] === "tpl"}
-                fixedEmpty={tplMissing}
-                selected={role === "w" ? nodes.flavorId : nodes.masterFlavorId}
-                onSelect={(id) => onChange(role === "w" ? { ...value, flavorId: id } : { ...value, masterFlavorId: id })}
-                accel={value.accel}
-                onAccel={selectAccel}
-                refLabel="템플릿"
-                refId={role === "w" ? tv.flavorId : tv.masterFlavorId}
-                refAccel={tplWorker ? tplWorker.accelerator ?? "" : undefined}
-                sortSelect
-              />
-            ) : src.key === "tpl" ? (
-              /* 템플릿 값 — 템플릿 키페어 한 줄 */
-              <KeypairTable
-                rows={template.keypair_id ? [{ id: "tpl", name: template.keypair_id, fingerprint: "—", type: "ssh" }] : []}
-                selected="tpl" refId="tpl" refLabel="템플릿"
-                empty="템플릿에 키페어가 없습니다 — 노드에 SSH 키를 넣지 않습니다"
-              />
-            ) : (
-              /* 직접 선택 — 본인 SSH 키(관리자는 OpenStack 키페어). 고른 행을 다시 누르면 해제(템플릿 키페어) */
-              <KeypairTable
-                rows={keypairs.map((k) => ({ id: k.id, name: k.name, fingerprint: k.fingerprint, type: keyType(k.publicKey) }))}
-                selected={value.keypairId} refLabel="템플릿"
-                onSelect={(id) => onChange({ ...value, keypairId: value.keypairId === id ? "" : id })}
-                empty={<>등록된 키페어가 없습니다. <span className="font-semibold">키페어</span> 메뉴에서 생성할 수 있습니다.</>}
-              />
-            )}
-          </>
+        {role !== "key" ? (
+          <SpecPicker
+            key={`${role}-${src[role]}`}
+            flavors={flavors}
+            role={role}
+            fixed={src[role] === "tpl"}
+            fixedEmpty={tplMissing}
+            selected={role === "w" ? nodes.flavorId : nodes.masterFlavorId}
+            onSelect={(id) => (role === "w" ? selectWorker(id) : onChange({ ...value, masterFlavorId: id }))}
+            accel={value.accel}
+            onAccel={selectAccel}
+            refLabel="템플릿"
+            refId={role === "w" ? tv.flavorId : tv.masterFlavorId}
+            refAccel={tplWorker ? tplWorker.accelerator ?? "" : undefined}
+            sortSelect
+            groupAccel
+          />
+        ) : src.key === "tpl" ? (
+          /* 템플릿 값 — 템플릿 키페어 한 줄 */
+          <KeypairTable
+            rows={template.keypair_id ? [{ id: "tpl", name: template.keypair_id, fingerprint: "—", type: "ssh" }] : []}
+            selected="tpl" refId="tpl" refLabel="템플릿"
+            empty="템플릿에 키페어가 없습니다 — 노드에 SSH 키를 넣지 않습니다"
+          />
+        ) : (
+          /* 직접 선택 — 본인 SSH 키(관리자는 OpenStack 키페어). 고른 행을 다시 누르면 해제(템플릿 키페어) */
+          <KeypairTable
+            rows={keypairs.map((k) => ({ id: k.id, name: k.name, fingerprint: k.fingerprint, type: keyType(k.publicKey) }))}
+            selected={value.keypairId} refLabel="템플릿"
+            onSelect={(id) => onChange({ ...value, keypairId: value.keypairId === id ? "" : id })}
+            empty={<>등록된 키페어가 없습니다. <span className="font-semibold">키페어</span> 메뉴에서 생성할 수 있습니다.</>}
+          />
         )}
       </div>
     </div>
