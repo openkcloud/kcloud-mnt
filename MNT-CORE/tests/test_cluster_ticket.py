@@ -163,6 +163,7 @@ def started(monkeypatch):
         calls.append((workflow_id, inp))
 
     monkeypatch.setattr(settings, "temporal_api_base", "temporal.test:7233")
+    monkeypatch.setattr(settings, "cluster_skip_setup", False)  # 로컬 config.env 값과 무관하게
     monkeypatch.setattr(runtime, "start_cluster_provision", start)
     return calls
 
@@ -181,11 +182,33 @@ def test_클러스터_프로비저닝(client, fake, started):
         "ticketId": tid, "attempt": 1, "projectId": PROJECT, "projectName": "okc_test_prj", "clusterName": "test-cl",
         "templateId": "t1", "masterCount": 1, "masterFlavorId": "m1.large", "nodeCount": 2, "flavorId": "m1.rngd",
         "networkId": "net", "subnetId": "sub-on", "floatingNetworkId": "pub",
-        "keypair": None, "namespace": "okc-test-prj", "need": None}  # keypair 없음 = 템플릿 키페어
+        "keypair": None, "namespace": "okc-test-prj", "need": None, "skipSetup": False}  # keypair 없음 = 템플릿 키페어
     assert inp["need"] == {"instances": 3, "vcpu": 12, "ramGb": 24}
     assert any("subnetId=sub-on" in p for p in fake["iaas"])  # Floating IP 는 고른 서브넷 기준으로 판정
     spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
     assert (spec["networkName"], spec["subnetCidr"], spec["flavorName"]) == ("my-network", "10.0.1.0/24", "m1.large.rngd")
+
+
+def test_마감_기록은_프로비저닝_시작자와_시각_재시도면_비움(client, fake, started):
+    tid = _cluster_ticket()
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN).status_code == 200
+    activities.finish(tid, "failed", None, "시험 실패")  # 워크플로가 마감 — 처리자 = 프로비저닝을 시작한 관리자
+    row = sql("""SELECT finished_by = provisioning_by AS same, finished_at IS NOT NULL AS stamped
+                   FROM tkt_request WHERE id = :id""", id=tid).mappings().one()
+    assert row["same"] and row["stamped"]
+    item = next(x for x in client.get("/api/core/tickets", headers=ADMIN).json()["items"] if x["id"] == tid)
+    assert item["finishedBy"] == "admin" and item["finishedAt"]
+    # 재시도(새 회차)를 시작하면 비운다
+    retry = {"expectedStatus": "failed", "provisionSpec": PROVISION["provisionSpec"]}
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=retry, headers=ADMIN).status_code == 200
+    assert sql("SELECT finished_by IS NULL AND finished_at IS NULL FROM tkt_request WHERE id = :id", id=tid).scalar()
+
+
+def test_클러스터_프로비저닝_로컬은_설정_단계_건너뜀(client, fake, started, monkeypatch):
+    monkeypatch.setattr(settings, "cluster_skip_setup", True)  # CLUSTER_SKIP_SETUP=true → 워크플로 입력 skipSetup
+    tid = _cluster_ticket()
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN).status_code == 200
+    assert started[0][1]["skipSetup"] is True
 
 
 def test_클러스터_프로비저닝_노드_조정(client, fake, started):

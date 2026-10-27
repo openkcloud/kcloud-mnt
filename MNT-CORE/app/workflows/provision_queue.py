@@ -85,9 +85,11 @@ def restore(db: Session, ticket_id: str, workflow_id: str, prev: dict) -> None:
     db.execute(text("""UPDATE tkt_request
                           SET status = :st, provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
                               provisioning_at = CAST(:at AS timestamptz), workflow_id = :wf, error_message = :err,
-                              result = CAST(:res AS jsonb)
+                              result = CAST(:res AS jsonb), finished_by = :fby, finished_at = CAST(:fat AS timestamptz)
                         WHERE id = :id AND status = 'provisioning' AND workflow_id = :cur"""),
                {"id": ticket_id, "cur": workflow_id, "st": prev["status"], "by": prev["provisioningBy"],
+                # 마감 기록 — 이 값을 넣기 전에 시작한 대기 회차의 prev 에는 없다
+                "fby": prev.get("finishedBy"), "fat": prev.get("finishedAt"),
                 "at": prev["provisioningAt"], "wf": prev["workflowId"], "err": prev["errorMessage"],
                 "spec": json.dumps(prev["provisionSpec"], ensure_ascii=False) if prev["provisionSpec"] else None,
                 "res": json.dumps(prev["result"]) if prev["result"] else None})

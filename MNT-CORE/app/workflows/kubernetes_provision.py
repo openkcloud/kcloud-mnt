@@ -162,7 +162,9 @@ class KubernetesProvision(ProvisionSteps):
                 values[stages[done][0]] = stages[done][2](s)
                 done, moved = done + 1, True
             if moved:
-                await self._go(stages[done][0] if done < len(stages) else "check_api", values)
+                # 로컬(skipSetup)은 설정 단계로 넘어가지 않는다 — _skip_setup 이 건너뜀으로 마감(시작 시각을 남기지 않게)
+                if done < len(stages) or not inp.get("skipSetup"):
+                    await self._go(stages[done][0] if done < len(stages) else "check_api", values)
                 note = ""
             if s["status"] == "CREATE_COMPLETE":
                 break
@@ -173,8 +175,26 @@ class KubernetesProvision(ProvisionSteps):
                 note = warn or ""
                 await self._core("core.update_steps", inp["ticketId"], inp["attempt"],
                                  [{"sub": self.plan[self.cur]["sub"], "value": warn}])
+        # 로컬(CLUSTER_SKIP_SETUP) — 입력에 있을 때만. 입력으로 정하므로 이 값 없이 시작한 실행은 경로가 그대로다(재생 안전)
+        if inp.get("skipSetup"):
+            return await self._skip_setup(values)
         await self._go("check_api", values)
         return await self._within(SETUP_MAX, self._setup())
+
+    async def _skip_setup(self, values: dict) -> dict:
+        """로컬 — 포털(PAAS)이 새 클러스터 K8s API 에 닿지 못하므로 K8s API 연결 · 네임스페이스 · 접근 권한 단계를 건너뜀으로
+        기록하고 완료한다(네임스페이스·접근 권한은 만들지 않는다 — 결과에 namespace 없음). 앞선 상세 단계는 완료(값 기록)."""
+        inp, start, changes = self.inp, self._idx("check_api"), []
+        rest = self.plan[max(self.cur, 0):]
+        for i, p in enumerate(rest, max(self.cur, 0)):
+            changes.append({"sub": p["sub"], "status": "done", "value": values.get(p["sub"])} if i < start
+                           else {"sub": p["sub"], "status": "skipped"})
+        for step in dict.fromkeys(p["step"] for p in rest):  # 남은 큰 단계 — 상세 단계가 모두 건너뜀이면 건너뜀
+            first = next(i for i, p in enumerate(self.plan) if p["step"] == step)
+            changes.append({"step": step, "status": "skipped" if first >= start else "done"})
+        self.cur = len(self.plan)
+        await self._core("core.update_steps", inp["ticketId"], inp["attempt"], changes)
+        return {"clusterId": self.cluster_id, "clusterName": inp["clusterName"], "apiAddress": values.get("prepare_api") or ""}
 
     async def _setup(self) -> dict:
         """K8s API 연결 → 프로젝트 네임스페이스 → 접근 권한(소유 프로젝트, 전용)."""

@@ -14,9 +14,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  AccelBadge, Collapse, ExpandCard, ManualTag, MetaGrid, NetBadge, NodeCard, Pager, PickerHeader, Radio, RequiredProgress, SearchInput,
-  Segment, SharedTag, TotalsBlock, paginate, useAccelModel,
+  AccelBadge, CapacityBar, ManualTag, NetBadge, NodeCard, Pager, PickerHeader, QuotaBar, Radio, RequiredProgress,
+  SearchInput, PICK_LINE, Segment, SharedTag, TotalsBlock, ViewCard, paginate, useAccelModel,
 } from "@/components/cluster-node-fields";
+import { RequestContentDialog } from "@/components/request-review";
 import {
   DETAIL_BODY, DETAIL_CONTENT, DETAIL_W, DetailFooter, DetailHeader, PANEL, ReasonBanner, RejectInput, RequestHero,
 } from "@/components/request-detail";
@@ -51,6 +52,7 @@ type Role = "net" | "sg" | "place";
 
 /**
  * VM 프로비저닝 결정 모달 내용(DialogContent) — 공용 틀(머리 · 이름 카드 · 사유 띠 · 2단 패널 · 고정 바닥), 폭 1000px.
+ * 창은 스크롤하지 않고 패널이 남는 높이에 맞춰 줄어든다(최소 420px — 신청 마법사 가상머신 구성과 같음).
  * 반려는 사유 입력을 펼친다(사유 필수). 패널 입력 상태는 반려 입력 중에도 숨겨 둘 뿐 유지한다.
  */
 export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provisioning, onReject, onProvision }: {
@@ -74,7 +76,7 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
   // 재시도(실패한 신청)면 이전 회차의 승인 설정으로 채워 두고 고칠 수 있게 한다
   const prev = r.provisionSpec;
   const [role, setRole] = React.useState<Role>("net");
-  const [showDetail, setShowDetail] = React.useState(false);
+  const [showContent, setShowContent] = React.useState(false); // 신청 내용 창
   const [networkId, setNetworkId] = React.useState(prev?.networkId ?? "");
   const [fipOn, setFipOn] = React.useState(prev ? !!prev.floatingNetworkId : !!r.floatingIp);
   const [fipNetId, setFipNetId] = React.useState(prev?.floatingNetworkId ?? "");
@@ -116,7 +118,7 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
   const status = place.loading && missing.length === 0 ? "배치·가용량을 확인하는 중…"
     : spec ? `VM 1대 프로비저닝 준비됨${place.pin ? ` / ${place.pin.host}` : ""}` : `선택 필요: ${missing.join(", ")}`;
 
-  const netLine = !net ? "필수 항목입니다. 오른쪽 목록에서 고르세요"
+  const netLine = !net ? PICK_LINE
     : [ipManual ? (ipValid ? `고정 IP ${fixedIp}` : "IP 중복 확인이 필요합니다") : "IP 자동 할당(DHCP)",
       !isExternal && fipOn && (fipNet ? `Floating IP ${fipNet.name}` : "Floating IP 풀이 없습니다")].filter(Boolean).join(" / ");
   const disk = r.diskGb ? `${r.diskGb} GB` : r.volumeGb ? `부팅 볼륨 ${r.volumeGb} GB` : "—";
@@ -129,16 +131,18 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
   return (
     <DialogContent className={cn(DETAIL_CONTENT, DETAIL_W.process)} onOpenAutoFocus={(e) => e.preventDefault()}>
       <DetailHeader badge={badge} description={isFailed
-        ? "승인 설정을 확인·수정해 재시도하거나 반려하세요. 실패한 회차가 만든 자원은 정리되었습니다."
+        ? "가상머신 구성을 확인·수정해 재시도하거나 반려하세요. 실패한 회차가 만든 자원은 정리되었습니다."
         : "네트워크·보안그룹을 고르고 배치를 확인한 뒤 프로비저닝하거나 반려하세요."} />
 
-      <div className={DETAIL_BODY}>
+      {/* 세로 flex — 패널(660px)이 남는 높이에 맞춰 줄어든다 */}
+      <div className={cn(DETAIL_BODY, "flex flex-col")}>
         <RequestHero r={r} />
         <ReasonBanner r={r} />
-        <div className={cn(PANEL.grid, rejecting && "hidden")}>
-          {/* 왼쪽 — 승인 설정 카드 + 총 자원 */}
-          <div className={PANEL.left}>
-            <RequiredProgress title="승인 설정" items={required} />
+        <div className={cn(PANEL.grid, "min-h-[420px]", rejecting && "hidden")}>
+          {/* 왼쪽 — 가상머신 구성 카드(신청 마법사와 같은 이름) + 총 자원. 카드만 스크롤하고 총 자원은 아래 고정 */}
+          <div className={cn(PANEL.left, "overflow-hidden")}>
+            <div className={PANEL.leftScroll}>
+            <RequiredProgress title="가상머신 구성" items={required} />
             <NodeCard className={PANEL.card} icon={<Network className="size-4 text-primary" />} title="네트워크" required tag={<ManualTag />}
               status={netOk ? "done" : "missing"} placeholder="네트워크를 고르세요" value={net?.name} line={netLine}
               selected={role === "net"} onSelect={() => setRole("net")} />
@@ -151,6 +155,7 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
               valueMuted={place.loading || (!place.pin && place.ok)}
               line={place.loading ? undefined : place.problem ?? `후보 ${place.candidates}대 / 전체 ${place.total}대`}
               selected={role === "place"} onSelect={() => setRole("place")} />
+            </div>
             <TotalsBlock rows={[
               { k: "VM", v: "1대" }, { k: "vCPU", v: r.vcpu != null ? `${r.vcpu}` : undefined },
               { k: "RAM", v: r.ramGb != null ? `${r.ramGb} GB` : undefined }, { k: "Disk", v: disk }, { k: "가속기", v: accel },
@@ -167,24 +172,8 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
                   {r.floatingIp ? "공인 IP 희망" : "공인 IP 희망 안 함"}
                 </span>
               </div>
-              <ExpandCard title="신청 내용" sub={r.flavorName ?? "—"} open={showDetail} onToggle={() => setShowDetail((o) => !o)} />
+              <ViewCard title="신청 내용" sub={r.flavorName ?? "—"} onOpen={() => setShowContent(true)} />
             </div>
-            <Collapse open={showDetail}>
-              <MetaGrid keyCol="grid-cols-[80px_minmax(0,1fr)]" groups={[
-                { group: "스펙", items: [
-                  { k: "스펙", v: r.flavorName ?? "—" },
-                  { k: "vCPU / RAM", v: `${r.vcpu ?? "—"} vCPU / ${r.ramGb ?? "—"} GB RAM` },
-                  { k: "디스크", v: disk },
-                  { k: "가속기", v: accel },
-                ] },
-                { group: "템플릿 · 접속", items: [
-                  { k: "템플릿", v: r.imageName ?? "—" },
-                  { k: "cloud-init", v: r.cloudInit === false ? "없음 (키페어 미적용)" : "포함" },
-                  { k: "키페어", v: r.keypairName || "사용 안 함" },
-                  { k: "용도", v: r.purpose || "—" },
-                ] },
-              ]} />
-            </Collapse>
 
             {role === "net" && (
               <>
@@ -278,6 +267,7 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
           </>
         )}
       </DetailFooter>
+      <RequestContentDialog r={r} open={showContent} onClose={() => setShowContent(false)} />
     </DialogContent>
   );
 }
@@ -367,44 +357,6 @@ function SecurityGroupTable({ groups, loading, error, selected, onToggle }: {
 }
 
 // ── 배치·가용량 미리보기 ─────────────────────────────────────────────
-
-function CapacityBar({ label, used, add, cap, unit }: { label: React.ReactNode; used: number; add: number; cap: number; unit: string }) {
-  const after = used + add;
-  const pct = (v: number) => (cap > 0 ? Math.min(100, (v / cap) * 100) : v > 0 ? 100 : 0); // 쿼터 0 대비
-  const usedPct = pct(used);
-  const afterPct = pct(after);
-  const over = after > cap;
-  const tight = !over && afterPct > 85;
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between gap-2 text-[11px]">
-        <span className="min-w-0 text-muted-foreground">{label}</span>
-        <span className="shrink-0 font-mono">
-          {used.toLocaleString()} <span className="text-muted-foreground">→</span>{" "}
-          <span className={cn("font-medium", over ? "text-rose-600" : tight ? "text-amber-600" : "text-emerald-700")}>{after.toLocaleString()}</span>
-          {" "}/ {cap.toLocaleString()} {unit}
-        </span>
-      </div>
-      <div className="relative h-2 overflow-hidden rounded-full bg-secondary">
-        <div className="absolute inset-y-0 left-0 bg-brand-indigo-400" style={{ width: `${usedPct}%` }} />
-        <div className={cn("absolute inset-y-0", over ? "bg-rose-400" : tight ? "bg-amber-400" : "bg-emerald-400")} style={{ left: `${usedPct}%`, width: `${Math.max(0, afterPct - usedPct)}%` }} />
-      </div>
-    </div>
-  );
-}
-
-// 프로젝트 쿼터 한 줄 — 무제한(-1)이면 막대 없이 사용량만
-function QuotaBar({ label, q, add, unit }: { label: string; q: { quota: number; used: number }; add: number; unit: string }) {
-  if (q.quota < 0) {
-    return (
-      <div className="flex items-center justify-between text-[11px]">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="font-mono">{q.used.toLocaleString()} → {(q.used + add).toLocaleString()} {unit} · 무제한</span>
-      </div>
-    );
-  }
-  return <CapacityBar label={label} used={q.used} add={add} cap={q.quota} unit={unit} />;
-}
 
 // 배치 판정 요약 — 왼쪽 카드·준비 판정용. ok: 미리보기를 읽었고 프로젝트 쿼터를 넘지 않음,
 // pin: 노드 지정 권한이 있으면 고른 노드(프로비저닝 때 넘김, 권한이 없으면 null → 스케줄러가 고름), problem: 막힌 이유

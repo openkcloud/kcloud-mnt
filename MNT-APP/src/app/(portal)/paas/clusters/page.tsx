@@ -7,6 +7,7 @@
 import * as React from "react";
 import { Boxes, Download, Search, Loader2, Plus, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,7 +54,14 @@ function saveKubeconfig(id: string, name: string) {
     toast.error("kubeconfig 다운로드 실패", { description: String((e as Error).message) }));
 }
 
+// 신청 상세(완료된 클러스터)에서 ?id= 로 오면 그 클러스터 상세 창을 바로 연다 — useSearchParams 는 Suspense 안에서(정적 내보내기)
 export default function ClustersPage() {
+  return <React.Suspense fallback={<Skeleton className="h-96" />}><ClustersView /></React.Suspense>;
+}
+
+function ClustersView() {
+  const router = useRouter();
+  const openId = useSearchParams().get("id");
   const isAdmin = useAuth((s) => s.user?.role === "admin");
   const myUsername = useAuth((s) => s.user?.username);
   // 가시성 = 포털 DB 매핑(paas_project_cluster) 기준. 관리자는 전체, 사용자는 내 프로젝트에 부여된 클러스터만.
@@ -63,7 +71,7 @@ export default function ClustersPage() {
   const flavors = useFlavors();
   const [q, setQ] = React.useState("");
   const [projFilter, setProjFilter] = React.useState("all");
-  const [detailId, setDetailId] = React.useState<string | null>(null);
+  const [detailId, setDetailId] = React.useState<string | null>(openId);
 
   const del = useDeleteCluster();
   const confirm = useConfirm();
@@ -203,7 +211,7 @@ export default function ClustersPage() {
           isAdmin={isAdmin}
           deleting={del.isPending}
           onDelete={(c) => handleDelete(c, () => setDetailId(null))}
-          onClose={() => setDetailId(null)}
+          onClose={() => { setDetailId(null); if (openId) router.replace("/paas/clusters/"); }}
         />
       )}
     </div>

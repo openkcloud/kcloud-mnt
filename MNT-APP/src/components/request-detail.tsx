@@ -1,12 +1,13 @@
 "use client";
 /**
  * 자원 신청 상세의 공용 틀 — VM·클러스터·AI 워크스페이스, 사용자·관리자가 같은 모양으로 본다.
- *  머리(DetailHeader) → 이름 카드(RequestHero, 오른쪽에 처리 결과) → 사유 띠(ReasonBanner) → 섹션 카드(Section·InfoRow)
+ *  머리(DetailHeader) → 이름 카드(RequestHero, 오른쪽에 진행 결과) → 사유 띠(ReasonBanner) → 섹션 카드(Section·InfoRow)
  *  → 고정 바닥(DetailFooter). 본문만 스크롤하고 바닥은 늘 보인다.
  * 폭: 읽기·승인 760px, 2단 처리 화면(클러스터 프로비저닝 1b) 1000px.
  */
 import * as React from "react";
-import { BrainCircuit, Boxes, Building2, FolderKanban, Server, XCircle } from "lucide-react";
+import { BrainCircuit, Boxes, Building2, Copy, FolderKanban, Server, XCircle } from "lucide-react";
+import { toast } from "sonner";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { ResourceRequest } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -25,30 +26,51 @@ export const PANEL = {
   left: "flex min-h-0 flex-col gap-2 overflow-y-auto border-r border-border bg-secondary/50 px-4 py-[18px] [scrollbar-width:thin]",
   right: "grid min-h-0 min-w-0 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-[14px] overflow-y-auto px-6 py-5 [scrollbar-width:thin]",
   card: "gap-2 px-3.5 py-3", // 왼쪽 카드 여백
+  // 신청 마법사 — 왼쪽은 카드만 스크롤하고 총 자원은 아래 고정. left 를 overflow-hidden 으로 덮고 그 안에 카드를 이것으로 감싼다.
+  // 오른쪽 여백 8px + 스크롤바 자리(늘 비워 둠) 8px = 16px — 스크롤바가 생겨도 카드 폭이 줄지 않는다
+  leftScroll: "-mx-4 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-2 pl-4 [scrollbar-gutter:stable] [scrollbar-width:thin]",
 } as const;
 
-export function DetailHeader({ badge, description }: { badge: React.ReactNode; description: React.ReactNode }) {
+/** 머리 — 제목(신청 상세 + 상태 배지) + 설명. 설명이 없으면 DialogContent 에 aria-describedby={undefined} 를 준다. */
+export function DetailHeader({ badge, description }: { badge: React.ReactNode; description?: React.ReactNode }) {
   return (
     <div className="flex-none px-7 pt-6 pr-12">
       <DialogTitle className="flex items-center gap-2 text-xl font-bold">신청 상세 {badge}</DialogTitle>
-      <DialogDescription className="mt-1.5 text-sm">{description}</DialogDescription>
+      {description && <DialogDescription className="mt-1.5 text-sm">{description}</DialogDescription>}
     </div>
   );
 }
 
-// 처리 기록 — 단계별 누가·언제(반려·실패 사유는 ReasonBanner)
+// 진행 기록 — 단계별 누가·언제(반려·실패 사유는 ReasonBanner). 마감(완료 · 실패)은 그 회차를 시작한 관리자 · 끝난 시각 —
+// 완료가 아니면 실패(실패 뒤 반려한 신청 포함). AI 워크스페이스는 화면 통일 대상이 아니라 넣지 않는다
 function processLines(r: ResourceRequest) {
+  const finished = r.type !== "ai-workspace" && r.finishedAt;
   return [
     ["승인", r.approvedByName, r.approvedAt],
     ["프로비저닝", r.provisioningByName, r.provisioningAt],
+    [r.status === "completed" ? "완료" : "실패", finished && r.finishedByName, r.finishedAt],
     ["반려 (승인 단계)", r.approvedRejectByName, r.approvedRejectAt],
     ["반려 (프로비저닝 단계)", r.provisioningRejectByName, r.provisioningRejectAt],
   ].filter(([, by]) => by) as [string, string, string | undefined][];
 }
 
-/** 이름 카드 — 자원 이름 · 신청 제목 · 조직(프로젝트) · 프로젝트 · 신청자(신청자 조직) · 신청 일시, 오른쪽에 처리 결과.
- *  onOpen 이 있으면 이름을 눌러 만든 자원으로 간다(완료된 VM). */
-export function RequestHero({ r, onOpen }: { r: ResourceRequest; onOpen?: () => void }) {
+/** 신청 ID — 누르면 복사(신청 목록의 신청 ID 칸과 같음). */
+function CopyId({ id }: { id: string }) {
+  return (
+    <button
+      type="button"
+      title="클릭해서 신청 ID 복사"
+      onClick={() => { navigator.clipboard.writeText(id); toast.success("신청 ID 복사됨", { description: id }); }}
+      className="inline-flex flex-none cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:bg-border hover:text-primary"
+    >
+      {id}<Copy className="size-3" />
+    </button>
+  );
+}
+
+/** 이름 카드 — 자원 이름(+ 신청 ID 복사) · 신청 제목 · 조직(프로젝트) · 프로젝트 · 신청자(신청자 조직) · 신청 일시, 오른쪽에 진행 결과.
+ *  onOpen 이 있으면 이름을 눌러 만든 자원으로 간다(완료된 VM · 클러스터). hideTitle — 신청 제목을 '신청 정보' 카드에서 보는 상세. */
+export function RequestHero({ r, onOpen, hideTitle }: { r: ResourceRequest; onOpen?: () => void; hideTitle?: boolean }) {
   const isVm = r.type === "vm";
   const isWs = r.type === "ai-workspace";
   const lines = processLines(r);
@@ -58,14 +80,18 @@ export function RequestHero({ r, onOpen }: { r: ResourceRequest; onOpen?: () => 
         {isVm ? <Server className="size-5" /> : isWs ? <BrainCircuit className="size-5" /> : <Boxes className="size-5" />}
       </div>
       <div className="min-w-0 flex-1">
-        <div
-          onClick={onOpen}
-          title={onOpen ? "만든 자원 열기" : undefined}
-          className={cn("truncate text-[17px] font-bold", onOpen && "cursor-pointer underline-offset-2 hover:underline")}
-        >
-          {isVm ? (r.vmName || "가상머신") : isWs ? (r.workspaceName || "AI 워크스페이스") : (r.clusterName || "서비스 클러스터")}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <div
+            onClick={onOpen}
+            title={onOpen ? "만든 자원 열기" : undefined}
+            className={cn("truncate text-[17px] font-bold", onOpen && "cursor-pointer underline-offset-2 hover:underline")}
+          >
+            {isVm ? (r.vmName || "가상머신") : isWs ? (r.workspaceName || "AI 워크스페이스") : (r.clusterName || "서비스 클러스터")}
+          </div>
+          {/* AI 워크스페이스는 화면 통일 대상이 아니라 그대로 */}
+          {!isWs && <CopyId id={r.id} />}
         </div>
-        {r.title && <div className="mt-0.5 break-words text-sm">{r.title}</div>}
+        {r.title && !hideTitle && <div className="mt-0.5 break-words text-sm">{r.title}</div>}
         <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
           {r.orgName && <><Building2 className="size-3" /><span>{r.orgName}</span><span className="text-muted-foreground/40">·</span></>}
           <FolderKanban className="size-3" />
@@ -78,7 +104,7 @@ export function RequestHero({ r, onOpen }: { r: ResourceRequest; onOpen?: () => 
       </div>
       {lines.length > 0 && (
         <div className="flex-none self-stretch border-l border-border pl-4">
-          <div className="text-right text-[11px] text-muted-foreground">처리 결과</div>
+          <div className="text-right text-[11px] text-muted-foreground">진행 결과</div>
           <div className="mt-1 grid grid-cols-[auto_auto] items-baseline gap-x-3 gap-y-1">
             {lines.map(([label, by, at]) => (
               <React.Fragment key={label}>
