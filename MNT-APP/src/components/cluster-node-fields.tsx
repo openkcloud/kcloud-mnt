@@ -9,9 +9,10 @@
  * 스펙 표·키페어 표·페이지네이션 등)을 함께 쓴다.
  */
 import * as React from "react";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Cpu, KeyRound, Search, Server } from "lucide-react";
+import { AlertCircle, ArrowDown, CheckCircle2, ChevronDown, ChevronRight, Cpu, Globe, KeyRound, Search, Server, Wifi } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { PANEL } from "@/components/request-detail";
 import { accKindClass, cn } from "@/lib/utils";
 import { accelLabelResolver, useAccelModels, useDeviceProfiles, type FlavorSummary } from "@/lib/iaas-api";
 import type { ClusterTemplate } from "@/lib/paas-api";
@@ -118,6 +119,9 @@ export function paginate<T>(all: T[], page: number | null, isSelected?: (row: T)
   return { rows: all.slice(now * PER_PAGE, now * PER_PAGE + PER_PAGE), page: now, pages };
 }
 
+/** 아직 고르지 않은 필수 카드의 안내 줄 — 신청 마법사(가상머신 구성 · 노드 구성)와 관리자 화면(VM 승인 · 클러스터 프로비저닝) 공용. */
+export const PICK_LINE = "클릭 후 오른쪽 목록에서 선택하세요";
+
 /** 기준 값 태그 — "템플릿"(신청 화면) · "신청"(관리자 화면). */
 export function RefTag({ label }: { label: string }) {
   return <span className="whitespace-nowrap rounded bg-brand-indigo-100/70 px-[5px] py-px text-[10px] font-semibold text-primary">{label}</span>;
@@ -148,6 +152,22 @@ export function AccelBadge({ kind, model, count, title }: { kind?: string; model
       <Cpu className="size-3" />{kind ? `${kind}${model ? `(${model})` : ""} × ${count}` : "가속기"}
     </Badge>
   );
+}
+
+/** 망 유형 배지 — 인터넷망(외부 게이트웨이로 밖과 통신, 외부망 포함) · 내부망. 신청 목록·신청·승인 화면 공용. */
+export function NetBadge({ type }: { type: "internet" | "internal" }) {
+  const internet = type === "internet";
+  return (
+    <span className={cn("inline-flex w-fit flex-none items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+      internet ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
+      {internet ? <Globe className="size-3" /> : <Wifi className="size-3" />}{internet ? "인터넷망" : "내부망"}
+    </span>
+  );
+}
+
+/** 공유된 망 태그 — 망 이름 옆. */
+export function SharedTag() {
+  return <span className="flex-none rounded bg-violet-100 px-[5px] py-px text-[10px] font-semibold text-violet-800">공유</span>;
 }
 
 /** 플레이버의 가속기 배지 — n 은 노드 수(총 자원). */
@@ -192,6 +212,46 @@ function Bar({ label, ratio, color, dim }: { label: string; ratio: number; color
       </span>
     </span>
   );
+}
+
+/** 용량 막대(배치 노드 · 프로젝트 쿼터 — 자원 신청 화면 공용 형식) — 위 줄 '라벨 … 사용 → 신청 후 / 한도 단위', 아래 막대
+ *  사용(남색) + 신청(초록 — 85% 넘으면 주황, 한도를 넘으면 빨강). */
+export function CapacityBar({ label, used, add, cap, unit }: { label: React.ReactNode; used: number; add: number; cap: number; unit: string }) {
+  const after = used + add;
+  const pct = (v: number) => (cap > 0 ? Math.min(100, (v / cap) * 100) : v > 0 ? 100 : 0); // 쿼터 0 대비
+  const usedPct = pct(used);
+  const afterPct = pct(after);
+  const over = after > cap;
+  const tight = !over && afterPct > 85;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <span className="min-w-0 text-muted-foreground">{label}</span>
+        <span className="shrink-0 font-mono">
+          {used.toLocaleString()} <span className="text-muted-foreground">→</span>{" "}
+          <span className={cn("font-medium", over ? "text-rose-600" : tight ? "text-amber-600" : "text-emerald-700")}>{after.toLocaleString()}</span>
+          {" "}/ {cap.toLocaleString()} {unit}
+        </span>
+      </div>
+      <div className="relative h-2 overflow-hidden rounded-full bg-secondary">
+        <div className="absolute inset-y-0 left-0 bg-brand-indigo-400" style={{ width: `${usedPct}%` }} />
+        <div className={cn("absolute inset-y-0", over ? "bg-rose-400" : tight ? "bg-amber-400" : "bg-emerald-400")} style={{ left: `${usedPct}%`, width: `${Math.max(0, afterPct - usedPct)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+/** 프로젝트 쿼터 한 줄 — 무제한(-1)이면 막대 없이 사용량만. */
+export function QuotaBar({ label, q, add, unit }: { label: string; q: { quota: number; used: number }; add: number; unit: string }) {
+  if (q.quota < 0) {
+    return (
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono">{q.used.toLocaleString()} → {(q.used + add).toLocaleString()} {unit} · 무제한</span>
+      </div>
+    );
+  }
+  return <CapacityBar label={label} used={q.used} add={add} cap={q.quota} unit={unit} />;
 }
 
 function PageButton({ onClick, dim, title, children }: { onClick: () => void; dim: boolean; title?: string; children: React.ReactNode }) {
@@ -388,6 +448,42 @@ export function TotalsBlock({ rows }: { rows: { k: string; v?: React.ReactNode; 
   );
 }
 
+/** 왼쪽 카드 칸(root)에서 target 카드가 아래로 가려졌는지 — 90% 미만 보이면 hidden. 칸의 스크롤·크기가 바뀔 때마다 다시 본다.
+ *  setRoot·setTarget 은 ref 에 넘기는 콜백(단계가 바뀌어 카드가 나중에 그려져도 붙는다). reveal = target 이 칸 아래 끝에 보이게 스크롤. */
+export function useHiddenBelow() {
+  const [root, setRoot] = React.useState<HTMLElement | null>(null);
+  const [target, setTarget] = React.useState<HTMLElement | null>(null);
+  const [hidden, setHidden] = React.useState(false);
+  React.useEffect(() => {
+    if (!root || !target) return;
+    const io = new IntersectionObserver(
+      ([e]) => setHidden(e.intersectionRatio < 0.9 && !!e.rootBounds && e.boundingClientRect.bottom > e.rootBounds.bottom),
+      { root, threshold: [0, 0.9] },
+    );
+    io.observe(target);
+    return () => io.disconnect();
+  }, [root, target]);
+  const reveal = () => {
+    if (root && target) root.scrollTo({ top: root.scrollTop + target.getBoundingClientRect().bottom - root.getBoundingClientRect().bottom, behavior: "smooth" });
+  };
+  return { hidden: hidden && !!root && !!target, setRoot, setTarget, reveal };
+}
+
+/** 가려진 카드 알림 줄 — 카드 칸 아래(총 자원 위)에 '↓ 키페어 (옵션) / 값'. 누르면 그 카드로 스크롤하고 고른다. */
+export function HiddenCardHint({ label, value, onClick }: { label: string; value: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex flex-none cursor-pointer items-center gap-1.5 rounded-lg border border-brand-indigo-200! bg-brand-indigo-50/60 px-3 py-2 text-left text-xs text-primary transition-colors hover:bg-brand-indigo-50"
+    >
+      <ArrowDown className="size-3.5 flex-none" />
+      <span className="flex-none font-semibold">{label}</span>
+      <span className="min-w-0 truncate">/ {value}</span>
+    </button>
+  );
+}
+
 /** 펼치기 카드(템플릿 상세 · 신청 내용) — 1행 제목 + 펼치기/접기, 2행 템플릿명. */
 export function ExpandCard({ title, sub, open, onToggle }: { title: string; sub: string; open: boolean; onToggle: () => void }) {
   return (
@@ -400,6 +496,24 @@ export function ExpandCard({ title, sub, open, onToggle }: { title: string; sub:
         <span className="flex-1 text-sm font-semibold">{title}</span>
         <span className="text-xs text-primary">{open ? "접기" : "펼치기"}</span>
         <ChevronDown className={cn("size-3 text-primary transition-transform duration-300", open && "rotate-180")} />
+      </span>
+      <span className="font-mono text-xs break-all text-muted-foreground">{sub}</span>
+    </button>
+  );
+}
+
+/** 열기 카드(관리자 처리 화면의 신청 내용) — 1행 제목 + 보기, 2행 스펙·템플릿 이름. 누르면 창을 연다. */
+export function ViewCard({ title, sub, onOpen }: { title: string; sub: string; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex min-w-0 cursor-pointer flex-col justify-center gap-1 rounded-[10px] border border-border px-4 py-3.5 text-left hover:bg-secondary/50"
+    >
+      <span className="flex items-center gap-2">
+        <span className="flex-1 text-sm font-semibold">{title}</span>
+        <span className="text-xs text-primary">보기</span>
+        <ChevronRight className="size-3 text-primary" />
       </span>
       <span className="font-mono text-xs break-all text-muted-foreground">{sub}</span>
     </button>
@@ -556,7 +670,7 @@ const SPEC_COLS = "grid grid-cols-[22px_minmax(0,1fr)_96px_96px_96px] items-cent
  * 오른쪽 영역 그리드의 자식들로 펼쳐진다. 검색어·정렬·페이지는 안에서 갖고, 대상(역할·출처)이 바뀌면 부모가 key 로 새로 그린다.
  */
 export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelect, accel, onAccel, refLabel, refId, refAccel,
-  sortSelect, compactFixed, groupAccel }: {
+  sortSelect, compactFixed, groupAccel, zeroDisk = "0 GB Disk", extraBlock }: {
   flavors: FlavorSummary[];
   role: "cp" | "w";
   fixed: boolean;
@@ -571,6 +685,8 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
   sortSelect?: boolean;       // 검색 옆 정렬 선택
   compactFixed?: boolean;     // fixed 면 표 높이를 한 줄로
   groupAccel?: boolean;       // 가속기를 종류·모델·개수 묶음으로(프로파일 줄 없음) — 신청 화면
+  zeroDisk?: string;          // 디스크 없는 스펙의 Disk 칸(VM 은 다음 단계에서 부팅 볼륨을 정함)
+  extraBlock?: (f: FlavorSummary) => string | null; // 화면별로 더 막을 이유(VM — 고른 템플릿의 최소 디스크보다 작은 스펙)
 }) {
   const [query, setQuery] = React.useState("");
   const [sort, setSort] = React.useState<{ key: SortKey; dir: 1 | -1 }>({ key: "cpu", dir: 1 });
@@ -580,7 +696,7 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
   const choices = accelChoices(flavors, modelOf);
   const same = groupAccel ? accelGroup(choices) : undefined;
 
-  const blockOf = (f: FlavorSummary) => (role === "w" ? workerFlavorBlock(f, accel, same) : masterFlavorBlock(f));
+  const blockOf = (f: FlavorSummary) => extraBlock?.(f) ?? (role === "w" ? workerFlavorBlock(f, accel, same) : masterFlavorBlock(f));
   const cmp = (a: FlavorSummary, b: FlavorSummary) => sort.dir * SORTS[sort.key](a, b);
   const q = query.trim().toLowerCase();
   const all = fixed ? flavors.filter((f) => f.id === refId)
@@ -650,7 +766,7 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
                 <SpecNameCell f={f} model={modelOf(f.accelerator)} tag={f.id === refId && <RefTag label={refLabel} />} />
                 <Bar label={`${f.vcpus} vCPU`} ratio={f.vcpus / max.cpu} color="bg-[#7d93c9]" />
                 <Bar label={`${f.ramMb / 1024} GB RAM`} ratio={f.ramMb / max.ram} color="bg-[#5fc9a5]" />
-                <Bar label={`${f.diskGb} GB Disk`} ratio={f.diskGb / max.disk} color="bg-[#c3a0e0]" />
+                <Bar label={f.diskGb ? `${f.diskGb} GB Disk` : zeroDisk} ratio={f.diskGb / max.disk} color="bg-[#c3a0e0]" />
               </div>
             );
           })}
@@ -675,7 +791,7 @@ export function SpecPicker({ flavors, role, fixed, fixedEmpty, selected, onSelec
                 <SpecNameCell f={f} model={modelOf(f.accelerator)} reason={blockOf(f)} dim />
                 <Bar label={`${f.vcpus} vCPU`} ratio={f.vcpus / max.cpu} color="bg-[#7d93c9]" dim />
                 <Bar label={`${f.ramMb / 1024} GB RAM`} ratio={f.ramMb / max.ram} color="bg-[#5fc9a5]" dim />
-                <Bar label={`${f.diskGb} GB Disk`} ratio={f.diskGb / max.disk} color="bg-[#c3a0e0]" dim />
+                <Bar label={f.diskGb ? `${f.diskGb} GB Disk` : zeroDisk} ratio={f.diskGb / max.disk} color="bg-[#c3a0e0]" dim />
               </div>
             ))}
           </>
@@ -772,7 +888,7 @@ export const EMPTY_NODE_CONFIG: ClusterNodeConfig = {
 type TemplateNodeRefs = Pick<ClusterTemplate, "master_flavor_id" | "flavor_id">;
 
 // 템플릿 플레이버 값은 이름 또는 ID
-function findFlavor(flavors: FlavorSummary[], ref: string | null | undefined) {
+export function findFlavor(flavors: FlavorSummary[], ref: string | null | undefined) {
   return ref ? flavors.find((f) => f.id === ref || f.name === ref) : undefined;
 }
 
@@ -824,16 +940,20 @@ function templateMeta(t: ClusterTemplate) {
 }
 
 /** 신청 화면 노드 구성 — 망·서브넷은 묻지 않는다(관리자가 프로비저닝 때 고른다 — 사용자가 내부망/인터넷망을 고르면 헷갈릴 위험). */
-export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onChange }: {
+export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onChange, nameCard, nameOk }: {
   flavors: FlavorSummary[];
   keypairs: SshKey[];
   template: ClusterTemplate;
   value: ClusterNodeConfig;
   onChange: (v: ClusterNodeConfig) => void;
+  nameCard?: React.ReactNode; // 왼쪽 맨 위(머리 바로 아래) 이름 카드 — 필수 항목에 함께 센다
+  nameOk?: boolean;
 }) {
   const [role, setRole] = React.useState<NodeRole>("cp");
   const [showMeta, setShowMeta] = React.useState(false);
   const modelOf = useAccelModel();
+  // 키페어 카드가 스크롤 아래로 가려지면 칸 아래에 알린다
+  const { hidden: keyHidden, setRoot: setKeyRoot, setTarget: setKeyTarget, reveal: revealKey } = useHiddenBelow();
 
   const src = value.source;
   const allTpl = Object.values(src).every((s) => s === "tpl");
@@ -848,7 +968,7 @@ export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onC
   const keyNone = template.keypair_id ? `템플릿 키페어(${template.keypair_id})가 적용됩니다` : "노드에 SSH 키를 넣지 않습니다";
   // 필수 항목(Control Plane·Worker 스펙) 진행 — 빠진 카드는 빨갛게, 템플릿 값을 못 쓰면 직접 선택으로 안내
   const required = [!!nodes.masterFlavorId, !!nodes.flavorId];
-  const missingLine = (r: "cp" | "w") => src[r] === "tpl" ? "템플릿 스펙을 사용할 수 없습니다" : "필수 항목입니다. 오른쪽 목록에서 고르세요";
+  const missingLine = (r: "cp" | "w") => src[r] === "tpl" ? "템플릿 스펙을 사용할 수 없습니다" : PICK_LINE;
 
   function setSource(r: NodeRole, s: NodeSource) {
     onChange({ ...value, source: { ...src, [r]: s } });
@@ -871,11 +991,14 @@ export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onC
   const card = "gap-2 px-3.5 py-3"; // 승인 화면(1b)과 같은 카드 크기
 
   return (
-    <div className="grid h-[652px] grid-cols-[270px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden rounded-xl border border-border [&_*]:leading-[1.2]">
+    <div className="grid h-[652px] min-h-[420px] grid-cols-[270px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden rounded-xl border border-border [&_*]:leading-[1.2]">
       {/* 왼쪽 — 노드 카드 + 총 자원(승인 화면 1b 와 같은 배치). 높이 652px 은 네트워크 카드가 있던 때 가장 긴 경우(가속기
-          Worker 스펙 줄 두 줄 + 키페어 비움 안내)에 맞춘 값 — 오른쪽 스펙 표 높이와 맞아 그대로 둔다. 그보다 길면 왼쪽만 스크롤 */}
-      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto border-r border-border bg-secondary/50 px-4 py-[18px] [scrollbar-width:thin]">
-        <RequiredProgress title="노드 구성" items={required} />
+          Worker 스펙 줄 두 줄 + 키페어 비움 안내)에 맞춘 값 — 마법사 본문이 낮으면 최소 420px 까지 줄어든다.
+          카드만 스크롤하고 총 자원은 아래 고정 */}
+      <div className="flex min-h-0 flex-col gap-2 overflow-hidden border-r border-border bg-secondary/50 px-4 py-[18px]">
+        <div ref={setKeyRoot} className={PANEL.leftScroll}>
+        <RequiredProgress title="노드 구성" items={nameCard ? [!!nameOk, ...required] : required} />
+        {nameCard}
         <NodeCard className={card} icon={serverIcon} title="Control Plane" required range="1 또는 3대" rangeAt="count"
           tag={src.cp === "tpl" && <RefTag label="템플릿" />} status={masterF ? "done" : "missing"} placeholder="스펙을 고르세요"
           value={masterF?.name} line={masterF ? specLine(masterF) : missingLine("cp")} selected={role === "cp"} onSelect={() => setRole("cp")}
@@ -887,11 +1010,18 @@ export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onC
           selected={role === "w"} onSelect={() => setRole("w")}
           count={[value.nodeCount, () => onChange({ ...value, nodeCount: Math.max(1, value.nodeCount - 1) }),
             () => onChange({ ...value, nodeCount: Math.min(MAX_WORKERS, value.nodeCount + 1) })]} />
+        <div ref={setKeyTarget} className="flex flex-none flex-col">
         <NodeCard className={card} icon={keyIcon} title="키페어" optional tag={src.key === "tpl" && <RefTag label="템플릿" />}
-          value={src.key === "tpl" ? (template.keypair_id || "키페어 없음") : keyName ?? "사용 안 함"}
-          valueMuted={src.key === "tpl" ? !template.keypair_id : !keyName}
-          line={src.key === "tpl" ? (template.keypair_id ? undefined : "노드 SSH 미설정") : keyName ? undefined : keyNone}
+          value={(src.key === "tpl" ? template.keypair_id : keyName) || "사용 안 함"}
+          valueMuted={!(src.key === "tpl" ? template.keypair_id : keyName)}
+          line={(src.key === "tpl" ? template.keypair_id : keyName) ? undefined : keyNone}
           selected={role === "key"} onSelect={() => setRole("key")} />
+        </div>
+        </div>
+        {keyHidden && (
+          <HiddenCardHint label="키페어 (옵션)" value={(src.key === "tpl" ? template.keypair_id : keyName) || "사용 안 함"}
+            onClick={() => { revealKey(); setRole("key"); }} />
+        )}
         <TotalsBlock rows={[
           { k: "vCPU", v: totals && `${totals.vcpu}` }, { k: "RAM", v: totals && `${totals.ramGb} GB` },
           { k: "Disk", v: totals && `${totals.diskGb} GB` },

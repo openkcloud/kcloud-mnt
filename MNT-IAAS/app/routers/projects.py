@@ -26,6 +26,7 @@ def _to_tenant(p: dict, quota: dict | None) -> dict:
         # 쿼터·사용량 (없으면 0 placeholder)
         "quotaVcpu": 0, "quotaRamGb": 0, "quotaDiskTb": 0, "quotaAcc": 0,
         "usedVcpu": 0, "usedRamGb": 0, "usedDiskTb": 0, "usedAcc": 0,
+        "quotaDiskGb": 0, "usedDiskGb": 0,  # Cinder 원래 단위(GB) — 신청 화면 남은 Disk
         "members": 0,       # 추후 Keystone role assignment
         "createdAt": "",    # Keystone 프로젝트엔 생성일 없음
     }
@@ -37,6 +38,8 @@ def _to_tenant(p: dict, quota: dict | None) -> dict:
         # Cinder 는 GB → 화면 Tenant 는 TB
         t["quotaDiskTb"] = round(quota["diskGb"]["quota"] / 1024, 2)
         t["usedDiskTb"] = round(quota["diskGb"]["used"] / 1024, 2)
+        t["quotaDiskGb"] = quota["diskGb"]["quota"]
+        t["usedDiskGb"] = quota["diskGb"]["used"]
         # 가속기(quotaAcc)는 Cyborg 연동 시 — 지금은 0
     return t
 
