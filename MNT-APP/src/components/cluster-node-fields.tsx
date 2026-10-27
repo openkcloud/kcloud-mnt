@@ -194,7 +194,7 @@ function SpecNameCell({ f, model, tag, reason, dim }: {
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
       <span className="flex min-w-0 items-center gap-1.5">
-        <span className={cn("truncate font-mono text-[13px] font-semibold", dim && "text-muted-foreground/70")}>{f.name}</span>
+        <span title={f.name} className={cn("truncate font-mono text-[13px] font-semibold", dim && "text-muted-foreground/70")}>{f.name}</span>
         {tag}
       </span>
       {f.accelerator && <span className={cn("flex flex-wrap gap-1", dim && "opacity-60")}><AccelTags f={f} model={model} /></span>}

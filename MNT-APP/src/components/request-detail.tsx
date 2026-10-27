@@ -80,11 +80,12 @@ export function RequestHero({ r, onOpen, hideTitle }: { r: ResourceRequest; onOp
         {isVm ? <Server className="size-5" /> : isWs ? <BrainCircuit className="size-5" /> : <Boxes className="size-5" />}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-1.5">
+        {/* 긴 자원 이름은 자르지 않고 줄바꿈해 전체를 보인다(ETRI 검토 3번) — 신청 ID 는 첫 줄 옆 */}
+        <div className="flex min-w-0 items-baseline gap-1.5">
           <div
             onClick={onOpen}
             title={onOpen ? "만든 자원 열기" : undefined}
-            className={cn("truncate text-[17px] font-bold", onOpen && "cursor-pointer underline-offset-2 hover:underline")}
+            className={cn("min-w-0 text-[17px] font-bold [overflow-wrap:anywhere]", onOpen && "cursor-pointer underline-offset-2 hover:underline")}
           >
             {isVm ? (r.vmName || "가상머신") : isWs ? (r.workspaceName || "AI 워크스페이스") : (r.clusterName || "서비스 클러스터")}
           </div>

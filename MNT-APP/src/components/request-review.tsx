@@ -622,7 +622,7 @@ export function RequestContentDialog({ r, open, onClose }: { r: ResourceRequest;
       <DialogContent aria-describedby={undefined} className="flex max-h-[85vh] max-w-[920px] flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="flex-row items-baseline gap-2 space-y-0 border-b border-border px-6 py-4 pr-12">
           <DialogTitle className="text-[17px] font-bold">신청 내용</DialogTitle>
-          <span className="truncate font-mono text-xs text-muted-foreground">{isVm ? r.vmName : r.clusterName}</span>
+          <span className="min-w-0 font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">{isVm ? r.vmName : r.clusterName}</span>
           <span className="flex-none font-mono text-xs text-muted-foreground">{r.id}</span>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4 [scrollbar-width:thin]">
