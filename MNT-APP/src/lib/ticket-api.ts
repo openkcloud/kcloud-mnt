@@ -83,6 +83,7 @@ export interface CreateTicketInput {
   projectId: string;
   title?: string;          // 신청 제목(선택)
   vmName: string;
+  purpose?: string;        // 용도(선택, 300자)
   networkType: string;
   floatingIp: boolean;
   flavorId: string;

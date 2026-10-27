@@ -86,6 +86,15 @@ def test_VM_신청_OpenStack_키페어는_관리자만(client, iaas_vm):
     assert (t["novaKeypair"], t["keypairName"], "keypairId" in t) == ("gy-yang-pub", "gy-yang-pub", False)
 
 
+def test_VM_신청_용도(client, iaas_vm):
+    # 용도(선택) — 앞뒤 공백을 지우고 300자까지 저장, 상세에 그대로 보인다
+    r = client.post("/api/core/tickets", json={**VM_BODY, "purpose": "  모델 학습 서버 " + "가" * 400}, headers=ADMIN)
+    assert r.status_code == 201, r.text
+    assert r.json()["purpose"] == ("모델 학습 서버 " + "가" * 400)[:300]
+    r = client.post("/api/core/tickets", json={**VM_BODY, "vmName": "test-vm-key2"}, headers=ADMIN)
+    assert r.json()["purpose"] == ""
+
+
 def test_VM_프로비저닝_OpenStack_키페어(client, iaas_vm, monkeypatch):
     started = []
 

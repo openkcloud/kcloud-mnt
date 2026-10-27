@@ -130,12 +130,13 @@ def _ticket_name_taken(db: Session, project_id: str, name: str) -> bool:
 _SELECT = """
     SELECT r.id, r.type, r.status, r.project_id, r.request_spec, r.provision_spec, r.result, r.title,
            r.approved_at, r.provisioning_at, r.approved_reject_at, r.approved_reject_reason,
-           r.provisioning_reject_at, r.provisioning_reject_reason, r.error_message, r.created_at,
+           r.provisioning_reject_at, r.provisioning_reject_reason, r.error_message, r.created_at, r.finished_at,
            u.username, u.name AS requester_name, ro.name AS requester_org_name, o.id AS org_id, o.name AS org_name,
            ap.username AS approved_by, ap.name AS approved_by_name,
            pv.username AS provisioning_by, pv.name AS provisioning_by_name,
            ar.username AS approved_reject_by, ar.name AS approved_reject_by_name,
-           pr.username AS provisioning_reject_by, pr.name AS provisioning_reject_by_name
+           pr.username AS provisioning_reject_by, pr.name AS provisioning_reject_by_name,
+           fn.username AS finished_by, fn.name AS finished_by_name
       FROM tkt_request r
       JOIN iam_user u ON u.id = r.requested_by
       LEFT JOIN iam_org ro ON ro.id = u.org_id  -- 신청자 본인 조직(관리자는 다른 조직 프로젝트에도 신청)
@@ -145,6 +146,7 @@ _SELECT = """
       LEFT JOIN iam_user pv ON pv.id = r.provisioning_by
       LEFT JOIN iam_user ar ON ar.id = r.approved_reject_by
       LEFT JOIN iam_user pr ON pr.id = r.provisioning_reject_by
+      LEFT JOIN iam_user fn ON fn.id = r.finished_by
 """
 
 
@@ -169,7 +171,7 @@ def _to_item(r) -> dict:
         "projectId": r["project_id"],
         "provisionSpec": r["provision_spec"],
         "result": r["result"],
-        # 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려)
+        # 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려) · 마감(완료 / 실패)
         "approvedBy": r["approved_by"],
         "approvedByName": r["approved_by_name"],
         "approvedAt": _iso(r["approved_at"]),
@@ -184,6 +186,9 @@ def _to_item(r) -> dict:
         "provisioningRejectByName": r["provisioning_reject_by_name"],
         "provisioningRejectAt": _iso(r["provisioning_reject_at"]),
         "provisioningRejectReason": r["provisioning_reject_reason"],
+        "finishedBy": r["finished_by"],  # 마감 처리자 = 그 회차 프로비저닝을 시작한 관리자
+        "finishedByName": r["finished_by_name"],
+        "finishedAt": _iso(r["finished_at"]),
         "errorMessage": r["error_message"],
     }
 
@@ -272,6 +277,7 @@ class CreateTicketBody(BaseModel):
     projectId: str               # OpenStack 프로젝트 UUID
     title: str | None = None     # 신청 제목(선택) — 별도 컬럼
     vmName: str
+    purpose: str = ""            # 용도(선택, 300자)
     networkType: str             # 희망 망: internal(내부망) | external(인터넷망)
     floatingIp: bool = False     # 공인 IP 희망 (인터넷망일 때만)
     flavorId: str
@@ -351,6 +357,7 @@ def create_ticket(body: CreateTicketBody, user: CurrentUser = Depends(current_us
     spec = {
         "projectName": project["name"],
         "vmName": body.vmName,
+        "purpose": body.purpose.strip()[:300],
         "networkType": body.networkType,
         "floatingIp": body.floatingIp and body.networkType == "external",
         "flavorId": flavor["id"],
@@ -623,7 +630,7 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         raise HTTPException(503, "Temporal 주소(TEMPORAL_API_BASE)가 설정되지 않았습니다")
     admin_id = _admin_id(db, user.username, "프로비저닝은 관리자만 할 수 있습니다")
     t = db.execute(text("""SELECT status, type, project_id, request_spec, provision_spec, result, error_message,
-                                  provisioning_by, provisioning_at, workflow_id
+                                  provisioning_by, provisioning_at, workflow_id, finished_by, finished_at
                              FROM tkt_request WHERE id = :id"""),
                    {"id": ticket_id}).mappings().first()
     if t is None:
@@ -666,7 +673,7 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         text("""UPDATE tkt_request
                    SET status = 'provisioning', provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
                        provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL,
-                       queue_expected_sec = :qexp
+                       finished_by = NULL, finished_at = NULL, queue_expected_sec = :qexp
                  WHERE id = :id AND status = :cur"""),
         {"id": ticket_id, "spec": json.dumps(spec, ensure_ascii=False), "by": admin_id, "wf": workflow_id,
          "cur": t["status"], "qexp": expected},
@@ -693,7 +700,8 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         # 누르기 전 상태·값 — 시작 실패·시작 전 취소 때 되돌린다(provision_queue.restore)
         "prev": {"status": t["status"], "provisionSpec": t["provision_spec"], "provisioningBy": t["provisioning_by"],
                  "provisioningAt": _iso(t["provisioning_at"]), "workflowId": t["workflow_id"],
-                 "errorMessage": t["error_message"], "result": t["result"]},
+                 "errorMessage": t["error_message"], "result": t["result"],
+                 "finishedBy": t["finished_by"], "finishedAt": _iso(t["finished_at"])},
     }
     try:
         from_thread.run(runtime.start_vm_provision, workflow_id, inp)  # 이벤트 루프의 Temporal 클라이언트로 시작
@@ -771,7 +779,8 @@ def provision_ai_workspace_ticket(ticket_id: str, body: ProvisionAiWorkspaceBody
     res = db.execute(
         text("""UPDATE tkt_request
                    SET status = 'provisioning', provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
-                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL
+                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL,
+                       finished_by = NULL, finished_at = NULL
                  WHERE id = :id AND status = :cur"""),
         {"id": ticket_id, "spec": json.dumps(spec), "by": admin_id, "wf": workflow_id, "cur": t["status"]},
     )
@@ -1003,7 +1012,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
         raise HTTPException(503, "Temporal 주소(TEMPORAL_API_BASE)가 설정되지 않았습니다")
     admin_id = _admin_id(db, user.username, "프로비저닝은 관리자만 할 수 있습니다")
     t = db.execute(text("""SELECT status, type, project_id, request_spec, provision_spec, result, error_message,
-                                  provisioning_by, provisioning_at, workflow_id
+                                  provisioning_by, provisioning_at, workflow_id, finished_by, finished_at
                              FROM tkt_request WHERE id = :id"""),
                    {"id": ticket_id}).mappings().first()
     if t is None:
@@ -1079,7 +1088,8 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     res = db.execute(
         text("""UPDATE tkt_request
                    SET status = 'provisioning', provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
-                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL
+                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL,
+                       finished_by = NULL, finished_at = NULL
                  WHERE id = :id AND status = :cur"""),
         {"id": ticket_id, "spec": json.dumps(spec, ensure_ascii=False), "by": admin_id, "wf": workflow_id,
          "cur": t["status"]},
@@ -1093,10 +1103,12 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
            "clusterName": rs["clusterName"], "templateId": rs["templateId"], "masterCount": master_count,
            "masterFlavorId": master["id"], "nodeCount": node_count, "flavorId": worker["id"],
            "networkId": net["id"], "subnetId": subnet["id"], "floatingNetworkId": floating,
-           "keypair": key_name or None, "namespace": rs["namespace"], "need": need}
+           "keypair": key_name or None, "namespace": rs["namespace"], "need": need,
+           "skipSetup": settings.cluster_skip_setup}  # 로컬 — K8s API 연결·네임스페이스·접근 권한 건너뜀
     prev = {"status": t["status"], "provisionSpec": t["provision_spec"], "provisioningBy": t["provisioning_by"],
             "provisioningAt": _iso(t["provisioning_at"]), "workflowId": t["workflow_id"],
-            "errorMessage": t["error_message"], "result": t["result"]}
+            "errorMessage": t["error_message"], "result": t["result"],
+            "finishedBy": t["finished_by"], "finishedAt": _iso(t["finished_at"])}
     try:
         from_thread.run(runtime.start_cluster_provision, workflow_id, inp)  # 이벤트 루프의 Temporal 클라이언트로 시작
     except Exception as e:  # noqa: BLE001 — 시작 실패면 이전 상태(승인·실패)와 값으로 되돌린다
