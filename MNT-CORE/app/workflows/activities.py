@@ -136,13 +136,15 @@ def grant_cluster_access(project_id: str, cluster_id: str) -> None:
 
 
 def _sets(change: dict, prefix: str, params: dict) -> list[str]:
-    """변경 하나 → SET 절. 진행 중이 되면 시작 시각, 완료·실패면 종료 시각(이미 있으면 유지 — 재시도해도 같은 결과)."""
+    """변경 하나 → SET 절. 진행 중이 되면 시작 시각, 완료·실패면 종료 시각(이미 있으면 유지 — 재시도해도 같은 결과).
+    건너뜀(skipped)은 시각을 남기지 않는다."""
     sets = []
     status = change.get("status")
     if status:
         params["st"] = status
         sets.append("status = :st")
-        sets.append(f"started_at = coalesce({prefix}started_at, now())")
+        if status != "skipped":
+            sets.append(f"started_at = coalesce({prefix}started_at, now())")
         if status in ("done", "failed"):
             sets.append(f"ended_at = coalesce({prefix}ended_at, now())")
     if "error" in change:
@@ -175,10 +177,12 @@ def update_steps(ticket_id: str, attempt: int, changes: list[dict]) -> None:
 
 @activity.defn(name="core.finish")
 def finish(ticket_id: str, status: str, result: dict | None, error: str | None) -> None:
-    """티켓 마감 — completed(결과 식별자) 또는 failed(오류 메시지). 생성 중(provisioning)인 티켓만 바꾼다."""
+    """티켓 마감 — completed(결과 식별자) 또는 failed(오류 메시지). 생성 중(provisioning)인 티켓만 바꾼다.
+    마감 기록(finished_by · finished_at) — 처리자는 그 회차 프로비저닝을 시작한 관리자, 시각은 지금."""
     with SessionLocal() as db:
         db.execute(
-            text("""UPDATE tkt_request SET status = :st, result = CAST(:r AS jsonb), error_message = :e
+            text("""UPDATE tkt_request SET status = :st, result = CAST(:r AS jsonb), error_message = :e,
+                           finished_by = provisioning_by, finished_at = now()
                      WHERE id = :id AND status = 'provisioning'"""),
             {"id": ticket_id, "st": status, "r": json.dumps(result) if result else None, "e": error},
         )

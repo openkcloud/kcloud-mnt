@@ -1,5 +1,5 @@
 """서비스 클러스터 프로비저닝 워크플로 — 정상 완료·생성 실패 정리·생성 요청 실패·사전 확인 실패·정리 실패·조기 실패(노드 VM
-ERROR)·K8s API 접근 실패 + 조기 실패 판정(judge).
+ERROR)·K8s API 접근 실패·로컬 설정 단계 건너뜀 + 조기 실패 판정(judge).
 로컬 Temporal 개발 서버 + 가짜 작업. 운영과 같은 샌드박스 러너로 띄워 공통 파일 포함 import 위반도 확인한다."""
 import asyncio
 import shutil
@@ -41,6 +41,7 @@ WATCH = {
     "wf-vm-error": [_snap("CREATE_IN_PROGRESS", cp=1, api=API, wvms=1, problem={
         "code": "vm_error", "message": "노드 VM 생성 실패(default-worker-a): No valid host was found."})],
     "wf-api-fail": [_snap("CREATE_COMPLETE", True, 1, 2, API)],
+    "wf-skip-setup": [_snap("CREATE_COMPLETE", True, 1, 2, API)],
 }
 
 
@@ -98,7 +99,7 @@ async def _scenarios():
 
     @activity.defn(name="paas.check_api")
     def check_api(cluster_id):
-        if wid() == "wf-api-fail":
+        if wid() in ("wf-api-fail", "wf-skip-setup"):  # 건너뛰면 부르지 않는다
             raise ApplicationError("timed out", non_retryable=True)
         return API
 
@@ -136,6 +137,9 @@ async def _scenarios():
                                           delete_cluster]):
                 ok = await env.client.execute_workflow(kp.KubernetesProvision.run, inp("wf-ok"), id="wf-ok",
                                                        task_queue=CORE_QUEUE)
+                skipped = await env.client.execute_workflow(kp.KubernetesProvision.run,
+                                                            {**inp("wf-skip-setup"), "skipSetup": True},
+                                                            id="wf-skip-setup", task_queue=CORE_QUEUE)
                 for tid in ("wf-failed", "wf-request-lost", "wf-quota", "wf-cleanup-fail", "wf-vm-error", "wf-api-fail"):
                     with pytest.raises(WorkflowFailureError):
                         await env.client.execute_workflow(kp.KubernetesProvision.run, inp(tid), id=tid,
@@ -163,6 +167,19 @@ async def _scenarios():
                                    "prepare_api": API, "create_cp_vm": "1/1", "create_workers": "2/2",
                                    "check_api": "https://192.0.2.1:6443", "create_namespace": "okc-test-prj",
                                    "grant_access": "okc_test_prj"}
+
+    # 로컬(skipSetup) — K8s API 연결·네임스페이스·접근 권한을 건너뜀으로 기록하고 완료(네임스페이스·접근 권한 없음)
+    assert skipped == {"clusterId": "c-wf-skip-setup", "clusterName": "cl-wf-skip-setup", "apiAddress": API}
+    assert fin("wf-skip-setup") == ("completed", skipped, None)
+    assert not any(c[:2] in (("namespace", "wf-skip-setup"), ("grant", "wf-skip-setup")) for c in calls)
+    last = {c.get("sub") or c["step"]: c["status"] for x in calls if x[:2] == ("steps", "wf-skip-setup") for c in x[2]}
+    # 설정 단계는 한 번도 '진행 중'이 되지 않는다(건너뜀에 시작 시각이 남지 않게)
+    assert not any(c.get("status") == "running" and (c.get("sub") or c.get("step")) in ("check_api", "setup_cluster")
+                   for x in calls if x[:2] == ("steps", "wf-skip-setup") for c in x[2])
+    assert {k: last[k] for k in ("finish_cluster", "create_cluster", "check_api", "create_namespace", "grant_access",
+                                 "setup_cluster")} == {"finish_cluster": "done", "create_cluster": "done", "check_api": "skipped",
+                                                       "create_namespace": "skipped", "grant_access": "skipped",
+                                                       "setup_cluster": "skipped"}
 
     # 생성 중 실패 — 만든 클러스터(ID)를 지우고 실패
     status, result, error = fin("wf-failed")

@@ -57,6 +57,7 @@ import {
 } from "@/components/workspace-requests";
 import { ClusterRequestSections, ClusterReviewContent, isClusterReview, type ClusterProvisionValue } from "@/components/cluster-ticket-review";
 import { VmProvisionContent, isVmReview } from "@/components/vm-ticket-review";
+import { RequestReviewContent, isRequestReview } from "@/components/request-review";
 import {
   DETAIL_BODY, DETAIL_CONTENT, DETAIL_W, DetailFooter, DetailHeader, InfoRow, ReasonBanner, RejectInput, RequestHero, Section,
 } from "@/components/request-detail";
@@ -1052,11 +1053,23 @@ function AdminView() {
       {/* 프로비저닝 진행 사이드 시트 */}
       <ProvisioningSheet key={sheetReq?.id} req={sheetReq} open={sheetOpen} onClose={() => setSheetOpen(false)} canRetry />
 
-      {/* 신청 상세 — 대기: 승인·반려 / 승인(VM): 승인 설정 후 프로비저닝·반려 / 실패(VM): 승인 설정 후 재시도·반려
-          / 승인·실패(AI 워크스페이스): 한도 확인·조정 후 생성 시작(재시도)·반려
-          / 클러스터 대기·승인·실패: 시안 1a·1b(ClusterReviewContent) */}
+      {/* 신청 상세 — VM·클러스터: 승인·실패는 처리 화면(VM 승인 설정 · 클러스터 1b), 그 밖은 신청 단계와 같은 모양
+          (RequestReviewContent — 대기면 승인·반려, 진행 중·완료면 진행 보기)
+          / 대기(AI 워크스페이스): 승인·반려 / 승인·실패(AI 워크스페이스): 한도 확인·조정 후 생성 시작(재시도)·반려 */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        {detail && isClusterReview(detail) ? (
+        {detail && isRequestReview(detail, true) ? (
+          <RequestReviewContent
+            key={`${detail.id}:${rejecting}`} // 같은 신청이라도 '반려' 버튼으로 열면 반려 입력부터
+            r={detail}
+            badge={<StatusBadge status={detail.status} />}
+            admin
+            rejectFirst={rejecting}
+            reviewing={reviewMutation.isPending}
+            onApprove={() => review("approve")}
+            onReject={(reason) => review("reject", reason)}
+            onWatch={() => { setDetailOpen(false); openSheet(detail); }}
+          />
+        ) : detail && isClusterReview(detail) ? (
           <ClusterReviewContent
             key={`${detail.id}:${rejecting}`} // 같은 신청이라도 '반려' 버튼으로 열면 반려 입력부터
             r={detail}
@@ -1064,7 +1077,6 @@ function AdminView() {
             rejectFirst={rejecting}
             reviewing={reviewMutation.isPending}
             provisioning={provisionClusterMutation.isPending}
-            onApprove={() => review("approve")}
             onReject={(reason) => review("reject", reason)}
             onProvision={(s) => provision(s)}
           />
@@ -1255,10 +1267,14 @@ function UserView({ username }: { username: string }) {
         </Card>
       )}
 
-      {/* 내 신청 상세 (읽기 전용) — 완료 시 사용 키페어·할당 IP 확인 */}
+      {/* 내 신청 상세 (읽기 전용) — VM·클러스터는 신청 단계와 같은 모양(상태별 오른쪽 칸 · 진행 순서), AI 워크스페이스는 기존 상세 */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className={cn(DETAIL_CONTENT, DETAIL_W.read)} onOpenAutoFocus={(e) => e.preventDefault()}>
-          <DetailHeader badge={detail && <StatusBadge status={detail.status} />} description="내가 신청한 내용입니다." />
+        {detail && isRequestReview(detail, false) ? (
+          <RequestReviewContent key={detail.id} r={detail} badge={<StatusBadge status={detail.status} />}
+            onWatch={() => { setDetailOpen(false); setSheetReq(detail); setSheetOpen(true); }} />
+        ) : (
+        <DialogContent className={cn(DETAIL_CONTENT, DETAIL_W.read)} aria-describedby={undefined} onOpenAutoFocus={(e) => e.preventDefault()}>
+          <DetailHeader badge={detail && <StatusBadge status={detail.status} />} />
           <div className={DETAIL_BODY}>{detail && <RequestDetailBody r={detail} />}</div>
           {detail && canWatch(detail) && (
             <DetailFooter>
@@ -1268,6 +1284,7 @@ function UserView({ username }: { username: string }) {
             </DetailFooter>
           )}
         </DialogContent>
+        )}
       </Dialog>
 
       {/* 프로비저닝 진행 사이드 시트(읽기 전용) */}

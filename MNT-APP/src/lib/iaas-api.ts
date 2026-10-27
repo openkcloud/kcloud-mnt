@@ -569,6 +569,7 @@ export interface ImageSummary {
   id: string; name: string; tenantId: string; os: string; diskFormat: string; containerFormat: string;
   sizeGb: number; visibility: string; status: string; protected: boolean; minDisk: number; minRam: number; createdAt: string;
   minVolumeGb: number; // 부팅 볼륨 최소 크기 = max(min_disk, 이미지 가상 크기)
+  osVersion?: string;   // Glance 속성 os_version
 }
 
 export function useImages() {
@@ -579,6 +580,15 @@ export function useImages() {
       (await fetchJson<{ items: ImageSummary[] }>(`${IAAS_BASE}/api/iaas/images`)).items,
     staleTime: 60 * 1000, retry: 0,
     refetchInterval: pollMs || false,
+  });
+}
+/** 프로젝트별 쿼터·사용량 — 신청 화면 프로젝트 카드(남은 vCPU·RAM·Disk). 사용자는 소속 프로젝트만. 목업 폴백 없음. */
+export function useProjectQuotas(enabled = true) {
+  return useQuery({
+    queryKey: ["iaas-projects", "detail"],
+    enabled,
+    queryFn: async (): Promise<Tenant[]> => (await fetchJson<{ items: Tenant[] }>(`${IAAS_BASE}/api/iaas/projects?detail=true`)).items,
+    staleTime: 60 * 1000, retry: 0,
   });
 }
 /** 프로젝트가 쓸 수 있는 이미지(public + 프로젝트 소유 + 공유받은 것) — 자원신청 템플릿. 목업 폴백 없음.
