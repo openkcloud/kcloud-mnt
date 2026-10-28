@@ -553,6 +553,8 @@ class ProvisionSpecBody(BaseModel):
     fixedIp: str | None = None            # 고정 IP 직접 입력 — 모든 망 (없으면 DHCP 자동 할당)
     securityGroups: list[str] = []        # 보안그룹 이름 (프로젝트 라이브 조회 기준)
     host: str | None = None               # 배치할 컴퓨트 노드(미리보기에서 고름) — 노드 지정 권한이 있을 때만, 없으면 스케줄러
+    # 키페어 — 보내지 않으면 신청 값, 보내면 그 OpenStack(Nova) 키페어 이름(관리자가 직접 선택), null = 넣지 않음
+    novaKeypair: str | None = None
 
 
 def _verified_provision_spec(project_id: str, flavor_id: str, spec: ProvisionSpecBody, token: str) -> dict:
@@ -623,7 +625,7 @@ class ProvisionBody(BaseModel):
 def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = Depends(current_user),
                      db: Session = Depends(get_db)):
     """프로비저닝 시작(관리자) — 승인(approved)된 VM 신청, 또는 실패(failed)한 신청의 재시도.
-    승인 설정(네트워크·IP·보안그룹)과 VM 이름 중복을 라이브 조회로 다시 확인하고, 생성 중(provisioning)으로 바꾼 뒤
+    승인 설정(네트워크·IP·보안그룹·키페어)과 VM 이름 중복을 라이브 조회로 다시 확인하고, 생성 중(provisioning)으로 바꾼 뒤
     Temporal 워크플로를 새 회차로 시작한다(실패한 회차의 자원은 워크플로가 실패 때 정리했으므로 처음부터).
     워크플로 시작에 실패하면 이전 상태·값으로 되돌린다."""
     if not settings.temporal_api_base:
@@ -650,17 +652,26 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
     spec = _verified_provision_spec(t["project_id"], rs["flavorId"], body.provisionSpec, user.token)
     if _server_name_taken(t["project_id"], rs["vmName"], user.token):  # 신청 뒤에 같은 이름 VM 이 생겼을 수 있다
         raise HTTPException(409, _SERVER_NAME_TAKEN)
+    # 키페어 — 관리자가 바꿨으면 그 OpenStack 키페어(null = 넣지 않음), 아니면 신청 값(사용자 = 본인 SSH 키, 관리자 = OpenStack 키페어)
+    key_changed = "novaKeypair" in body.provisionSpec.model_fields_set
+    nova_name = body.provisionSpec.novaKeypair if key_changed else rs.get("novaKeypair")
+    if key_changed:
+        if nova_name and rs.get("cloudInit") is False:
+            raise HTTPException(400, "cloud-init 이 없는 템플릿에는 키페어를 넣을 수 없습니다")
+        spec["novaKeypair"] = nova_name  # 바꾼 키페어(재시도·상세 표시) — 없으면 신청 값
     public_key = None
-    if rs.get("novaKeypair"):  # 관리자가 고른 OpenStack 키페어 — 지금의 공개키를 cloud-init 으로 넣는다
-        nova_key = _nova_keypair(rs["novaKeypair"], user.token)
+    if nova_name:  # OpenStack 키페어 — 지금의 공개키를 cloud-init 으로 넣는다
+        nova_key = _nova_keypair(nova_name, user.token)
         if not nova_key:
-            raise HTTPException(409, f"신청한 키페어({rs['novaKeypair']})가 삭제되어 주입할 수 없습니다")
+            if key_changed:
+                raise HTTPException(400, "OpenStack 키페어를 찾을 수 없습니다")
+            raise HTTPException(409, f"신청한 키페어({nova_name})가 삭제되어 주입할 수 없습니다")
         public_key = nova_key["publicKey"]
 
     # 여기부터 저장까지 한 트랜잭션
     if spec.get("fixedIp"):
         _check_fixed_ip_unassigned(db, ticket_id, spec)
-    if rs.get("keypairId"):
+    if not key_changed and rs.get("keypairId"):
         public_key = db.execute(text("SELECT public_key FROM iam_ssh_key WHERE id = :id"),
                                 {"id": int(rs["keypairId"])}).scalar()
         if public_key is None:
@@ -694,7 +705,8 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         "floatingNetworkId": spec.get("floatingNetworkId"),
         "host": spec.get("host"),
         "publicKey": public_key,
-        "keypairLabel": rs.get("keypairName") or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
+        "keypairLabel": (nova_name if key_changed else rs.get("keypairName"))
+                        or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
         "hasAccelerator": bool(rs.get("deviceProfile")),
         "acceleratorLabel": accel or rs.get("deviceProfile"),
         # 누르기 전 상태·값 — 시작 실패·시작 전 취소 때 되돌린다(provision_queue.restore)

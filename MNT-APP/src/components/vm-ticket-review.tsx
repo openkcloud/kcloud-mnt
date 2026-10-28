@@ -1,9 +1,10 @@
 "use client";
 /**
  * VM 신청 프로비저닝 결정(관리자) — 승인(프로비저닝)·실패(재시도). 클러스터 1b 와 같은 2단 패널:
- *  왼쪽 카드(네트워크·보안그룹·배치 노드) + 총 자원, 오른쪽은 고른 카드의 고르기
- *  (네트워크 표 · IP 방식 · Floating IP / 보안그룹 표 / 배치·가용량 미리보기).
- * 재시도는 지난 회차 승인 설정으로 채운다. 망·IP·쿼터는 프로비저닝 요청 때 서버가 다시 확인한다(실패하면 사유가 오류로 온다).
+ *  왼쪽 카드(네트워크·보안그룹·배치 노드·키페어) + 총 자원, 오른쪽은 고른 카드의 고르기
+ *  (네트워크 표 · IP 방식 · Floating IP / 보안그룹 표 / 배치·가용량 미리보기 / 키페어 표).
+ * 키페어는 신청 값(사용자 = 포털 SSH 키, 관리자 = OpenStack 키페어) 또는 OpenStack 키페어 직접 선택이고 비울 수도 있다.
+ * 재시도는 지난 회차 승인 설정으로 채운다. 망·IP·쿼터·키페어는 프로비저닝 요청 때 서버가 다시 확인한다(실패하면 사유가 오류로 온다).
  */
 import * as React from "react";
 import { AlertCircle, Check, Cpu, Network, RotateCcw, Server, ShieldCheck, XCircle } from "lucide-react";
@@ -14,15 +15,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  AccelBadge, CapacityBar, ManualTag, NetBadge, NodeCard, Pager, PickerHeader, QuotaBar, Radio, RequiredProgress,
-  SearchInput, PICK_LINE, Segment, SharedTag, TotalsBlock, ViewCard, paginate, useAccelModel,
+  AccelBadge, CapacityBar, ChangedTag, HiddenCardHint, KeypairTable, ManualTag, NetBadge, NodeCard, Pager, PickerHeader, QuotaBar,
+  Radio, RefTag, RequiredProgress, SearchInput, PICK_LINE, Segment, SharedTag, TotalsBlock, ViewCard, keyIcon, keyType, paginate,
+  useAccelModel, useHiddenBelow, type KeyRow,
 } from "@/components/cluster-node-fields";
 import { RequestContentDialog } from "@/components/request-review";
 import {
   DETAIL_BODY, DETAIL_CONTENT, DETAIL_W, DetailFooter, DetailHeader, PANEL, ReasonBanner, RejectInput, RequestHero,
 } from "@/components/request-detail";
 import {
-  useIpCheck, usePlacementPreview, useProjectNetworks, useProjectSecurityGroups, type PlacementPreview,
+  useIpCheck, useNovaKeypairs, usePlacementPreview, useProjectNetworks, useProjectSecurityGroups, type PlacementPreview,
 } from "@/lib/iaas-api";
 import type { ProvNetwork, ProvisionSpec, ResourceRequest } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -48,7 +50,8 @@ function ipInCidr(ip: string, cidr: string) {
   return n > start && n < start + size - 1;
 }
 
-type Role = "net" | "sg" | "place";
+type Role = "net" | "sg" | "place" | "key";
+const REQ_KEY = "@request"; // 키페어 표의 신청 키 행(포털 SSH 키 — OpenStack 키페어 이름과 겹치지 않는 값)
 
 /**
  * VM 프로비저닝 결정 모달 내용(DialogContent) — 공용 틀(머리 · 이름 카드 · 사유 띠 · 2단 패널 · 고정 바닥), 폭 1000px.
@@ -84,6 +87,14 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
   const [fixedIp, setFixedIp] = React.useState(prev?.fixedIp ?? "");
   const [sgNames, setSgNames] = React.useState<string[]>(prev?.securityGroups ?? ["default"]);
   const [place, setPlace] = React.useState<PlacementSummary>({ ok: false, pin: null, loading: true, candidates: 0, total: 0 });
+  // 키페어 — 신청 값 또는 OpenStack 키페어 직접 선택(null = 넣지 않음). 재시도면 지난 회차에 바꾼 키페어부터(기록이 없으면 신청 값)
+  const { data: novaKeys, isLoading: keysLoading, error: keysError } = useNovaKeypairs();
+  const noCloudInit = r.cloudInit === false;
+  const reqNova = r.keypairId ? undefined : r.novaKeypair ?? null; // 신청 키가 OpenStack 키페어면 그 이름(포털 SSH 키면 undefined)
+  const [keySrc, setKeySrc] = React.useState<"req" | "custom">(prev && "novaKeypair" in prev ? "custom" : "req");
+  const [keyPick, setKeyPick] = React.useState<string | null>(prev?.novaKeypair ?? null);
+  // 키페어 카드가 스크롤 아래로 가려지면 칸 아래에 알린다(클러스터 노드 구성과 같음)
+  const { hidden: keyHidden, setRoot: setKeyRoot, setTarget: setKeyTarget, reveal: revealKey } = useHiddenBelow();
 
   const net = networks.find((n) => n.id === networkId);
   const isExternal = net?.kind === "external";
@@ -104,9 +115,15 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
   const sgOk = sgNames.length > 0;
   const placeOk = place.ok && place.pin?.candidate !== false;
   const required = [netOk, sgOk, placeOk];
+  // 키페어(옵션) — 넣을 OpenStack 키페어가 지금 없으면(지웠으면) 막는다. 신청 값이 포털 SSH 키면 서버가 확인한다
+  const keyChanged = !noCloudInit && keySrc === "custom" && keyPick !== reqNova;
+  const keyNova = keySrc === "custom" ? keyPick : reqNova;
+  const keyMissing = !!keyNova && !!novaKeys && !novaKeys.some((k) => k.name === keyNova);
+  const keyName = keySrc === "custom" ? keyPick : r.keypairName ?? null;
+  const keyValue = noCloudInit ? "미적용 (cloud-init 없음)" : keyName ?? "사용 안 함";
   const missing = [!net && "네트워크", !!net && !ipValid && "IP 확인", !!net && !fipOk && "Floating IP 풀", !sgOk && "보안그룹",
-    !place.loading && !placeOk && "배치"].filter((x): x is string => !!x);
-  const spec: ProvisionSpec | null = netOk && sgOk && placeOk ? {
+    !place.loading && !placeOk && "배치", keyMissing && "키페어(OpenStack 에 없음)"].filter((x): x is string => !!x);
+  const spec: ProvisionSpec | null = netOk && sgOk && placeOk && !keyMissing ? {
     networkId: net.id,
     networkName: net.name,
     networkKind: net.kind,
@@ -114,6 +131,7 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
     ...(!isExternal && fipOn && fipNet ? { floatingNetworkId: fipNet.id, floatingNetworkName: fipNet.name } : {}),
     securityGroups: sgNames,
     host: place.pin?.host,
+    ...(keyChanged ? { novaKeypair: keyPick } : {}),
   } : null;
   const status = place.loading && missing.length === 0 ? "배치·가용량을 확인하는 중…"
     : spec ? `VM 1대 프로비저닝 준비됨${place.pin ? ` / ${place.pin.host}` : ""}` : `선택 필요: ${missing.join(", ")}`;
@@ -128,11 +146,18 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
       </span>
     : r.deviceProfile ? <AccelBadge /> : "없음";
 
+  // 키페어 행 — OpenStack(Nova) 키페어(이름으로 찾아 공개키를 넣는다). 신청 키는 포털 SSH 키 또는 OpenStack 키페어
+  const keyRows: KeyRow[] = (novaKeys ?? []).map((k) => ({ id: k.name, name: k.name, fingerprint: k.fingerprint, type: k.type || keyType(k.publicKey) }));
+  const reqKeyRow: KeyRow | undefined = !r.keypairName ? undefined
+    : r.keypairId ? { id: REQ_KEY, name: r.keypairName, fingerprint: "신청자 SSH 키 — 포털에 등록한 공개키", type: "—" }
+    : keyRows.find((k) => k.id === r.keypairName)
+      ?? { id: r.keypairName, name: r.keypairName, fingerprint: novaKeys ? "OpenStack 에 없음 — 직접 선택으로 다른 키페어를 고르세요" : "—", type: "—" };
+
   return (
     <DialogContent className={cn(DETAIL_CONTENT, DETAIL_W.process)} onOpenAutoFocus={(e) => e.preventDefault()}>
       <DetailHeader badge={badge} description={isFailed
         ? "가상머신 구성을 확인·수정해 재시도하거나 반려하세요. 실패한 회차가 만든 자원은 정리되었습니다."
-        : "네트워크·보안그룹을 고르고 배치를 확인한 뒤 프로비저닝하거나 반려하세요."} />
+        : "네트워크·보안그룹을 고르고 배치·키페어를 확인한 뒤 프로비저닝하거나 반려하세요."} />
 
       {/* 세로 flex — 패널(660px)이 남는 높이에 맞춰 줄어든다 */}
       <div className={cn(DETAIL_BODY, "flex flex-col")}>
@@ -141,7 +166,7 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
         <div className={cn(PANEL.grid, "min-h-[420px]", rejecting && "hidden")}>
           {/* 왼쪽 — 가상머신 구성 카드(신청 마법사와 같은 이름) + 총 자원. 카드만 스크롤하고 총 자원은 아래 고정 */}
           <div className={cn(PANEL.left, "overflow-hidden")}>
-            <div className={PANEL.leftScroll}>
+            <div ref={setKeyRoot} className={PANEL.leftScroll}>
             <RequiredProgress title="가상머신 구성" items={required} />
             <NodeCard className={PANEL.card} icon={<Network className="size-4 text-primary" />} title="네트워크" required tag={<ManualTag />}
               status={netOk ? "done" : "missing"} placeholder="네트워크를 고르세요" value={net?.name} line={netLine}
@@ -155,7 +180,19 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
               valueMuted={place.loading || (!place.pin && place.ok)}
               line={place.loading ? undefined : place.problem ?? `후보 ${place.candidates}대 / 전체 ${place.total}대`}
               selected={role === "place"} onSelect={() => setRole("place")} />
+            <div ref={setKeyTarget} className="flex flex-none flex-col">
+            <NodeCard className={PANEL.card} icon={keyIcon} title="키페어" optional
+              tag={noCloudInit ? undefined : keyChanged ? <ChangedTag /> : <RefTag label="신청 값" />}
+              status={keyMissing ? "missing" : undefined} value={keyValue} valueMuted={noCloudInit || keyName === null}
+              line={noCloudInit ? "이 템플릿은 키페어를 넣을 수 없습니다"
+                : keyMissing ? "OpenStack 에 없는 키페어입니다. 직접 선택에서 다른 키페어를 고르세요"
+                : keyName === null ? "VM 에 SSH 키를 넣지 않습니다"
+                : keySrc === "req" && r.keypairId ? "신청자 SSH 키" : "OpenStack 키페어"}
+              was={keyChanged ? r.keypairName ?? "사용 안 함" : undefined}
+              selected={role === "key"} onSelect={() => setRole("key")} />
             </div>
+            </div>
+            {keyHidden && <HiddenCardHint label="키페어 (옵션)" value={keyValue} onClick={() => { revealKey(); setRole("key"); }} />}
             <TotalsBlock rows={[
               { k: "VM", v: "1대" }, { k: "vCPU", v: r.vcpu != null ? `${r.vcpu}` : undefined },
               { k: "RAM", v: r.ramGb != null ? `${r.ramGb} GB` : undefined }, { k: "Disk", v: disk }, { k: "가속기", v: accel },
@@ -235,6 +272,26 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
                 <PickerHeader title="보안그룹" hint="하나 이상 · 다시 누르면 해제" />
                 <SecurityGroupTable groups={sgs} loading={sgLoading} error={sgError?.message} selected={sgNames}
                   onToggle={(name) => setSgNames((cur) => (cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name]))} />
+              </>
+            )}
+            {role === "key" && (
+              <>
+                <PickerHeader title="키페어" hint={noCloudInit ? "cloud-init 이 없는 템플릿이라 키페어를 넣을 수 없습니다"
+                  : keySrc === "req" ? "신청 값을 사용합니다" : "VM 에 넣을 OpenStack 키페어 · 다시 누르면 선택 해제"}>
+                  {!noCloudInit && (
+                    <Segment options={[["req", "신청 값"], ["custom", "직접 선택"]] as const} value={keySrc}
+                      onChange={(s) => { setKeySrc(s); if (s === "custom") setKeyPick(reqNova ?? null); }} />
+                  )}
+                </PickerHeader>
+                {noCloudInit ? null : keySrc === "req" ? (
+                  <KeypairTable key="key-req" rows={reqKeyRow ? [reqKeyRow] : []} selected={reqKeyRow?.id ?? null} refId={reqKeyRow?.id}
+                    refLabel="신청" nameCol="minmax(0,200px)" empty="신청 키페어가 없습니다 — VM 에 SSH 키를 넣지 않습니다" />
+                ) : keysLoading ? <Skeleton className="h-24" /> : keysError ? (
+                  <p className="text-xs text-rose-500">OpenStack 키페어를 불러오지 못했습니다 ({keysError.message}).</p>
+                ) : (
+                  <KeypairTable key="key-custom" rows={keyRows} selected={keyPick} refId={reqNova} refLabel="신청" nameCol="minmax(0,200px)"
+                    paged onSelect={(id) => setKeyPick(keyPick === id ? null : id)} empty="OpenStack 키페어가 없습니다" />
+                )}
               </>
             )}
             {/* 배치 미리보기는 늘 그려 둔다(왼쪽 카드·준비 판정이 결과를 쓴다) — 고른 카드가 아니면 숨김 */}

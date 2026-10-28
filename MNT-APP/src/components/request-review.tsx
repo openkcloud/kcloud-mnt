@@ -562,6 +562,7 @@ function VmRequestReview({ r }: { r: ResourceRequest }) {
             : done ? (done.floatingIp ? `${done.floatingIp}${p.floatingNetworkName ? ` (${p.floatingNetworkName})` : ""}` : "없음")
             : p.floatingNetworkName ? `연결 (${p.floatingNetworkName})` : "연결 안 함"],
           ["배치 노드", p.host ?? "스케줄러가 고름"],
+          ...("novaKeypair" in p ? [["키페어", p.novaKeypair ?? "사용 안 함"] as [string, string]] : []),
         ]} />
       )}
     </>} />
