@@ -105,13 +105,20 @@ def create_template(body: dict = Body(...)):
 
 @router.patch("/clustertemplates/{template_id}", dependencies=[Depends(require_admin)])
 def update_template(template_id: str, body: dict = Body(...)):
-    """수정 — Magnum 은 JSON Patch(RFC 6902) 를 받는다. 넘어온 쓰기 가능 필드를 replace.
-    빈 값(None·""·{}·[])은 제외한다 — null 이면 'operations needs value', 빈 dict(labels={})는
-    'Wrong type ... got dict' 로 거부한다(생성과 동일 기준)."""
-    patch = [
-        {"op": "replace", "path": f"/{k}", "value": v}
-        for k, v in body.items() if k in _WRITABLE and v not in (None, "", {}, [])
-    ]
+    """수정 — Magnum 은 JSON Patch(RFC 6902) 를 받는다.
+    - 일반 필드: replace. 빈 값(None·""·{}·[])은 제외('operations needs value' 방지).
+    - labels(dict): Magnum 이 /labels 에 dict 통째 replace 를 안 받으므로(값 타입은 str/int)
+      키 단위('/labels/<키>', 값=문자열)로 보낸다."""
+    patch: list[dict] = []
+    for k, v in body.items():
+        if k not in _WRITABLE:
+            continue
+        if k == "labels":
+            if isinstance(v, dict):
+                patch += [{"op": "add", "path": f"/labels/{lk}", "value": str(lv)} for lk, lv in v.items()]
+            continue
+        if v not in (None, "", {}, []):
+            patch.append({"op": "replace", "path": f"/{k}", "value": v})
     if not patch:
         raise HTTPException(status_code=400, detail="변경할 필드가 없습니다.")
     try:
