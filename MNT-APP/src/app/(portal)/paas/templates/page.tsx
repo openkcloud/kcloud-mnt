@@ -261,7 +261,7 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button disabled={pending || !f.name} onClick={submit}>{isEdit ? "저장" : "생성"}</Button>
+          <Button disabled={pending || !f.name || !f.flavor_id} onClick={submit}>{isEdit ? "저장" : "생성"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
