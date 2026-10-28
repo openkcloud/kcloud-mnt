@@ -570,6 +570,7 @@ export interface ImageSummary {
   sizeGb: number; visibility: string; status: string; protected: boolean; minDisk: number; minRam: number; createdAt: string;
   minVolumeGb: number; // 부팅 볼륨 최소 크기 = max(min_disk, 이미지 가상 크기)
   osVersion?: string;   // Glance 속성 os_version
+  kubeVersion?: string; // Glance 속성 kube_version (클러스터 템플릿용)
 }
 
 export function useImages() {
