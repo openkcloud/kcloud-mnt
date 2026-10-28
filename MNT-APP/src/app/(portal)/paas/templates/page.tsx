@@ -194,8 +194,9 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
           <TabsContent value="info" className="space-y-3 pt-3">
             <Field label="이름"><Input value={f.name ?? ""} onChange={(e) => set("name", e.target.value)} placeholder="k8s-template" /></Field>
             <Field label="이미지">
-              <DropSelect value={f.image_id ?? ""} onChange={(v) => set("image_id", v)} placeholder="이미지 선택"
-                options={(images.data ?? []).map((i) => ({ value: i.id, label: i.name }))} />
+              {/* 클러스터 템플릿은 os_distro 속성이 있는 이미지만 쓸 수 있다(Magnum 요구). 없는 이미지는 숨긴다. */}
+              <DropSelect value={f.image_id ?? ""} onChange={(v) => set("image_id", v)} placeholder="이미지 선택(os_distro 있는 이미지)"
+                options={(images.data ?? []).filter((i) => i.os).map((i) => ({ value: i.id, label: `${i.name} (${i.os})` }))} />
             </Field>
             <div className="flex items-center gap-6">
               <SwitchField label="public" checked={!!f.public} onChange={(v) => set("public", v)} />
