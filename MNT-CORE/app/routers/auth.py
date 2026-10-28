@@ -47,7 +47,7 @@ class LogoutBody(BaseModel):
 
 @router.post("/auth/logout", status_code=204)
 def logout(request: Request, body: LogoutBody | None = None, db: Session = Depends(get_db)):
-    """화면이 세션을 끝낸다 — 원인 기록(다른 탭·같은 토큰은 그 원인으로 거부) + Keycloak 세션 삭제."""
+    """화면이 세션을 끝낸다 — 원인 기록(다른 탭·같은 토큰은 그 원인으로 거부). Keycloak 세션은 화면이 이어서 끝낸다."""
     end_session(db, bearer_token(request), (body or LogoutBody()).reason)
     return None
 

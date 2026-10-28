@@ -202,15 +202,14 @@ def session_status(db: Session, token: str) -> dict:
 
 def end_session(db: Session, token: str, reason: str) -> None:
     """이 토큰의 세션을 끝낸다(화면의 로그아웃·미사용 시간 초과). 만료된 토큰도 받는다.
-    Keycloak 세션도 지운다 — 화면이 Keycloak 로그아웃 화면으로 넘어가지 않고 그 자리에서 안내할 수 있게."""
+    Keycloak 세션은 화면이 이 호출 뒤에 끝낸다(Keycloak 로그아웃) — Keycloak 에 사용자 LOGOUT 이 남게.
+    여기서 관리 API 로 먼저 지우면 화면의 Keycloak 로그아웃이 세션을 못 찾아 LOGOUT_ERROR 로 남는다."""
     if reason not in USER_END_REASONS:
         raise AuthError(400, "INVALID_REASON", f"reason 은 {USER_END_REASONS} 중 하나")
     sid = decode_token(token, settings.keycloak_audience, allow_expired=True).get("sid")
     db.execute(text("UPDATE iam_user_session SET ended_at = now(), end_reason = :r WHERE sid = :sid AND ended_at IS NULL"),
                {"sid": sid, "r": reason})
     db.commit()
-    if sid:
-        end_keycloak_session(sid)
 
 
 _BACKCHANNEL_EVENT = "http://schemas.openid.net/event/backchannel-logout"
