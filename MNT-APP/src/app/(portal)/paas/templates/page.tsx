@@ -162,6 +162,11 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
   );
   const set = (k: keyof ClusterTemplateInput, v: unknown) => setF((p) => ({ ...p, [k]: v }));
   const pending = create.isPending || update.isPending;
+  // Magnum 쿠버네티스 템플릿 필수값 — 미입력이면 생성/저장 불가(탭마다 흩어져 있어 안내도 표시)
+  const missing = [
+    !f.name && "이름", !f.image_id && "이미지",
+    !f.flavor_id && "Worker 플레이버", !f.external_network_id && "외부 네트워크",
+  ].filter(Boolean) as string[];
 
   const submit = () => {
     const labels: Record<string, string> = {};
@@ -192,8 +197,8 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
           </TabsList>
 
           <TabsContent value="info" className="space-y-3 pt-3">
-            <Field label="이름"><Input value={f.name ?? ""} onChange={(e) => set("name", e.target.value)} placeholder="k8s-template" /></Field>
-            <Field label="이미지">
+            <Field label="이름 *"><Input value={f.name ?? ""} onChange={(e) => set("name", e.target.value)} placeholder="k8s-template" /></Field>
+            <Field label="이미지 *">
               {/* 클러스터 템플릿은 os_distro 속성이 있는 이미지만 쓸 수 있다(Magnum 요구). 없는 이미지는 숨긴다. */}
               <div className="space-y-1">
                 <DropSelect value={f.image_id ?? ""} onChange={(v) => set("image_id", v)} placeholder="이미지 선택(os_distro 있는 이미지)"
@@ -215,7 +220,7 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
               <DropSelect value={f.master_flavor_id ?? ""} onChange={(v) => set("master_flavor_id", v)} placeholder="플레이버 선택"
                 options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
             </Field>
-            <Field label="Worker 플레이버">
+            <Field label="Worker 플레이버 *">
               <DropSelect value={f.flavor_id ?? ""} onChange={(v) => set("flavor_id", v)} placeholder="플레이버 선택"
                 options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
             </Field>
@@ -226,7 +231,7 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
           </TabsContent>
 
           <TabsContent value="network" className="space-y-3 pt-3">
-            <Field label="외부 네트워크">
+            <Field label="외부 네트워크 *">
               <DropSelect value={f.external_network_id ?? ""} onChange={(v) => set("external_network_id", v)} placeholder="네트워크 선택"
                 options={(networks.data?.items ?? []).map((n) => ({ value: n.name, label: n.name }))} />
             </Field>
@@ -259,9 +264,14 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
           </TabsContent>
         </Tabs>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>취소</Button>
-          <Button disabled={pending || !f.name || !f.flavor_id} onClick={submit}>{isEdit ? "저장" : "생성"}</Button>
+        <DialogFooter className="items-center gap-2 sm:justify-between">
+          {missing.length > 0
+            ? <span className="text-[11px] text-amber-700">필수 미입력: {missing.join(", ")}</span>
+            : <span />}
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onClose}>취소</Button>
+            <Button disabled={pending || missing.length > 0} onClick={submit}>{isEdit ? "저장" : "생성"}</Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
