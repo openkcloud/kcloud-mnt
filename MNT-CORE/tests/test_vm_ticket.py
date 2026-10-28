@@ -121,6 +121,57 @@ def test_VM_프로비저닝_OpenStack_키페어(client, iaas_vm, monkeypatch):
     assert len(started) == 1
 
 
+@pytest.fixture
+def user_key():
+    """사용자 본인 SSH 키(포털 DB) — 신청 키페어."""
+    kid = sql("""INSERT INTO iam_ssh_key (owner, name, public_key, fingerprint)
+                 VALUES ('ek.lee', 'ek-key', 'ssh-ed25519 BBBB ek@h', 'SHA256:ek') RETURNING id""").scalar()
+    yield kid
+    sql("DELETE FROM iam_ssh_key WHERE id = :id", id=kid)
+
+
+def test_VM_프로비저닝_신청자_SSH_키와_관리자_변경(client, iaas_vm, user_key, monkeypatch):
+    started = []
+
+    async def start(workflow_id, inp):
+        started.append(inp)
+
+    monkeypatch.setattr(settings, "temporal_api_base", "temporal.test:7233")
+    monkeypatch.setattr(runtime, "start_vm_provision", start)
+    monkeypatch.setattr(tickets, "_verified_provision_spec", lambda *a, **k: {
+        "networkId": "net-1", "networkName": "net", "networkKind": "internal", "securityGroups": []})
+    sql("""INSERT INTO tkt_request (id, type, status, project_id, requested_by, request_spec)
+           SELECT 'req-990101-403', 'vm', 'approved', :p, id, CAST(:s AS jsonb) FROM iam_user WHERE username = 'admin'""",
+        p=PROJECT, s='{"vmName": "test-vm-key", "flavorId": "f", "imageId": "i", "diskGb": 10, "cloudInit": true, '
+                     f'"keypairId": "{user_key}", "keypairName": "ek-key"}}')
+
+    def provision(**ps):
+        sql("UPDATE tkt_request SET status = 'approved' WHERE id = 'req-990101-403'")
+        return client.post("/api/core/tickets/req-990101-403/provision",
+                           json={"provisionSpec": {"networkId": "net-1", **ps}}, headers=ADMIN)
+
+    # 신청 값 그대로 — 신청자 본인 SSH 키의 공개키를 넣는다
+    assert provision().status_code == 200
+    assert (started[-1]["publicKey"], started[-1]["keypairLabel"]) == ("ssh-ed25519 BBBB ek@h", "ek-key")
+    # 관리자가 OpenStack 키페어로 바꿈 — 그 공개키, 상세·재시도용으로 provision_spec 에 남긴다
+    r = provision(novaKeypair="gy-yang-pub")
+    assert r.status_code == 200, r.text
+    assert (started[-1]["publicKey"], started[-1]["keypairLabel"]) == ("ssh-ed25519 AAAA nova@h", "gy-yang-pub")
+    assert r.json()["provisionSpec"]["novaKeypair"] == "gy-yang-pub"
+    # 비움(null) — 키를 넣지 않는다
+    r = provision(novaKeypair=None)
+    assert (started[-1]["publicKey"], started[-1]["keypairLabel"]) == (None, "미지정")
+    assert r.json()["provisionSpec"]["novaKeypair"] is None
+    # 없는 키페어 · cloud-init 없는 템플릿은 시작하지 않는다
+    n = len(started)
+    r = provision(novaKeypair="nope")
+    assert (r.status_code, r.json()["detail"]) == (400, "OpenStack 키페어를 찾을 수 없습니다")
+    sql("UPDATE tkt_request SET request_spec = request_spec || '{\"cloudInit\": false}' WHERE id = 'req-990101-403'")
+    r = provision(novaKeypair="gy-yang-pub")
+    assert (r.status_code, r.json()["detail"]) == (400, "cloud-init 이 없는 템플릿에는 키페어를 넣을 수 없습니다")
+    assert len(started) == n
+
+
 # ── 조직 없는 프로젝트(v0.4 — 프로젝트 생성 때 조직 없이 포털에 등록) ─────────────────
 
 @pytest.fixture

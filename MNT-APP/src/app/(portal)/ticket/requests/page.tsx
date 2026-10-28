@@ -145,6 +145,8 @@ function toProvisionBody(spec: ProvisionSpec) {
   return {
     networkId: spec.networkId, floatingNetworkId: spec.floatingNetworkId, fixedIp: spec.fixedIp, securityGroups: spec.securityGroups,
     host: spec.host,
+    // 바꾼 키페어 — 기록이 있을 때만(없으면 서버가 신청 값을 쓴다)
+    ...("novaKeypair" in spec ? { novaKeypair: spec.novaKeypair ?? null } : {}),
   };
 }
 
