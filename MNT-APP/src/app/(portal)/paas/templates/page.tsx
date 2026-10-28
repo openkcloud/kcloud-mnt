@@ -195,8 +195,13 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
             <Field label="이름"><Input value={f.name ?? ""} onChange={(e) => set("name", e.target.value)} placeholder="k8s-template" /></Field>
             <Field label="이미지">
               {/* 클러스터 템플릿은 os_distro 속성이 있는 이미지만 쓸 수 있다(Magnum 요구). 없는 이미지는 숨긴다. */}
-              <DropSelect value={f.image_id ?? ""} onChange={(v) => set("image_id", v)} placeholder="이미지 선택(os_distro 있는 이미지)"
-                options={(images.data ?? []).filter((i) => i.os).map((i) => ({ value: i.id, label: `${i.name} (${i.os})` }))} />
+              <div className="space-y-1">
+                <DropSelect value={f.image_id ?? ""} onChange={(v) => set("image_id", v)} placeholder="이미지 선택(os_distro 있는 이미지)"
+                  options={(images.data ?? []).filter((i) => i.os).map((i) => ({ value: i.id, label: `${i.name} (${i.os})` }))} />
+                {f.image_id && !(images.data ?? []).find((i) => i.id === f.image_id)?.kubeVersion && (
+                  <p className="text-[10px] text-amber-700">이 이미지에 kube_version 속성이 없어 클러스터 생성이 실패할 수 있습니다. IaaS → 이미지에서 kube_version 을 추가하세요.</p>
+                )}
+              </div>
             </Field>
             <div className="flex items-center gap-6">
               <SwitchField label="public" checked={!!f.public} onChange={(v) => set("public", v)} />
