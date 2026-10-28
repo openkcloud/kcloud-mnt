@@ -211,20 +211,22 @@ def test_동시_로그인_허용이면_둘_다_유지(client, keycloak_ended, mo
     assert keycloak_ended == []
 
 
-def test_로그아웃은_Keycloak_세션도_지움(client, keycloak_ended):
+def test_로그아웃_Keycloak_세션은_화면이_끝냄(client, keycloak_ended):
+    # 관리 API 로 먼저 지우면 화면의 Keycloak 로그아웃이 세션을 못 찾아 LOGOUT_ERROR 로 남는다
     t = make_token(sid="sid-out")
     assert client.get("/api/core/menus", headers=bearer(t)).status_code == 200
     assert client.post("/api/core/auth/logout", headers=bearer(t)).status_code == 204
-    assert keycloak_ended == ["sid-out"]
+    assert keycloak_ended == []
     r = client.get("/api/core/menus", headers=bearer(t))
     assert r.status_code == 401
     assert (r.json()["reason"], r.json()["detail"]) == ("logout", "로그아웃 되었습니다.")
 
 
-def test_미사용_시간_초과(client):
+def test_미사용_시간_초과(client, keycloak_ended):
     t = make_token(sid="sid-idle")
     client.get("/api/core/menus", headers=bearer(t))
     assert client.post("/api/core/auth/logout", json={"reason": "idle"}, headers=bearer(t)).status_code == 204
+    assert keycloak_ended == []  # 화면이 끝낸다
     r = client.get("/api/core/menus", headers=bearer(t))
     assert (r.json()["reason"], r.json()["detail"]) == ("idle", "오랫동안 사용하지 않아 로그아웃 되었습니다.")
     other = make_token(sid="sid-x")
