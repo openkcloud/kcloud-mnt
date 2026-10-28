@@ -224,10 +224,15 @@ function lastActivity(): number {
   }
 }
 
-/** Keycloak 미사용 시간(초) = 갱신 토큰 수명. Keycloak 설정을 바꾸면 그대로 따른다. */
+// 이 페이지에서 본 가장 긴 갱신 토큰 수명 — 세션 최대 수명이 가까워지면 Keycloak 이 남은 시간만큼 짧게 발급한다.
+// 그 짧은 수명을 미사용 시간으로 쓰면 계속 쓰던 사용자도 만료 직전에 '오랫동안 사용하지 않아'로 끝난다(만료 안내가 맞다).
+let idleLimit = 0;
+
+/** Keycloak 미사용 시간(초) = 갱신 토큰 수명(이 페이지에서 본 가장 긴 값). 늘린 설정은 바로, 줄인 설정은 새로 열 때 따른다. */
 function idleLimitSeconds(): number {
   const r = getKeycloak().refreshTokenParsed;
-  return r?.exp && r?.iat ? r.exp - r.iat : 1800;
+  if (r?.exp && r?.iat) idleLimit = Math.max(idleLimit, r.exp - r.iat);
+  return idleLimit || 1800;
 }
 
 async function checkSession() {
