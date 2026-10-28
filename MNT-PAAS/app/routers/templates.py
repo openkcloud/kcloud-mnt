@@ -105,10 +105,12 @@ def create_template(body: dict = Body(...)):
 
 @router.patch("/clustertemplates/{template_id}", dependencies=[Depends(require_admin)])
 def update_template(template_id: str, body: dict = Body(...)):
-    """수정 — Magnum 은 JSON Patch(RFC 6902) 를 받는다. 넘어온 쓰기 가능 필드를 replace."""
+    """수정 — Magnum 은 JSON Patch(RFC 6902) 를 받는다. 넘어온 쓰기 가능 필드를 replace.
+    빈 값(None·""·{}·[])은 제외한다 — null 이면 'operations needs value', 빈 dict(labels={})는
+    'Wrong type ... got dict' 로 거부한다(생성과 동일 기준)."""
     patch = [
         {"op": "replace", "path": f"/{k}", "value": v}
-        for k, v in body.items() if k in _WRITABLE
+        for k, v in body.items() if k in _WRITABLE and v not in (None, "", {}, [])
     ]
     if not patch:
         raise HTTPException(status_code=400, detail="변경할 필드가 없습니다.")
