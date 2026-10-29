@@ -112,7 +112,8 @@ def test_VM_프로비저닝_OpenStack_키페어(client, iaas_vm, monkeypatch):
     body = {"provisionSpec": {"networkId": "net-1"}}
     r = client.post("/api/core/tickets/req-990101-402/provision", json=body, headers=ADMIN)
     assert r.status_code == 200, r.text
-    assert (started[0]["publicKey"], started[0]["keypairLabel"]) == ("ssh-ed25519 AAAA nova@h", "gy-yang-pub")
+    assert ((started[0]["publicKey"], started[0]["keypairName"], started[0]["keypairLabel"])
+            == ("ssh-ed25519 AAAA nova@h", "gy-yang-pub", "gy-yang-pub"))
     # 신청 뒤 Nova 에서 지웠으면 시작하지 않는다
     sql("UPDATE tkt_request SET status = 'failed' WHERE id = 'req-990101-402'")
     iaas_vm.clear()
@@ -152,15 +153,17 @@ def test_VM_프로비저닝_신청자_SSH_키와_관리자_변경(client, iaas_v
 
     # 신청 값 그대로 — 신청자 본인 SSH 키의 공개키를 넣는다
     assert provision().status_code == 200
-    assert (started[-1]["publicKey"], started[-1]["keypairLabel"]) == ("ssh-ed25519 BBBB ek@h", "ek-key")
+    assert ((started[-1]["publicKey"], started[-1]["keypairName"], started[-1]["keypairLabel"])
+            == ("ssh-ed25519 BBBB ek@h", "ek-key", "ek-key"))
     # 관리자가 OpenStack 키페어로 바꿈 — 그 공개키, 상세·재시도용으로 provision_spec 에 남긴다
     r = provision(novaKeypair="gy-yang-pub")
     assert r.status_code == 200, r.text
-    assert (started[-1]["publicKey"], started[-1]["keypairLabel"]) == ("ssh-ed25519 AAAA nova@h", "gy-yang-pub")
+    assert ((started[-1]["publicKey"], started[-1]["keypairName"], started[-1]["keypairLabel"])
+            == ("ssh-ed25519 AAAA nova@h", "gy-yang-pub", "gy-yang-pub"))
     assert r.json()["provisionSpec"]["novaKeypair"] == "gy-yang-pub"
     # 비움(null) — 키를 넣지 않는다
     r = provision(novaKeypair=None)
-    assert (started[-1]["publicKey"], started[-1]["keypairLabel"]) == (None, "미지정")
+    assert (started[-1]["publicKey"], started[-1]["keypairName"], started[-1]["keypairLabel"]) == (None, None, "미지정")
     assert r.json()["provisionSpec"]["novaKeypair"] is None
     # 없는 키페어 · cloud-init 없는 템플릿은 시작하지 않는다
     n = len(started)

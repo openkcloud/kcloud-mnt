@@ -720,6 +720,7 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
     db.commit()
 
     accel = ", ".join(f"{a['kind']} × {a['count']}" for a in rs.get("accelerators") or [])
+    key_name = nova_name if key_changed else rs.get("keypairName")  # 넣는 키 이름(없으면 키를 넣지 않음)
     inp = {
         "ticketId": ticket_id, "attempt": attempt, "projectId": t["project_id"],
         "vmName": rs["vmName"], "flavorId": rs["flavorId"], "imageId": rs["imageId"],
@@ -730,8 +731,8 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         "floatingNetworkId": spec.get("floatingNetworkId"),
         "host": spec.get("host"),
         "publicKey": public_key,
-        "keypairLabel": (nova_name if key_changed else rs.get("keypairName"))
-                        or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
+        "keypairName": key_name,  # Nova 메타데이터로 남겨 가상서버 상세에 표시
+        "keypairLabel": key_name or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
         "hasAccelerator": bool(rs.get("deviceProfile")),
         "acceleratorLabel": accel or rs.get("deviceProfile"),
         # 누르기 전 상태·값 — 시작 실패·시작 전 취소 때 되돌린다(provision_queue.restore)
@@ -907,12 +908,26 @@ def _check_node_counts(master_count: int, node_count: int) -> None:
         raise HTTPException(400, f"Worker 수는 1 ~ {_CLUSTER_MAX_WORKERS} 이어야 합니다")
 
 
-def _cluster_template(template_id: str, token: str) -> dict:
-    """신청할 수 있는 템플릿(공개·숨김 아님)."""
+def _cluster_template(template_id: str, project_id: str, token: str) -> dict:
+    """신청할 수 있는 템플릿 — 숨김이 아니고 공개이거나 신청 프로젝트 소유."""
     t = next((x for x in _paas("/clustertemplates", token)["items"] if x["id"] == template_id), None)
-    if not t or not t.get("public") or t.get("hidden"):
+    if not t or t.get("hidden") or not (t.get("public") or t.get("project_id") == project_id):
         raise HTTPException(400, "신청할 수 없는 클러스터 템플릿입니다")
     return t
+
+
+def _external_network_id(nets: list[dict], ref: str) -> str:
+    """템플릿 외부 네트워크(ID 또는 이름 — 예전 포털 템플릿 화면은 이름으로 저장) → 외부망 ID.
+    Floating IP 확인은 라우터 게이트웨이의 네트워크 ID 와 비교하므로 ID 가 필요하다. nets = 프로젝트 네트워크 목록(외부망 포함)."""
+    ext = [n for n in nets if n["kind"] == "external"]
+    if any(n["id"] == ref for n in ext):
+        return ref
+    named = [n for n in ext if n["name"] == ref]
+    if not named:
+        raise HTTPException(400, f"클러스터 템플릿의 외부 네트워크({ref})를 찾을 수 없습니다")
+    if len(named) > 1:
+        raise HTTPException(400, f"클러스터 템플릿의 외부 네트워크({ref})와 이름이 같은 외부망이 여러 개입니다 — 템플릿에서 다시 고르세요")
+    return named[0]["id"]
 
 
 @router.get("/tickets/cluster-name-check")
@@ -955,7 +970,7 @@ def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(c
     chk = _paas(f"/cluster-name-check?name={quote(body.clusterName, safe='')}", user.token)
     if not chk["available"]:
         raise HTTPException(409, chk["reason"])
-    template = _cluster_template(body.templateId, user.token)
+    template = _cluster_template(body.templateId, body.projectId, user.token)
     master, worker = _cluster_flavors(body.projectId, body.masterFlavorId, body.flavorId, user.token)
     _check_nova_keypair(body.novaKeypair, body.keypairId, user)
 
@@ -1065,7 +1080,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     master_count = ps.masterCount or rs["masterCount"]
     node_count = ps.nodeCount or rs["nodeCount"]
     _check_node_counts(master_count, node_count)
-    template = _cluster_template(rs["templateId"], token)
+    template = _cluster_template(rs["templateId"], pid, token)
     floating = template.get("external_network_id")
     if not floating:
         raise HTTPException(400, "클러스터 템플릿에 외부 네트워크(API Floating IP 풀)가 없습니다")
@@ -1073,7 +1088,9 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
 
     # 망·서브넷 — 프로젝트가 쓸 수 있는 망(외부망 제외), DHCP 켜진 서브넷, 그 서브넷으로 API 에 Floating IP 를 붙일 수 있어야.
     # 외부망에 노드를 바로 붙이면 API 로드밸런서(OVN) 주소에 밖에서 닿지 못한다(2026-10-22 req-261022-007 — No route to host)
-    net = next((n for n in _iaas(_project_path(pid) + "/networks", token)["items"] if n["id"] == ps.networkId), None)
+    nets = _iaas(_project_path(pid) + "/networks", token)["items"]
+    floating = _external_network_id(nets, floating)
+    net = next((n for n in nets if n["id"] == ps.networkId), None)
     if not net:
         raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
     if net["kind"] == "external":

@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app import auth, main
 from app.openstack_client import magnum
+from app.routers import templates
 
 A, D = "허용", "거부"
 P = "/api/paas"
@@ -92,6 +93,30 @@ def test_클러스터_목록은_접근_권한이_있는_것만(monkeypatch):
     assert [c["id"] for c in client_as(USER).get(P + "/clusters").json()["items"]] == [MINE]
     assert f"/clusters/{OTHER}" not in seen  # 권한 없는 클러스터는 상세도 조회하지 않는다
     assert [c["id"] for c in client_as(ADMIN).get(P + "/clusters").json()["items"]] == [MINE, OTHER]
+
+
+# ── 템플릿 소유 프로젝트 ─────────────────────────────────────────
+
+def test_템플릿은_고른_프로젝트_소유로_생성(monkeypatch):
+    # Magnum 은 요청 토큰의 프로젝트를 템플릿 소유로 둔다 — 고른 프로젝트 범위의 클라이언트로 만든다
+    sent = []
+
+    class Scoped:
+        def __init__(self, project_id):
+            self.project_id = project_id
+
+        def request(self, method, path, json=None):
+            sent.append((self.project_id, method, path, json))
+            return {"uuid": "t-new", "project_id": self.project_id}
+    monkeypatch.setattr(templates, "for_project", Scoped)
+    r = client_as(ADMIN).post(P + "/clustertemplates", json={"name": "t", "image_id": "i", "project_id": "p1"})
+    assert r.status_code == 201, r.text
+    assert sent == [("p1", "POST", "/clustertemplates", {"name": "t", "image_id": "i", "coe": "kubernetes"})]
+    r = client_as(ADMIN).post(P + "/clustertemplates", json={"name": "t", "image_id": "i"})
+    assert (r.status_code, r.json()["detail"]) == (400, "프로젝트를 선택하세요")
+    # 목록 — 관리자 계정이라 Magnum 이 모든 프로젝트 템플릿을 준다. 소유 프로젝트를 함께 돌려준다(신청 화면이 거른다)
+    monkeypatch.setattr(magnum, "request", lambda method, path, json=None: {"clustertemplates": [{"uuid": "t1", "project_id": "p1"}]})
+    assert client_as(USER).get(P + "/clustertemplates").json()["items"][0]["project_id"] == "p1"
 
 
 # ── 사용자 확인(MNT-CORE /auth/me) ───────────────────────────────

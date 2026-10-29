@@ -875,7 +875,8 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
 
   const { data: flavors = [], isLoading: flavorLoading, error: flavorError } = useProjectFlavors(project || undefined);
   const { isAdmin, data: myKeypairs = [], isLoading: keyLoading, error: keyError } = useRequestKeypairs();
-  const templates = allTemplates.filter((t) => t.public && !t.hidden);
+  // 신청할 수 있는 템플릿 — 숨김이 아니고 공개이거나 고른 프로젝트 소유(MNT-CORE 확인과 같음)
+  const templates = allTemplates.filter((t) => !t.hidden && (t.public || t.project_id === project));
   const modelOf = useAccelModel();
 
   // 이름 형식 검사 후 입력이 멈추면(0.4초) 중복 확인 — 모든 프로젝트의 클러스터 + 진행 중 신청

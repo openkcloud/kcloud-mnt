@@ -278,6 +278,28 @@ def test_노드_지정_권한_확인과_생성_요청(monkeypatch):
     assert sent[0]["hypervisor_hostname"] == "compute1" and "hypervisor_hostname" not in sent[1]
 
 
+def test_키페어_이름은_서버_메타데이터로(monkeypatch):
+    # 포털은 공개키를 cloud-init 으로 넣어 Nova key_name 이 비므로, 넣은 키 이름을 메타데이터(okc_keypair)로 남긴다
+    sent = []
+
+    def boot(method, path, *, json=None, **k):
+        sent.append(json["server"])
+        return type("R", (), {"json": lambda self: {"server": {"id": "s1"}}})()
+    monkeypatch.setattr(servers, "_nova_req", boot)
+    body = {"name": "v", "flavorId": "f", "imageId": "i", "volumeGb": 1, "networkId": "n"}
+    servers._boot_server("p1", servers.CreateServerBody(**body, publicKey="ssh-ed25519 AAAA", keypairName="ek-key"),
+                         "vol")
+    servers._boot_server("p1", servers.CreateServerBody(**body), "vol")
+    assert sent[0]["metadata"] == {"okc_keypair": "ek-key"} and "metadata" not in sent[1]
+
+    # 상세 키페어 — key_name 이 있으면 그 값(Horizon·Magnum 생성), 없으면 메타데이터
+    def key(s):
+        return servers._to_server({"id": "s1", **s}, {})["keyName"]
+    assert key({"key_name": "nova-key", "metadata": {"okc_keypair": "ek-key"}}) == "nova-key"
+    assert key({"key_name": None, "metadata": {"okc_keypair": "ek-key"}}) == "ek-key"
+    assert key({"key_name": None, "metadata": {}}) is None
+
+
 def test_플레이버가_가리키는_디바이스_프로파일이_없음(monkeypatch):
     fl = [{"id": "f1", "name": "rngd"}, {"id": "f2", "name": "2rngd"}, {"id": "f3", "name": "plain"}]
     specs = {"f1": {"accel:device_profile": "dp-rngd"}, "f2": {"accel:device_profile": "dp-2rngd"}, "f3": {}}

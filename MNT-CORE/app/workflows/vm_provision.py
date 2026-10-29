@@ -132,6 +132,8 @@ class VmProvision(ProvisionSteps):
                                     "publicKey")}
         if inp.get("host"):  # 관리자가 고른 노드(노드 지정 권한이 있을 때만) — 예전 입력에는 키가 없다
             spec["host"] = inp["host"]
+        if inp.get("keypairName"):  # 넣는 키 이름 — Nova 메타데이터로 남겨 상세에 표시. 예전 입력에는 키가 없다
+            spec["keypairName"] = inp["keypairName"]
         server_id = await self._iaas("iaas.create_server", inp["projectId"], {"name": inp["vmName"], **spec}, volume_id,
                                      retry=NO_RETRY, timeout=timedelta(seconds=90))
         self.res["serverId"] = server_id
