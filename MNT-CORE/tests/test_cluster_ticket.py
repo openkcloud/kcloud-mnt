@@ -15,8 +15,11 @@ FLAVORS = [
 ]
 TEMPLATES = [
     {"id": "t1", "name": "ct-k8s-1.36.2", "kubeVersion": "1.36.2", "public": True, "hidden": False,
-     "external_network_id": "pub"},
+     "external_network_id": "public"},
     {"id": "t-hidden", "name": "hidden", "public": True, "hidden": True},
+    # 외부 네트워크를 이름으로 저장한 템플릿(예전 포털 템플릿 화면) · 없는 외부 네트워크
+    {"id": "t-byname", "name": "byname", "public": True, "hidden": False, "external_network_id": "public-shared"},
+    {"id": "t-badext", "name": "badext", "public": True, "hidden": False, "external_network_id": "nope"},
     {"id": "t-mine", "name": "mine", "public": False, "hidden": False, "project_id": PROJECT},
     {"id": "t-other", "name": "other", "public": False, "hidden": False, "project_id": "other-prj"},
 ]
@@ -191,12 +194,27 @@ def test_클러스터_프로비저닝(client, fake, started):
     assert inp | {"need": None} == {
         "ticketId": tid, "attempt": 1, "projectId": PROJECT, "projectName": "okc_test_prj", "clusterName": "test-cl",
         "templateId": "t1", "masterCount": 1, "masterFlavorId": "m1.large", "nodeCount": 2, "flavorId": "m1.rngd",
-        "networkId": "net", "subnetId": "sub-on", "floatingNetworkId": "pub",
+        "networkId": "net", "subnetId": "sub-on", "floatingNetworkId": "public",
         "keypair": None, "namespace": "okc-test-prj", "need": None, "skipSetup": False}  # keypair 없음 = 템플릿 키페어
     assert inp["need"] == {"instances": 3, "vcpu": 12, "ramGb": 24}
     assert any("subnetId=sub-on" in p for p in fake["iaas"])  # Floating IP 는 고른 서브넷 기준으로 판정
     spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
     assert (spec["networkName"], spec["subnetCidr"], spec["flavorName"]) == ("my-network", "10.0.1.0/24", "m1.large.rngd")
+
+
+def test_클러스터_프로비저닝_템플릿_외부망이_이름이면_ID_로(client, fake, started):
+    # Floating IP 확인(라우터 게이트웨이 = 네트워크 ID 비교)·워크플로에는 외부망 ID 를 넘긴다
+    tid = _cluster_ticket()
+    sql("UPDATE tkt_request SET request_spec = request_spec || '{\"templateId\": \"t-byname\"}' WHERE id = :id", id=tid)
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN).status_code == 200
+    assert started[0][1]["floatingNetworkId"] == "pub-shared"
+    assert any("floatingNetworkId=pub-shared" in p for p in fake["iaas"])
+    # 없는 외부망 — 시작하지 않는다
+    sql("UPDATE tkt_request SET status = 'approved', request_spec = request_spec || '{\"templateId\": \"t-badext\"}' "
+        "WHERE id = :id", id=tid)
+    r = client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (400, "클러스터 템플릿의 외부 네트워크(nope)를 찾을 수 없습니다")
+    assert len(started) == 1
 
 
 def test_마감_기록은_프로비저닝_시작자와_시각_재시도면_비움(client, fake, started):

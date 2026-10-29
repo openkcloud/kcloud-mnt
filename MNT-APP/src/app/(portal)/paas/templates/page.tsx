@@ -29,7 +29,7 @@ import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useAuth } from "@/lib/auth";
 import {
-  useProjects, useProjectImages, useProjectFlavors, useProjectNetworks, useNetwork, useNovaKeypairs,
+  useProjects, useProjectImages, useProjectFlavors, useProjectNetworks, useNetworks, useNetwork, useNovaKeypairs,
 } from "@/lib/iaas-api";
 import {
   useClusterTemplates, useCreateTemplate, useUpdateTemplate, useDeleteTemplate,
@@ -40,6 +40,7 @@ export default function TemplatesPage() {
   const isAdmin = useAuth((s) => s.user?.role === "admin");
   const templates = useClusterTemplates();
   const { data: projData } = useProjects();
+  const { data: netData } = useNetworks();
   const confirm = useConfirm();
   const del = useDeleteTemplate();
   const [q, setQ] = React.useState("");
@@ -52,6 +53,12 @@ export default function TemplatesPage() {
     for (const p of projData?.items ?? []) m[p.id] = p.name;
     return (id: string) => m[id] || id.slice(0, 8) || "—";
   }, [projData]);
+  // 외부 네트워크 — ID 로 저장된 값은 이름으로 보인다(예전 템플릿은 이름 그대로)
+  const netName = React.useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const n of netData?.items ?? []) m[n.id] = n.name;
+    return (v: string) => m[v] || v;
+  }, [netData]);
   // 프로젝트 필터 — 템플릿이 있는 프로젝트만
   const projOptions = React.useMemo(() => {
     const ids = Array.from(new Set((templates.data ?? []).map((t) => t.project_id).filter((id): id is string => !!id)));
@@ -131,7 +138,7 @@ export default function TemplatesPage() {
                     </div>
                   </TableCell>
                   <TableCell className="font-mono text-xs">{t.master_flavor_id || t.flavor_id || "—"} / {t.flavor_id || "—"}</TableCell>
-                  <TableCell className="font-mono text-xs">{t.external_network_id || "—"}</TableCell>
+                  <TableCell className="font-mono text-xs">{t.external_network_id ? netName(t.external_network_id) : "—"}</TableCell>
                   <TableCell className="text-xs font-medium">{t.project_id ? projName(t.project_id) : "—"}</TableCell>
                   <TableCell>{t.public ? <Badge variant="success" className="text-[10px]">public</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
                   <TableCell className="font-mono text-[11px] text-muted-foreground">
@@ -202,7 +209,10 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
   const images = useProjectImages(project);
   const flavors = useProjectFlavors(project);
   const networks = useProjectNetworks(project);
-  // 고정 네트워크 · 서브넷은 ID 로 저장 — 이름은 겹칠 수 있고 겹치면 Magnum 이 거절한다(Multiple … same name)
+  // 네트워크 · 서브넷은 ID 로 저장 — 이름은 겹칠 수 있고 겹치면 Magnum 이 거절한다(Multiple … same name).
+  // 외부 네트워크도 ID — MNT-CORE 의 Floating IP 확인이 라우터 게이트웨이의 네트워크 ID 와 비교한다
+  const extNets = (networks.data ?? []).filter((n) => n.kind === "external");
+  const extNet = pickByIdOrName(extNets, f.external_network_id);
   const fixedNets = (networks.data ?? []).filter((n) => n.kind !== "external");
   const fixedNet = pickByIdOrName(fixedNets, f.fixed_network);
   // 프로젝트를 바꾸면 그 프로젝트에 매인 값(이미지·플레이버·고정 네트워크)을 비운다 — 외부망은 프로젝트와 무관
@@ -288,9 +298,9 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
 
           <TabsContent value="network" className="space-y-3 pt-3">
             <Field label="외부 네트워크 *">
-              <DropSelect value={f.external_network_id ?? ""} onChange={(v) => set("external_network_id", v)}
+              <DropSelect value={extNet?.id ?? ""} onChange={(v) => set("external_network_id", v)}
                 placeholder={project ? "네트워크 선택" : "프로젝트 먼저 선택"}
-                options={(networks.data ?? []).filter((n) => n.kind === "external").map((n) => ({ value: n.name, label: n.name }))} />
+                options={extNets.map((n) => ({ value: n.id, label: n.name }))} />
             </Field>
             <Field label="네트워크 드라이버"><Input value={f.network_driver ?? ""} onChange={(e) => set("network_driver", e.target.value)} className="font-mono text-xs" placeholder="calico" /></Field>
             <div className="grid grid-cols-2 gap-3">

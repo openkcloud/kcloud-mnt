@@ -890,6 +890,20 @@ def _cluster_template(template_id: str, project_id: str, token: str) -> dict:
     return t
 
 
+def _external_network_id(nets: list[dict], ref: str) -> str:
+    """템플릿 외부 네트워크(ID 또는 이름 — 예전 포털 템플릿 화면은 이름으로 저장) → 외부망 ID.
+    Floating IP 확인은 라우터 게이트웨이의 네트워크 ID 와 비교하므로 ID 가 필요하다. nets = 프로젝트 네트워크 목록(외부망 포함)."""
+    ext = [n for n in nets if n["kind"] == "external"]
+    if any(n["id"] == ref for n in ext):
+        return ref
+    named = [n for n in ext if n["name"] == ref]
+    if not named:
+        raise HTTPException(400, f"클러스터 템플릿의 외부 네트워크({ref})를 찾을 수 없습니다")
+    if len(named) > 1:
+        raise HTTPException(400, f"클러스터 템플릿의 외부 네트워크({ref})와 이름이 같은 외부망이 여러 개입니다 — 템플릿에서 다시 고르세요")
+    return named[0]["id"]
+
+
 @router.get("/tickets/cluster-name-check")
 def cluster_name_check(name: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     """클러스터 이름 사용 가능 여부(모든 프로젝트 기준)."""
@@ -1048,7 +1062,9 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
 
     # 망·서브넷 — 프로젝트가 쓸 수 있는 망(외부망 제외), DHCP 켜진 서브넷, 그 서브넷으로 API 에 Floating IP 를 붙일 수 있어야.
     # 외부망에 노드를 바로 붙이면 API 로드밸런서(OVN) 주소에 밖에서 닿지 못한다(2026-10-22 req-261022-007 — No route to host)
-    net = next((n for n in _iaas(_project_path(pid) + "/networks", token)["items"] if n["id"] == ps.networkId), None)
+    nets = _iaas(_project_path(pid) + "/networks", token)["items"]
+    floating = _external_network_id(nets, floating)
+    net = next((n for n in nets if n["id"] == ps.networkId), None)
     if not net:
         raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
     if net["kind"] == "external":
