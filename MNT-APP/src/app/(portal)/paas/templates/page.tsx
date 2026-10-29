@@ -1,7 +1,8 @@
 "use client";
 /**
  * 클러스터 템플릿 — Magnum ClusterTemplate 관리(관리자 전용, Horizon 과 동일 범위).
- * 클러스터 생성의 설계도. 이미지·플레이버·네트워크는 IaaS 조회 훅으로 드롭다운.
+ * 클러스터 생성의 설계도. 고른 프로젝트 소유로 만든다(Horizon 과 같음) — 이미지·플레이버·고정 네트워크는 그 프로젝트가
+ * 쓸 수 있는 것(소유 + 공유)만, 외부 네트워크는 외부망만 드롭다운.
  * 레이아웃·폰트는 IaaS 목록 화면 규약과 동일.
  */
 import * as React from "react";
@@ -27,7 +28,9 @@ import {
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useAuth } from "@/lib/auth";
-import { useImages, useFlavors, useNetworks, useNetwork, useNovaKeypairs } from "@/lib/iaas-api";
+import {
+  useProjects, useProjectImages, useProjectFlavors, useProjectNetworks, useNetwork, useNovaKeypairs,
+} from "@/lib/iaas-api";
 import {
   useClusterTemplates, useCreateTemplate, useUpdateTemplate, useDeleteTemplate,
   type ClusterTemplate, type ClusterTemplateInput,
@@ -36,16 +39,33 @@ import {
 export default function TemplatesPage() {
   const isAdmin = useAuth((s) => s.user?.role === "admin");
   const templates = useClusterTemplates();
+  const { data: projData } = useProjects();
   const confirm = useConfirm();
   const del = useDeleteTemplate();
   const [q, setQ] = React.useState("");
+  const [projFilter, setProjFilter] = React.useState("all");
+  const [pubFilter, setPubFilter] = React.useState("all"); // all | public | private
   const [editing, setEditing] = React.useState<ClusterTemplate | "new" | null>(null);
+
+  const projName = React.useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const p of projData?.items ?? []) m[p.id] = p.name;
+    return (id: string) => m[id] || id.slice(0, 8) || "—";
+  }, [projData]);
+  // 프로젝트 필터 — 템플릿이 있는 프로젝트만
+  const projOptions = React.useMemo(() => {
+    const ids = Array.from(new Set((templates.data ?? []).map((t) => t.project_id).filter((id): id is string => !!id)));
+    return ids.map((id) => ({ id, name: projName(id) })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [templates.data, projName]);
 
   if (!isAdmin) {
     return <Card><div className="py-10 text-center text-sm text-muted-foreground">관리자 전용 화면입니다.</div></Card>;
   }
 
-  const items = (templates.data ?? []).filter((t) => !q || t.name.toLowerCase().includes(q.toLowerCase()));
+  const items = (templates.data ?? []).filter((t) =>
+    (!q || t.name.toLowerCase().includes(q.toLowerCase()))
+    && (projFilter === "all" || t.project_id === projFilter)
+    && (pubFilter === "all" || t.public === (pubFilter === "public")));
 
   async function onDelete(t: ClusterTemplate) {
     if (!(await confirm({ title: "템플릿 삭제", destructive: true, confirmLabel: "삭제", description: `'${t.name}' 템플릿을 삭제할까요? 이 템플릿으로 만든 클러스터에는 영향이 없습니다.` }))) return;
@@ -56,6 +76,21 @@ export default function TemplatesPage() {
     <div className="space-y-4">
       <Card className="p-4">
         <div className="flex items-center gap-3">
+          <Select value={projFilter} onValueChange={setProjFilter}>
+            <SelectTrigger className="w-48"><SelectValue placeholder="프로젝트 필터" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">전체 프로젝트</SelectItem>
+              {projOptions.map((p) => (<SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>))}
+            </SelectContent>
+          </Select>
+          <Select value={pubFilter} onValueChange={setPubFilter}>
+            <SelectTrigger className="w-36"><SelectValue placeholder="공용 상태" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">공용 상태</SelectItem>
+              <SelectItem value="public">공용</SelectItem>
+              <SelectItem value="private">비공용</SelectItem>
+            </SelectContent>
+          </Select>
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
             <Input placeholder="템플릿 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
@@ -80,7 +115,8 @@ export default function TemplatesPage() {
                 <TableHead>템플릿</TableHead>
                 <TableHead>플레이버(Control Plane / Worker)</TableHead>
                 <TableHead>네트워크</TableHead>
-                <TableHead>공개</TableHead>
+                <TableHead>프로젝트</TableHead>
+                <TableHead>공용</TableHead>
                 <TableHead>LB/FIP</TableHead>
                 <TableHead className="w-24" />
               </TableRow>
@@ -96,6 +132,7 @@ export default function TemplatesPage() {
                   </TableCell>
                   <TableCell className="font-mono text-xs">{t.master_flavor_id || t.flavor_id || "—"} / {t.flavor_id || "—"}</TableCell>
                   <TableCell className="font-mono text-xs">{t.external_network_id || "—"}</TableCell>
+                  <TableCell className="text-xs font-medium">{t.project_id ? projName(t.project_id) : "—"}</TableCell>
                   <TableCell>{t.public ? <Badge variant="success" className="text-[10px]">public</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
                   <TableCell className="font-mono text-[11px] text-muted-foreground">
                     {[t.master_lb_enabled ? "LB" : null, t.floating_ip_enabled ? "FIP" : null].filter(Boolean).join(" · ") || "—"}
@@ -110,7 +147,7 @@ export default function TemplatesPage() {
                 </TableRow>
               ))}
               {items.length === 0 && (
-                <TableRow><TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">템플릿이 없습니다.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">템플릿이 없습니다.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
@@ -126,9 +163,7 @@ export default function TemplatesPage() {
 function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClose: () => void }) {
   const create = useCreateTemplate();
   const update = useUpdateTemplate();
-  const images = useImages();
-  const flavors = useFlavors();
-  const networks = useNetworks();
+  const projects = useProjects();
   const keypairs = useNovaKeypairs();
 
   // base 에 id 가 있고 updatedAt 등이 있으면 '수정', 복제는 id 가 있어도 이름이 -copy → 생성으로.
@@ -137,6 +172,7 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
 
   const [f, setF] = React.useState<ClusterTemplateInput>(() => ({
     name: base?.name ?? "",
+    project_id: base?.project_id ?? "",
     coe: base?.coe ?? "kubernetes",
     image_id: base?.image_id ?? "",
     flavor_id: base?.flavor_id ?? "",
@@ -161,10 +197,19 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
     Object.entries(base?.labels ?? {}).map(([k, v]) => `${k}=${v}`).join("\n"),
   );
   const set = (k: keyof ClusterTemplateInput, v: unknown) => setF((p) => ({ ...p, [k]: v }));
+  // 소유 프로젝트가 쓸 수 있는 자원 — 이미지(공개·소유·공유받음) · 플레이버(공개·접근 허용) · 네트워크(소유·공유·외부)
+  const project = f.project_id || undefined;
+  const images = useProjectImages(project);
+  const flavors = useProjectFlavors(project);
+  const networks = useProjectNetworks(project);
+  // 프로젝트를 바꾸면 그 프로젝트에 매인 값(이미지·플레이버·고정 네트워크)을 비운다 — 외부망은 프로젝트와 무관
+  const setProject = (v: string) => setF((p) => ({
+    ...p, project_id: v, image_id: "", flavor_id: "", master_flavor_id: "", fixed_network: "", fixed_subnet: "",
+  }));
   const pending = create.isPending || update.isPending;
   // Magnum 쿠버네티스 템플릿 필수값 — 미입력이면 생성/저장 불가(탭마다 흩어져 있어 안내도 표시)
   const missing = [
-    !f.name && "이름", !f.image_id && "이미지",
+    !f.name && "이름", !f.project_id && "프로젝트", !f.image_id && "이미지",
     !f.flavor_id && "Worker 플레이버", !f.external_network_id && "외부 네트워크",
   ].filter(Boolean) as string[];
 
@@ -198,10 +243,16 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
 
           <TabsContent value="info" className="space-y-3 pt-3">
             <Field label="이름 *"><Input value={f.name ?? ""} onChange={(e) => set("name", e.target.value)} placeholder="k8s-template" /></Field>
+            <Field label="프로젝트 *">
+              {/* 소유 프로젝트 — Magnum 은 만든 뒤 바꿀 수 없어 수정 때는 잠근다 */}
+              <DropSelect value={f.project_id ?? ""} onChange={setProject} disabled={isEdit} placeholder="템플릿을 둘 프로젝트 선택"
+                options={(projects.data?.items ?? []).map((p) => ({ value: p.id, label: p.name }))} />
+            </Field>
             <Field label="이미지 *">
               {/* 클러스터 템플릿은 os_distro 속성이 있는 이미지만 쓸 수 있다(Magnum 요구). 없는 이미지는 숨긴다. */}
               <div className="space-y-1">
-                <DropSelect value={f.image_id ?? ""} onChange={(v) => set("image_id", v)} placeholder="이미지 선택(os_distro 있는 이미지)"
+                <DropSelect value={f.image_id ?? ""} onChange={(v) => set("image_id", v)}
+                  placeholder={project ? "이미지 선택(os_distro 있는 이미지)" : "프로젝트 먼저 선택"}
                   options={(images.data ?? []).filter((i) => i.os).map((i) => ({ value: i.id, label: `${i.name} (${i.os})` }))} />
                 {f.image_id && !(images.data ?? []).find((i) => i.id === f.image_id)?.kubeVersion && (
                   <p className="text-[10px] text-amber-700">이 이미지에 kube_version 속성이 없어 클러스터 생성이 실패할 수 있습니다. IaaS → 이미지에서 kube_version 을 추가하세요.</p>
@@ -217,11 +268,13 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
 
           <TabsContent value="node" className="space-y-3 pt-3">
             <Field label="Control Plane 플레이버">
-              <DropSelect value={f.master_flavor_id ?? ""} onChange={(v) => set("master_flavor_id", v)} placeholder="플레이버 선택"
+              <DropSelect value={f.master_flavor_id ?? ""} onChange={(v) => set("master_flavor_id", v)}
+                placeholder={project ? "플레이버 선택" : "프로젝트 먼저 선택"}
                 options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
             </Field>
             <Field label="Worker 플레이버 *">
-              <DropSelect value={f.flavor_id ?? ""} onChange={(v) => set("flavor_id", v)} placeholder="플레이버 선택"
+              <DropSelect value={f.flavor_id ?? ""} onChange={(v) => set("flavor_id", v)}
+                placeholder={project ? "플레이버 선택" : "프로젝트 먼저 선택"}
                 options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
             </Field>
             <Field label="키페어(선택)">
@@ -232,18 +285,20 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
 
           <TabsContent value="network" className="space-y-3 pt-3">
             <Field label="외부 네트워크 *">
-              <DropSelect value={f.external_network_id ?? ""} onChange={(v) => set("external_network_id", v)} placeholder="네트워크 선택"
-                options={(networks.data?.items ?? []).map((n) => ({ value: n.name, label: n.name }))} />
+              <DropSelect value={f.external_network_id ?? ""} onChange={(v) => set("external_network_id", v)}
+                placeholder={project ? "네트워크 선택" : "프로젝트 먼저 선택"}
+                options={(networks.data ?? []).filter((n) => n.kind === "external").map((n) => ({ value: n.name, label: n.name }))} />
             </Field>
             <Field label="네트워크 드라이버"><Input value={f.network_driver ?? ""} onChange={(e) => set("network_driver", e.target.value)} className="font-mono text-xs" placeholder="calico" /></Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="고정 네트워크(선택)">
-                <DropSelect value={f.fixed_network ?? ""} onChange={(v) => { set("fixed_network", v); set("fixed_subnet", ""); }} placeholder="네트워크 선택"
-                  options={(networks.data?.items ?? []).map((n) => ({ value: n.name, label: n.name }))} />
+                <DropSelect value={f.fixed_network ?? ""} onChange={(v) => { set("fixed_network", v); set("fixed_subnet", ""); }}
+                  placeholder={project ? "네트워크 선택" : "프로젝트 먼저 선택"}
+                  options={(networks.data ?? []).filter((n) => n.kind !== "external").map((n) => ({ value: n.name, label: n.name }))} />
               </Field>
               <Field label="고정 서브넷(선택)">
                 <FixedSubnetSelect
-                  networkId={(networks.data?.items ?? []).find((n) => n.name === f.fixed_network)?.id}
+                  networkId={(networks.data ?? []).find((n) => n.kind !== "external" && n.name === f.fixed_network)?.id}
                   value={f.fixed_subnet ?? ""} onChange={(v) => set("fixed_subnet", v)} />
               </Field>
             </div>
@@ -293,9 +348,9 @@ function SwitchField({ label, checked, onChange }: { label: string; checked: boo
     </label>
   );
 }
-function DropSelect({ value, onChange, options, placeholder }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; placeholder: string }) {
+function DropSelect({ value, onChange, options, placeholder, disabled }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; placeholder: string; disabled?: boolean }) {
   return (
-    <Select value={value || undefined} onValueChange={onChange}>
+    <Select value={value || undefined} onValueChange={onChange} disabled={disabled}>
       <SelectTrigger><SelectValue placeholder={placeholder} /></SelectTrigger>
       <SelectContent>
         {options.map((o) => <SelectItem key={o.value} value={o.value} className="font-mono text-xs">{o.label}</SelectItem>)}

@@ -882,10 +882,10 @@ def _check_node_counts(master_count: int, node_count: int) -> None:
         raise HTTPException(400, f"Worker 수는 1 ~ {_CLUSTER_MAX_WORKERS} 이어야 합니다")
 
 
-def _cluster_template(template_id: str, token: str) -> dict:
-    """신청할 수 있는 템플릿(공개·숨김 아님)."""
+def _cluster_template(template_id: str, project_id: str, token: str) -> dict:
+    """신청할 수 있는 템플릿 — 숨김이 아니고 공개이거나 신청 프로젝트 소유."""
     t = next((x for x in _paas("/clustertemplates", token)["items"] if x["id"] == template_id), None)
-    if not t or not t.get("public") or t.get("hidden"):
+    if not t or t.get("hidden") or not (t.get("public") or t.get("project_id") == project_id):
         raise HTTPException(400, "신청할 수 없는 클러스터 템플릿입니다")
     return t
 
@@ -930,7 +930,7 @@ def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(c
     chk = _paas(f"/cluster-name-check?name={quote(body.clusterName, safe='')}", user.token)
     if not chk["available"]:
         raise HTTPException(409, chk["reason"])
-    template = _cluster_template(body.templateId, user.token)
+    template = _cluster_template(body.templateId, body.projectId, user.token)
     master, worker = _cluster_flavors(body.projectId, body.masterFlavorId, body.flavorId, user.token)
     _check_nova_keypair(body.novaKeypair, body.keypairId, user)
 
@@ -1040,7 +1040,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     master_count = ps.masterCount or rs["masterCount"]
     node_count = ps.nodeCount or rs["nodeCount"]
     _check_node_counts(master_count, node_count)
-    template = _cluster_template(rs["templateId"], token)
+    template = _cluster_template(rs["templateId"], pid, token)
     floating = template.get("external_network_id")
     if not floating:
         raise HTTPException(400, "클러스터 템플릿에 외부 네트워크(API Floating IP 풀)가 없습니다")
