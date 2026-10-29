@@ -685,6 +685,7 @@ export interface ResourceRequest {
   // AI 워크스페이스 (프로젝트당 1개) — 가속기 수는 위 acceleratorCount.
   // 생성 시작 때 관리자가 조정한 한도는 provisionSpec 에 {cpu, memoryGi, acceleratorCount, storageGi} 로 담긴다
   workspaceName?: string;  // = Kubeflow Profile·네임스페이스 이름 (서버가 프로젝트 이름으로 정함)
+  clusterId?: string;      // 워크스페이스를 만들 서비스 클러스터(MNT-PAAS ID, AI 노트북 PaaS 모드) — 이름은 위 clusterName
   purpose?: string;
   cpu?: number;
   memoryGi?: number;
