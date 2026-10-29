@@ -17,6 +17,8 @@ TEMPLATES = [
     {"id": "t1", "name": "ct-k8s-1.36.2", "kubeVersion": "1.36.2", "public": True, "hidden": False,
      "external_network_id": "pub"},
     {"id": "t-hidden", "name": "hidden", "public": True, "hidden": True},
+    {"id": "t-mine", "name": "mine", "public": False, "hidden": False, "project_id": PROJECT},
+    {"id": "t-other", "name": "other", "public": False, "hidden": False, "project_id": "other-prj"},
 ]
 SUBNETS = [{"id": "sub-on", "cidr": "10.0.1.0/24", "dhcp": True}, {"id": "sub-off", "cidr": "10.0.0.0/24", "dhcp": False}]
 QUOTA = {"instances": {"quota": 10, "used": 2}, "vcpu": {"quota": 20, "used": 3}, "ramGb": {"quota": 50, "used": 6}}
@@ -89,6 +91,13 @@ def test_클러스터_신청(client, fake):
     assert client.post("/api/core/tickets/cluster", json=BODY, headers=ADMIN).status_code == 409
 
 
+def test_클러스터_신청_프로젝트_소유_템플릿(client, fake):
+    # 공개가 아니어도 신청 프로젝트 소유 템플릿은 신청할 수 있다(다른 프로젝트 소유는 거부 — 신청 확인 시험)
+    r = client.post("/api/core/tickets/cluster", json={**BODY, "templateId": "t-mine"}, headers=ADMIN)
+    assert r.status_code == 201, r.text
+    assert r.json()["templateName"] == "mine"
+
+
 def test_클러스터_신청_권한(client, fake):
     assert client.post("/api/core/tickets/cluster", json=BODY, headers=bearer(make_token())).status_code == 403
     add_member("ek.lee", role="viewer")
@@ -101,6 +110,7 @@ def test_클러스터_신청_권한(client, fake):
     ({"clusterName": "Bad_Name"}, 400, tickets._CLUSTER_NAME_RULE),
     ({"clusterName": "test-taken"}, 409, "이미 사용 중인 클러스터 이름입니다."),
     ({"templateId": "t-hidden"}, 400, "신청할 수 없는 클러스터 템플릿입니다"),
+    ({"templateId": "t-other"}, 400, "신청할 수 없는 클러스터 템플릿입니다"),  # 다른 프로젝트 소유(비공개)
     ({"masterFlavorId": "m1.rngd"}, 400, "Control Plane 에는 가속기 스펙을 쓸 수 없습니다"),
     ({"flavorId": "m1.gone"}, 400, "연결된 디바이스 프로파일이 존재하지 않습니다"),
     ({"flavorId": "nope"}, 400, "선택한 스펙(플레이버)을 찾을 수 없습니다"),
