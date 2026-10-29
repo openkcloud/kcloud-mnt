@@ -695,6 +695,7 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
     db.commit()
 
     accel = ", ".join(f"{a['kind']} × {a['count']}" for a in rs.get("accelerators") or [])
+    key_name = nova_name if key_changed else rs.get("keypairName")  # 넣는 키 이름(없으면 키를 넣지 않음)
     inp = {
         "ticketId": ticket_id, "attempt": attempt, "projectId": t["project_id"],
         "vmName": rs["vmName"], "flavorId": rs["flavorId"], "imageId": rs["imageId"],
@@ -705,8 +706,8 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         "floatingNetworkId": spec.get("floatingNetworkId"),
         "host": spec.get("host"),
         "publicKey": public_key,
-        "keypairLabel": (nova_name if key_changed else rs.get("keypairName"))
-                        or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
+        "keypairName": key_name,  # Nova 메타데이터로 남겨 가상서버 상세에 표시
+        "keypairLabel": key_name or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
         "hasAccelerator": bool(rs.get("deviceProfile")),
         "acceleratorLabel": accel or rs.get("deviceProfile"),
         # 누르기 전 상태·값 — 시작 실패·시작 전 취소 때 되돌린다(provision_queue.restore)
