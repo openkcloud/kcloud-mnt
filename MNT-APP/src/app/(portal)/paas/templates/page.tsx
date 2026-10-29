@@ -202,6 +202,9 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
   const images = useProjectImages(project);
   const flavors = useProjectFlavors(project);
   const networks = useProjectNetworks(project);
+  // 고정 네트워크 · 서브넷은 ID 로 저장 — 이름은 겹칠 수 있고 겹치면 Magnum 이 거절한다(Multiple … same name)
+  const fixedNets = (networks.data ?? []).filter((n) => n.kind !== "external");
+  const fixedNet = pickByIdOrName(fixedNets, f.fixed_network);
   // 프로젝트를 바꾸면 그 프로젝트에 매인 값(이미지·플레이버·고정 네트워크)을 비운다 — 외부망은 프로젝트와 무관
   const setProject = (v: string) => setF((p) => ({
     ...p, project_id: v, image_id: "", flavor_id: "", master_flavor_id: "", fixed_network: "", fixed_subnet: "",
@@ -292,14 +295,12 @@ function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClo
             <Field label="네트워크 드라이버"><Input value={f.network_driver ?? ""} onChange={(e) => set("network_driver", e.target.value)} className="font-mono text-xs" placeholder="calico" /></Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="고정 네트워크(선택)">
-                <DropSelect value={f.fixed_network ?? ""} onChange={(v) => { set("fixed_network", v); set("fixed_subnet", ""); }}
+                <DropSelect value={fixedNet?.id ?? ""} onChange={(v) => { set("fixed_network", v); set("fixed_subnet", ""); }}
                   placeholder={project ? "네트워크 선택" : "프로젝트 먼저 선택"}
-                  options={(networks.data ?? []).filter((n) => n.kind !== "external").map((n) => ({ value: n.name, label: n.name }))} />
+                  options={fixedNets.map((n) => ({ value: n.id, label: n.name }))} />
               </Field>
               <Field label="고정 서브넷(선택)">
-                <FixedSubnetSelect
-                  networkId={(networks.data ?? []).find((n) => n.kind !== "external" && n.name === f.fixed_network)?.id}
-                  value={f.fixed_subnet ?? ""} onChange={(v) => set("fixed_subnet", v)} />
+                <FixedSubnetSelect networkId={fixedNet?.id} value={f.fixed_subnet ?? ""} onChange={(v) => set("fixed_subnet", v)} />
               </Field>
             </div>
             <Field label="DNS"><Input value={f.dns_nameserver ?? ""} onChange={(e) => set("dns_nameserver", e.target.value)} className="font-mono text-xs" placeholder="8.8.8.8" /></Field>
@@ -358,12 +359,18 @@ function DropSelect({ value, onChange, options, placeholder, disabled }: { value
     </Select>
   );
 }
-// 고정 서브넷 — 선택한 고정 네트워크의 상세(서브넷 목록)를 받아 드롭다운. 네트워크 미선택 시 비활성.
+// 고정 서브넷 — 선택한 고정 네트워크의 상세(서브넷 목록)를 받아 드롭다운(값 = 서브넷 ID). 네트워크 미선택 시 비활성.
 function FixedSubnetSelect({ networkId, value, onChange }: { networkId: string | undefined; value: string; onChange: (v: string) => void }) {
   const net = useNetwork(networkId);
   const subnets = net.data?.subnets ?? [];
   return (
-    <DropSelect value={value} onChange={onChange} placeholder={networkId ? "서브넷 선택" : "네트워크 먼저 선택"}
-      options={subnets.map((s) => ({ value: s.name, label: `${s.name} (${s.cidr})` }))} />
+    <DropSelect value={pickByIdOrName(subnets, value)?.id ?? ""} onChange={onChange} placeholder={networkId ? "서브넷 선택" : "네트워크 먼저 선택"}
+      options={subnets.map((s) => ({ value: s.id, label: `${s.name} (${s.cidr})` }))} />
   );
+}
+/** 값이 ID 면 그 항목, 예전 템플릿의 이름 값이면 그 이름이 하나뿐일 때만 그 항목(겹치면 고르지 않은 것으로 보인다). */
+function pickByIdOrName<T extends { id: string; name: string }>(items: T[], v: string | null | undefined): T | undefined {
+  if (!v) return undefined;
+  const named = items.filter((x) => x.name === v);
+  return items.find((x) => x.id === v) ?? (named.length === 1 ? named[0] : undefined);
 }
