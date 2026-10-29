@@ -75,10 +75,11 @@ export interface ClusterDetail extends ClusterSummary {
 // 진행 중(…_IN_PROGRESS)이면 4초, 평상시엔 사용자 설정 주기 (IaaS 서버 목록과 동일 패턴)
 const isClusterBusy = (s: string) => s.endsWith("_IN_PROGRESS");
 
-export function useClusters() {
+export function useClusters(enabled = true) {
   const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["paas-clusters"],
+    enabled,
     queryFn: async (): Promise<ClusterSummary[]> =>
       (await fetchJson<{ items: ClusterSummary[] }>(`${PAAS_BASE}/api/paas/clusters`)).items,
     staleTime: 20 * 1000, retry: 0,

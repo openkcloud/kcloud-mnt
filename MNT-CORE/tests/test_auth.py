@@ -154,7 +154,7 @@ def test_관리자는_멤버가_아니어도_모든_조직_프로젝트에_신�
 
 def test_AI_워크스페이스_신청자는_토큰_사용자(client, monkeypatch):
     monkeypatch.setattr(tickets, "_iaas", lambda path, token: {"items": [{"id": PROJECT, "name": "okc_test_prj"}]})
-    monkeypatch.setattr(tickets, "_ainb", lambda path: {"available": True})
+    monkeypatch.setattr(tickets, "_ainb", lambda path, token=None: {"available": True})
     user, admin = bearer(make_token()), bearer(make_token("admin"))
     body = {"requestedBy": "admin", "projectId": PROJECT}  # requestedBy 는 무시된다
     assert client.post("/api/core/tickets/ai-workspace", json=body, headers=user).status_code == 403  # 멤버 아님

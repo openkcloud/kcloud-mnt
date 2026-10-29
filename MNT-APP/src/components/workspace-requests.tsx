@@ -19,7 +19,8 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAuth } from "@/lib/auth";
-import { useProfiles } from "@/lib/ainb-api";
+import { useAinbClusters, useProfiles } from "@/lib/ainb-api";
+import { useClusters } from "@/lib/paas-api";
 import { projectsLoadingText, useCreateAiWorkspaceTicket, useTicketProjects, useTickets } from "@/lib/ticket-api";
 import type { RequestStatus, ResourceRequest } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
@@ -100,6 +101,15 @@ export function WorkspaceRequestForm({ onDone }: { onDone: () => void }) {
     .filter((r) => ["pending", "approved", "provisioning", "failed"].includes(r.status))
     .map((r) => r.projectId));
   const [projectId, setProjectId] = React.useState("");
+  // 서비스 클러스터 — AI 노트북이 여러 클러스터를 쓰는 경우(PaaS 모드)에만 고른다.
+  // 고른 프로젝트 소유 클러스터를 앞에 둔다(다른 프로젝트 소유라도 접근 권한이 있으면 고를 수 있고, 서버가 다시 확인한다)
+  const { data: ainbClusters } = useAinbClusters();
+  const multi = ainbClusters?.mode === "paas";
+  const { data: clusters = [], isLoading: clLoading, error: clError } = useClusters(multi);
+  const usable = clusters
+    .filter((c) => c.status.endsWith("_COMPLETE") && !c.status.startsWith("DELETE"))
+    .sort((a, b) => Number(b.projectId === projectId) - Number(a.projectId === projectId));
+  const [clusterId, setClusterId] = React.useState("");
   const [purpose, setPurpose] = React.useState("");
   const [limits, setLimits] = React.useState<WorkspaceLimitsInput>({
     cpu: "4", memoryGi: "16", acceleratorCount: "1", storageGi: "50",
@@ -107,7 +117,10 @@ export function WorkspaceRequestForm({ onDone }: { onDone: () => void }) {
 
   function submit() {
     create.mutate(
-      { requestedBy: user?.username ?? "", projectId, purpose: purpose.trim(), ...limitsBody(limits) },
+      {
+        requestedBy: user?.username ?? "", projectId, purpose: purpose.trim(), ...limitsBody(limits),
+        ...(multi && clusterId ? { clusterId } : {}),
+      },
       {
         onSuccess: (r) => {
           toast.success("AI 워크스페이스 신청이 접수되었습니다", {
@@ -149,6 +162,34 @@ export function WorkspaceRequestForm({ onDone }: { onDone: () => void }) {
           워크스페이스는 프로젝트당 1개입니다. 이름(네임스페이스)은 서버가 프로젝트 이름으로 정해 신청 내역에 표시합니다.
         </p>
       </div>
+      {multi && (
+        <div className="space-y-1.5">
+          <Label>서비스 클러스터</Label>
+          {clLoading ? (
+            <p className="text-xs text-muted-foreground">클러스터 목록을 불러오는 중…</p>
+          ) : clError ? (
+            <p className="text-xs text-rose-600">클러스터 목록을 불러오지 못했습니다 ({clError.message}).</p>
+          ) : usable.length === 0 ? (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              사용할 수 있는 서비스 클러스터가 없습니다. 먼저 서비스 클러스터를 신청하세요.
+            </p>
+          ) : (
+            <Select value={clusterId} onValueChange={setClusterId}>
+              <SelectTrigger><SelectValue placeholder="워크스페이스를 만들 서비스 클러스터" /></SelectTrigger>
+              <SelectContent>
+                {usable.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}{projectId && c.projectId === projectId ? " — 이 프로젝트의 클러스터" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            노트북이 실제로 만들어지는 클러스터입니다. 클러스터에 이 프로젝트의 네임스페이스가 있으면 그 네임스페이스를 워크스페이스로 씁니다.
+          </p>
+        </div>
+      )}
       <div className="space-y-1.5">
         <Label htmlFor="ws-purpose">사용 목적</Label>
         <Input id="ws-purpose" value={purpose} onChange={(e) => setPurpose(e.target.value)}
@@ -159,7 +200,7 @@ export function WorkspaceRequestForm({ onDone }: { onDone: () => void }) {
         적은 값은 워크스페이스가 쓸 수 있는 최대 한도입니다. 관리자가 생성을 시작할 때 조정할 수 있습니다.
       </p>
       <div className="flex justify-end">
-        <Button onClick={submit} disabled={!projectId || !limitsOk(limits) || create.isPending}>
+        <Button onClick={submit} disabled={!projectId || (multi && !clusterId) || !limitsOk(limits) || create.isPending}>
           <Send className="size-4" /> {create.isPending ? "신청 중…" : "신청"}
         </Button>
       </div>
