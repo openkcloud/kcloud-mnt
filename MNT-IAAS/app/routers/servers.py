@@ -82,7 +82,8 @@ def _to_server(s: dict, accel_map: dict) -> dict:
         "ramMb": f.get("ram", 0),
         "accelerator": accel_map.get(fname),
         "host": s.get("OS-EXT-SRV-ATTR:host") or "",
-        "keyName": s.get("key_name"),
+        # 포털 생성 VM 은 키를 cloud-init 으로 넣어 key_name 이 없다 — 생성 때 메타데이터에 남긴 키 이름
+        "keyName": s.get("key_name") or (s.get("metadata") or {}).get("okc_keypair"),
         "imageId": (s.get("image") or {}).get("id") if isinstance(s.get("image"), dict) else None,
         "addresses": _addresses(s),
         "volumeCount": len(vols),
@@ -139,6 +140,7 @@ class CreateServerBody(BaseModel):
     fixedIp: str | None = None        # 고정 IP(없으면 자동 할당)
     securityGroups: list[str] = []    # 보안그룹 이름(프로젝트 기준)
     publicKey: str | None = None      # cloud-init 으로 주입할 SSH 공개키
+    keypairName: str | None = None    # 그 키 이름 — Nova 메타데이터(okc_keypair)로 남겨 상세에 표시
     host: str | None = None           # 배치할 컴퓨트 노드(hypervisor_hostname) — 없으면 스케줄러가 고름. can_pin_host 필요
 
 
@@ -217,6 +219,7 @@ def _boot_server(project_id: str, body: CreateServerBody, volume_id: str) -> str
         "networks": [network],
         **({"security_groups": [{"name": n} for n in body.securityGroups]} if body.securityGroups else {}),
         **({"user_data": _cloud_init_user_data(body.publicKey)} if body.publicKey else {}),
+        **({"metadata": {"okc_keypair": body.keypairName}} if body.keypairName else {}),
         **({"hypervisor_hostname": body.host} if body.host else {}),  # 2.74+ — 그 노드로 스케줄러가 다시 확인
     }
     try:
