@@ -65,6 +65,15 @@ export function useServing() {
   return useQuery({ queryKey: ["kf", "serving"], queryFn: () => ainbJson("/serving"), refetchInterval: 5000 });
 }
 
+/** AI 노트북이 쓰는 서비스 클러스터 — mode "paas" 면 여러 클러스터(워크스페이스 신청 때 클러스터를 고른다), "single" 이면 하나 */
+export interface AinbClusters {
+  mode: "single" | "paas";
+  items: { id: string; name: string; fetchedAt: string }[];
+}
+export function useAinbClusters() {
+  return useQuery({ queryKey: ["kf", "clusters"], queryFn: () => ainbJson<AinbClusters>("/clusters"), staleTime: 60_000 });
+}
+
 /**
  * 포털 로그인(Keycloak) 성공 뒤 MNT-AINB 세션(HttpOnly 쿠키 okc_session)을 발급받는다.
  * Keycloak 액세스 토큰을 Bearer 로 넘기면 MNT-AINB 가 MNT-CORE /auth/me 로 신원·역할을 확인한다.
