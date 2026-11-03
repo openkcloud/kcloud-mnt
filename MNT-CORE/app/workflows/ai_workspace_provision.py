@@ -64,12 +64,14 @@ class AiWorkspaceProvision:
 
         spec = {k: inp[k] for k in ("projectId", "projectName", "ownerEmail", "cpu", "memoryGi",
                                     "acceleratorCount", "storageGi")}
-        res = await self._ainb("ainb.create_workspace", {"name": name, **spec}, retry=QUERY_RETRY)  # 같은 프로젝트면 멱등
+        cluster = inp.get("clusterId") or ""   # 신청 때 고른 서비스 클러스터 — 비면 AINB 기본 클러스터
+        res = await self._ainb("ainb.create_workspace", {"name": name, **spec, "clusterId": cluster},
+                               retry=QUERY_RETRY)  # 같은 프로젝트면 멱등
         self.created = self.created or res["created"]
         await self._go("apply_quota", {"create_profile": name})
 
         deadline = (workflow.now() + READY_MAX).timestamp()
-        ready = await self._ainb("ainb.wait_ready", name, deadline,
+        ready = await self._ainb("ainb.wait_ready", name, deadline, cluster,
                                  timeout=READY_MAX + timedelta(seconds=30), heartbeat=HEARTBEAT)
         await self._go("check_namespace", {"apply_quota": ", ".join(f"{k}={v}" for k, v in ready["quota"].items())})
         await self._go(END, {"check_namespace": "Active"})
@@ -81,7 +83,7 @@ class AiWorkspaceProvision:
             return ""
         try:
             await self._ainb("ainb.delete_workspace", self.inp["workspaceName"], self.inp["projectId"],
-                             timeout=CLEANUP_MAX)
+                             self.inp.get("clusterId") or "", timeout=CLEANUP_MAX)
         except Exception as e:  # noqa: BLE001 — 정리 실패는 사유에 남긴다
             return f" — 만든 워크스페이스 정리 실패, 직접 정리 필요({self.inp['workspaceName']}): {_reason(e)}"
         return f" — 만든 워크스페이스({self.inp['workspaceName']})는 정리함"

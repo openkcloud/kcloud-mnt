@@ -124,6 +124,7 @@ export function useProvisionTicket() {
 export interface CreateAiWorkspaceTicketInput {
   requestedBy: string;
   projectId: string;       // 이 프로젝트의 AI 워크스페이스 (프로젝트당 1개)
+  clusterId?: string;      // 만들 서비스 클러스터 — AI 노트북이 여러 클러스터를 쓸 때(PaaS 모드)만
   purpose: string;
   cpu: number;
   memoryGi: number;

@@ -318,6 +318,9 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
       ) : isWs ? (
         <Section icon={<BrainCircuit className="size-4 text-brand-indigo-600" />} title="AI 워크스페이스">
           <InfoRow label="워크스페이스"><span className="font-mono">{r.result?.namespace ?? r.workspaceName ?? "—"}</span></InfoRow>
+          {(r.clusterName || r.clusterId) && (
+            <InfoRow label="서비스 클러스터"><span className="font-mono">{r.clusterName ?? r.clusterId}</span></InfoRow>
+          )}
           <InfoRow label="사용 목적">{r.purpose || <span className="text-muted-foreground">—</span>}</InfoRow>
           <InfoRow label="신청 한도"><span className="font-mono">{limitsText(r)}</span></InfoRow>
           {/* 관리자가 생성 시작 때 조정한 한도 */}
