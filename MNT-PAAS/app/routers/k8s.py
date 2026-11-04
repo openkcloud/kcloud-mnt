@@ -157,6 +157,54 @@ def workloads(cluster_id: str, namespace: str | None = Query(None)):
     return {"items": out}
 
 
+@router.get("/clusters/{cluster_id}/pods")
+def pods(cluster_id: str, namespace: str | None = Query(None)):
+    """파드 목록 — 워크로드 화면에서 Pod 유형을 고르면 호출. 소유 워크로드(owner, 없으면 독립 파드)를 함께 준다."""
+    try:
+        items = k8s_get(cluster_id, _ns_path("/api/v1/pods", "/api/v1/namespaces/{ns}/pods", namespace)).get("items", [])
+        # ReplicaSet 소유 파드는 원래 주인(Deployment)으로 보여준다 — 관리 단위는 RS 가 아니라 Deployment
+        rs_owner: dict[tuple, dict] = {}
+        for rs in k8s_get(cluster_id, _ns_path("/apis/apps/v1/replicasets",
+                                               "/apis/apps/v1/namespaces/{ns}/replicasets", namespace)).get("items", []):
+            m = rs.get("metadata", {})
+            o = next((o for o in (m.get("ownerReferences") or []) if o.get("controller")), None)
+            if o:
+                rs_owner[(m.get("namespace"), m.get("name"))] = {"kind": o["kind"], "name": o["name"]}
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+    out = []
+    for p in items:
+        meta, spec, st = p.get("metadata", {}), p.get("spec", {}), p.get("status", {})
+        cs = st.get("containerStatuses", []) or []
+        o = next((o for o in (meta.get("ownerReferences") or []) if o.get("controller")), None)
+        owner = {"kind": o["kind"], "name": o["name"]} if o else None
+        if owner and owner["kind"] == "ReplicaSet":
+            owner = rs_owner.get((meta.get("namespace"), owner["name"])) or owner
+        # 상태 — kubectl 처럼 대기 사유(CrashLoopBackOff·ImagePullBackOff 등)가 있으면 phase 대신 그것을 보여준다
+        state = st.get("reason") or st.get("phase", "")
+        state = next((c["state"]["waiting"]["reason"] for c in cs
+                      if (c.get("state") or {}).get("waiting", {}).get("reason")), state)
+        containers = spec.get("containers", []) or []
+        out.append({
+            "name": meta.get("name", ""),
+            "namespace": meta.get("namespace", ""),
+            "kind": "Pod",
+            "image": containers[0].get("image", "") if containers else "",
+            "ready": sum(1 for c in cs if c.get("ready")),
+            "total": len(containers),
+            "requests": _requests_of(containers),
+            "accelerator": _accel_of(containers),
+            "restarts": sum(c.get("restartCount", 0) for c in cs),
+            "node": spec.get("nodeName", ""),
+            "containers": [c.get("name", "") for c in containers],   # 로그 보기 — 컨테이너 선택용
+            "owner": owner,
+            "status": state,
+            "labels": meta.get("labels") or {},
+            "createdAt": meta.get("creationTimestamp", ""),
+        })
+    return {"items": out}
+
+
 @router.get("/clusters/{cluster_id}/services")
 def services(cluster_id: str, namespace: str | None = Query(None)):
     """Service + Ingress."""
@@ -285,6 +333,7 @@ _WORKLOAD_API = {
     "DaemonSet": ("apps/v1", "daemonsets"),
     "Job": ("batch/v1", "jobs"),
     "CronJob": ("batch/v1", "cronjobs"),
+    "Pod": ("v1", "pods"),   # YAML 적용·조회·삭제만 — 폼 생성·스케일·재시작은 불가
 }
 _SCALABLE = {"Deployment", "StatefulSet"}
 _RESTARTABLE = {"Deployment", "StatefulSet", "DaemonSet"}
@@ -294,7 +343,8 @@ def _wl_path(kind: str, ns: str, name: str | None = None) -> str:
     if kind not in _WORKLOAD_API:
         raise HTTPException(status_code=400, detail=f"지원하지 않는 워크로드 종류: {kind}")
     grp, plural = _WORKLOAD_API[kind]
-    base = f"/apis/{grp}/namespaces/{ns}/{plural}"
+    prefix = "/api/v1" if grp == "v1" else f"/apis/{grp}"   # Pod 는 core API
+    base = f"{prefix}/namespaces/{ns}/{plural}"
     return f"{base}/{name}" if name else base
 
 
