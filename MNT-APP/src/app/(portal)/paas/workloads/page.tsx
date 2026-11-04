@@ -2,6 +2,7 @@
 /**
  * 워크로드 — 선택한 서비스 클러스터의 Deployment·StatefulSet·DaemonSet·Job·CronJob 라이브 조회 + 쓰기.
  * 네임스페이스 리소스는 사용자 self-service: 생성(기본 Deployment)·스케일·재시작·삭제.
+ * 파드(Pod)는 유형 필터에서 선택했을 때만 목록으로 — 소유 워크로드 표시, 로그·YAML·삭제. 생성은 YAML 로만.
  * 레이아웃·폰트는 IaaS 목록 화면 규약(툴바 Card + 테이블 Card)과 동일.
  */
 import * as React from "react";
@@ -30,22 +31,23 @@ import { useConfirm } from "@/components/ui/confirm";
 import { ClusterScopeBar, useClusterScope } from "@/components/paas/cluster-scope-bar";
 import { WorkloadDiff } from "@/components/paas/workload-diff";
 import {
-  useWorkloads, useCreateWorkload, useScaleWorkload, useRestartWorkload, useDeleteWorkload,
+  useWorkloads, usePods, useCreateWorkload, useScaleWorkload, useRestartWorkload, useDeleteWorkload,
   useApplyWorkload, useUpdateWorkloadYaml, fetchWorkloadYaml, previewWorkloadApply, useWorkloadPods, fetchPodLogs,
   useNamespaces, useClusterAccelerators,
-  type WorkloadRow, type PodRow, type WorkloadPreview, type ClusterAccelerator,
+  type WorkloadRow, type PodListRow, type PodRow, type WorkloadPreview, type ClusterAccelerator,
 } from "@/lib/paas-api";
 
 const TEXTAREA_CLS = "w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
-const KINDS = ["Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"] as const;
+// "전체 유형"은 워크로드 5종만 — Pod 는 양이 많아 유형에서 직접 골랐을 때만 보여준다
+const KINDS = ["Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "Pod"] as const;
 const SCALABLE = new Set(["Deployment", "StatefulSet"]);
 const RESTARTABLE = new Set(["Deployment", "StatefulSet", "DaemonSet"]);
 
 function stVariant(s: string): "success" | "warning" | "destructive" | "secondary" {
   if (s === "Running" || s === "Succeeded") return "success";
   if (s === "Pending") return "warning";
-  if (s === "Failed") return "destructive";
+  if (s === "Failed" || s.endsWith("BackOff") || s.startsWith("Err")) return "destructive";
   return "secondary";
 }
 
@@ -58,18 +60,24 @@ export default function WorkloadsPage() {
   const [scaleTarget, setScaleTarget] = React.useState<WorkloadRow | null>(null);
   const [podsTarget, setPodsTarget] = React.useState<WorkloadRow | null>(null);
   const [yamlTarget, setYamlTarget] = React.useState<WorkloadRow | null>(null);
+  const [logTarget, setLogTarget] = React.useState<PodListRow | null>(null);
 
-  const workloads = useWorkloads(clusterId, namespace === "all" ? undefined : namespace);
+  const isPod = kind === "Pod";   // Pod 는 별도 API — 소유 워크로드까지 함께 온다
+  const workloads = useWorkloads(clusterId, namespace === "all" ? undefined : namespace, !isPod);
+  const podList = usePods(clusterId, namespace === "all" ? undefined : namespace, isPod);
+  const listQ = isPod ? podList : workloads;
   const restart = useRestartWorkload(clusterId);
   const del = useDeleteWorkload(clusterId);
   const confirm = useConfirm();
   const busy = restart.isPending || del.isPending;
 
-  const items = (workloads.data ?? []).filter(
-    (w) =>
-      (kind === "all" || w.kind === kind) &&
-      (!q || w.name.includes(q) || w.image.includes(q)),
-  );
+  const items: (WorkloadRow | PodListRow)[] = isPod
+    ? (podList.data ?? []).filter((w) => !q || w.name.includes(q) || w.image.includes(q))
+    : (workloads.data ?? []).filter(
+        (w) =>
+          (kind === "all" || w.kind === kind) &&
+          (!q || w.name.includes(q) || w.image.includes(q)),
+      );
 
   async function doRestart(w: WorkloadRow) {
     if (!(await confirm({ title: "롤아웃 재시작", confirmLabel: "재시작", description: `${w.name} 을(를) 재시작할까요? 파드가 순차 교체됩니다.` }))) return;
@@ -77,7 +85,11 @@ export default function WorkloadsPage() {
       { onSuccess: () => toast.success(`${w.name} 재시작 요청됨`), onError: (e) => toast.error("재시작 실패", { description: String((e as Error).message) }) });
   }
   async function doDelete(w: WorkloadRow) {
-    if (!(await confirm({ title: "워크로드 삭제", destructive: true, confirmLabel: "삭제", description: `${w.name} 을(를) 삭제할까요? 되돌릴 수 없습니다.` }))) return;
+    const podDesc = `${w.name} 파드를 삭제할까요? 소유 워크로드가 관리하는 파드는 자동으로 다시 생성됩니다.`;
+    if (!(await confirm({
+      title: w.kind === "Pod" ? "파드 삭제" : "워크로드 삭제", destructive: true, confirmLabel: "삭제",
+      description: w.kind === "Pod" ? podDesc : `${w.name} 을(를) 삭제할까요? 되돌릴 수 없습니다.`,
+    }))) return;
     del.mutate({ kind: w.kind, namespace: w.namespace, name: w.name },
       { onSuccess: () => toast.success(`${w.name} 삭제 요청됨`), onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }) });
   }
@@ -86,7 +98,7 @@ export default function WorkloadsPage() {
     <div className="space-y-4">
       <Card className="p-4">
         <ClusterScopeBar
-          queryKeys={[["paas-workloads"], ["paas-namespaces"]]}
+          queryKeys={[["paas-workloads"], ["paas-pod-list"], ["paas-namespaces"]]}
           namespace={namespace}
           onNamespaceChange={setNamespace}
           trailing={
@@ -113,19 +125,20 @@ export default function WorkloadsPage() {
       <Card>
         {!clusterId ? (
           <EmptyBox text="먼저 서비스 클러스터를 선택하세요." />
-        ) : workloads.isLoading ? (
+        ) : listQ.isLoading ? (
           <Skeleton className="h-64" />
-        ) : workloads.isError ? (
-          <EmptyBox text="워크로드 조회 실패 — 클러스터 API 응답 오류." />
+        ) : listQ.isError ? (
+          <EmptyBox text={isPod ? "파드 조회 실패 — 클러스터 API 응답 오류." : "워크로드 조회 실패 — 클러스터 API 응답 오류."} />
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>워크로드</TableHead>
+                <TableHead>{isPod ? "파드" : "워크로드"}</TableHead>
                 <TableHead>유형</TableHead>
                 <TableHead>네임스페이스</TableHead>
+                {isPod && <TableHead>소유 워크로드</TableHead>}
                 <TableHead>이미지</TableHead>
-                <TableHead>레플리카</TableHead>
+                <TableHead>{isPod ? "Ready" : "레플리카"}</TableHead>
                 <TableHead>요청 자원</TableHead>
                 <TableHead>가속기</TableHead>
                 <TableHead>상태</TableHead>
@@ -138,6 +151,7 @@ export default function WorkloadsPage() {
                   key={`${w.kind}/${w.namespace}/${w.name}`}
                   w={w} busy={busy}
                   onPods={() => setPodsTarget(w)}
+                  onLogs={() => setLogTarget(w as PodListRow)}
                   onYaml={() => setYamlTarget(w)}
                   onScale={() => setScaleTarget(w)}
                   onRestart={() => doRestart(w)}
@@ -146,8 +160,8 @@ export default function WorkloadsPage() {
               ))}
               {items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
-                    조건에 맞는 워크로드가 없습니다.
+                  <TableCell colSpan={isPod ? 10 : 9} className="py-10 text-center text-sm text-muted-foreground">
+                    {isPod ? "조건에 맞는 파드가 없습니다." : "조건에 맞는 워크로드가 없습니다."}
                   </TableCell>
                 </TableRow>
               )}
@@ -160,15 +174,22 @@ export default function WorkloadsPage() {
       {scaleTarget && <ScaleDialog clusterId={clusterId} w={scaleTarget} onClose={() => setScaleTarget(null)} />}
       {podsTarget && <PodsDialog clusterId={clusterId} w={podsTarget} onClose={() => setPodsTarget(null)} />}
       {yamlTarget && <YamlDialog clusterId={clusterId} w={yamlTarget} onClose={() => setYamlTarget(null)} />}
+      {logTarget && (
+        <LogsDialog clusterId={clusterId} namespace={logTarget.namespace}
+                    pod={{ name: logTarget.name, containers: logTarget.containers ?? [] }}
+                    onClose={() => setLogTarget(null)} />
+      )}
     </div>
   );
 }
 
 function Row({
-  w, busy, onPods, onYaml, onScale, onRestart, onDelete,
+  w, busy, onPods, onLogs, onYaml, onScale, onRestart, onDelete,
 }: {
-  w: WorkloadRow; busy: boolean; onPods: () => void; onYaml: () => void; onScale: () => void; onRestart: () => void; onDelete: () => void;
+  w: WorkloadRow | PodListRow; busy: boolean; onPods: () => void; onLogs: () => void; onYaml: () => void; onScale: () => void; onRestart: () => void; onDelete: () => void;
 }) {
+  const isPod = w.kind === "Pod";
+  const owner = isPod ? (w as PodListRow).owner : null;
   return (
     <TableRow>
       <TableCell>
@@ -179,6 +200,15 @@ function Row({
       </TableCell>
       <TableCell><Badge variant="outline" className="text-[10px]">{w.kind}</Badge></TableCell>
       <TableCell className="font-mono text-xs">{w.namespace}</TableCell>
+      {isPod && (
+        <TableCell>
+          {owner ? (
+            <span className="font-mono text-xs">{owner.kind}/{owner.name}</span>
+          ) : (
+            <Badge variant="secondary" className="text-[10px]">독립 파드</Badge>
+          )}
+        </TableCell>
+      )}
       <TableCell className="max-w-[240px] truncate font-mono text-[11px] text-muted-foreground">{w.image}</TableCell>
       <TableCell className="font-mono text-xs">
         {w.kind === "CronJob" ? (w.schedule || "—") : `${w.ready}/${w.total}`}
@@ -201,7 +231,11 @@ function Row({
       </TableCell>
       <TableCell>
         <div className="flex items-center gap-0.5">
-          <Button variant="ghost" size="icon-sm" title="파드·로그" onClick={onPods}><ScrollText className="size-3.5" /></Button>
+          {isPod ? (
+            <Button variant="ghost" size="icon-sm" title="로그" onClick={onLogs}><ScrollText className="size-3.5" /></Button>
+          ) : (
+            <Button variant="ghost" size="icon-sm" title="파드·로그" onClick={onPods}><ScrollText className="size-3.5" /></Button>
+          )}
           <Button variant="ghost" size="icon-sm" title="YAML 보기·수정" onClick={onYaml}><FileCode className="size-3.5" /></Button>
           {SCALABLE.has(w.kind) && (
             <Button variant="ghost" size="icon-sm" title="레플리카 조정" disabled={busy} onClick={onScale}><Scale className="size-3.5" /></Button>
@@ -334,6 +368,18 @@ spec:
               image: busybox:1.36
               command: ["sh", "-c", "date"]
 `,
+  Pod: `apiVersion: v1
+kind: Pod
+metadata:
+  name: my-pod
+  namespace: {NS}
+spec:
+  restartPolicy: Never
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["sh", "-c", "echo hello; sleep 3600"]
+`,
 };
 
 // K8s 확장 리소스 키 → 모델명. 벤더 1종은 키로 확정, nvidia 는 노드 라벨(product)로 구분.
@@ -407,7 +453,7 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
       <DialogContent className="max-h-[88vh] w-[90vw] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>워크로드 생성</DialogTitle>
-          <DialogDescription>폼(Deployment/StatefulSet) 또는 YAML(Job·CronJob 등 모든 종류).</DialogDescription>
+          <DialogDescription>폼(Deployment/StatefulSet) 또는 YAML(Pod·Job·CronJob 등 모든 종류).</DialogDescription>
         </DialogHeader>
         <Tabs defaultValue="form">
           <TabsList>
@@ -539,6 +585,16 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
 function PodsDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadRow; onClose: () => void }) {
   const pods = useWorkloadPods(clusterId, w.kind, w.namespace, w.name);
   const [logPod, setLogPod] = React.useState<PodRow | null>(null);
+  const del = useDeleteWorkload(clusterId);
+  const confirm = useConfirm();
+  async function doDeletePod(p: PodRow) {
+    if (!(await confirm({
+      title: "파드 삭제", destructive: true, confirmLabel: "삭제",
+      description: `${p.name} 파드를 삭제할까요? 워크로드가 관리하는 파드는 자동으로 다시 생성됩니다.`,
+    }))) return;
+    del.mutate({ kind: "Pod", namespace: w.namespace, name: p.name },
+      { onSuccess: () => toast.success(`${p.name} 삭제 요청됨`), onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }) });
+  }
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[85vh] w-[92vw] max-w-4xl overflow-y-auto">
@@ -554,7 +610,7 @@ function PodsDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
               <TableHeader>
                 <TableRow className="[&>th]:whitespace-nowrap">
                   <TableHead>파드</TableHead><TableHead>상태</TableHead><TableHead>Ready</TableHead>
-                  <TableHead>재시작</TableHead><TableHead>노드</TableHead><TableHead className="w-16" />
+                  <TableHead>재시작</TableHead><TableHead>노드</TableHead><TableHead className="w-24" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -565,7 +621,12 @@ function PodsDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
                     <TableCell className="font-mono text-xs">{p.ready}</TableCell>
                     <TableCell className="font-mono text-xs">{p.restarts}</TableCell>
                     <TableCell className="font-mono text-[11px] text-muted-foreground">{p.node || "—"}</TableCell>
-                    <TableCell><Button variant="ghost" size="icon-sm" title="로그" onClick={() => setLogPod(p)}><ScrollText className="size-3.5" /></Button></TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-0.5">
+                        <Button variant="ghost" size="icon-sm" title="로그" onClick={() => setLogPod(p)}><ScrollText className="size-3.5" /></Button>
+                        <Button variant="ghost" size="icon-sm" title="파드 삭제" disabled={del.isPending} onClick={() => doDeletePod(p)}><Trash2 className="size-3.5 text-rose-600" /></Button>
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {(pods.data ?? []).length === 0 && (
@@ -581,7 +642,7 @@ function PodsDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
   );
 }
 
-function LogsDialog({ clusterId, namespace, pod, onClose }: { clusterId: string; namespace: string; pod: PodRow; onClose: () => void }) {
+function LogsDialog({ clusterId, namespace, pod, onClose }: { clusterId: string; namespace: string; pod: { name: string; containers: string[] }; onClose: () => void }) {
   const [container, setContainer] = React.useState(pod.containers[0] ?? "");
   const [big, setBig] = React.useState(false);   // 확대 토글
   const [live, setLive] = React.useState(false); // 실시간(주기 재조회)
