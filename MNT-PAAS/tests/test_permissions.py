@@ -1,4 +1,4 @@
-"""역할별 권한 — API 34개 전부. 사용자(gy.yang)는 접근 권한이 있는 클러스터(c-mine)의 상세·kubeconfig·내부(K8s)
+"""역할별 권한 — API 35개 전부. 사용자(gy.yang)는 접근 권한이 있는 클러스터(c-mine)의 상세·kubeconfig·내부(K8s)
 조회·쓰기와 템플릿 조회만, 클러스터 삭제와 템플릿 생성·수정·삭제는 관리자만."""
 import httpx
 import pytest
@@ -26,7 +26,7 @@ CASES = [
 ]
 # 클러스터 내부(K8s) — 접근 권한이 있는 클러스터만
 K8S = [
-    ("GET", "/namespaces", None), ("GET", "/workloads", None), ("GET", "/services", None),
+    ("GET", "/namespaces", None), ("GET", "/workloads", None), ("GET", "/pods", None), ("GET", "/services", None),
     ("GET", "/storage", None), ("GET", "/configs", None),
     ("GET", "/accelerators", None),                              # 워크로드 생성 — 클러스터 보유 가속기
     ("POST", "/workloads", {"name": "w", "namespace": "default", "image": "nginx"}),
