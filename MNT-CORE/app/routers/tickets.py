@@ -1094,7 +1094,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     if not net:
         raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
     if net["kind"] == "external":
-        raise HTTPException(400, "외부망에는 클러스터를 만들 수 없습니다 — 클러스터 API 주소(로드밸런서)에 밖에서 닿지 못합니다")
+        raise HTTPException(400, "외부망에는 클러스터를 만들 수 없습니다 — 노드를 외부망에 직접 연결하면 클러스터 외부에서 API 주소(OVN 로드밸런서)에 접근할 수 없습니다")
     subnet = next((s for s in _iaas(f"/networks/{quote(net['id'], safe='')}", token)["subnets"] if s["id"] == ps.subnetId),
                   None)
     if not subnet:
