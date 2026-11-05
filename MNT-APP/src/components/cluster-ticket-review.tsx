@@ -9,10 +9,11 @@
  * 망·서브넷(DHCP·Floating IP)·쿼터·이름·키페어는 프로비저닝 요청 때 서버가 다시 확인한다(실패하면 사유가 오류로 온다).
  */
 import * as React from "react";
-import { AlertCircle, Boxes, FileText, KeyRound, Network, RotateCcw, Server, XCircle } from "lucide-react";
+import { AlertCircle, Boxes, FileText, HelpCircle, KeyRound, Network, RotateCcw, Server, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DETAIL_BODY, DETAIL_CONTENT, DETAIL_W, DetailFooter, DetailHeader, InfoRow, PANEL, ReasonBanner, RejectInput, RequestHero, Section,
 } from "@/components/request-detail";
@@ -437,6 +438,25 @@ function ProvisionPanelBody({ r, flavors, keys, template, onState }: {
   );
 }
 
+/** 외부망 행 물음표 — 마우스를 올리거나 클릭하면 고를 수 없는 이유를 보여 준다.
+ *  Radix 툴팁은 트리거 클릭 시 닫히므로 preventDefault 로 막고 연다. */
+function ExternalNetHelp() {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <Tooltip open={open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>
+        <button type="button" aria-label="선택할 수 없는 이유" onClick={(e) => { e.preventDefault(); setOpen(true); }}
+          className="shrink-0 cursor-help text-muted-foreground/50 hover:text-muted-foreground">
+          <HelpCircle className="size-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-[270px] px-3 py-2.5">
+        노드를 외부망에 직접 연결하면 클러스터 외부에서 API 주소(OVN 로드밸런서)에 접근할 수 없어 클러스터 생성이 완료되지 않습니다.
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 /** 네트워크 표 — 검색 · 5개씩. 유형: 서브넷마다 인터넷망(게이트웨이 IP 를 가진 라우터에 외부 게이트웨이)·내부망 — 섞여 있으면
  *  둘 다. 외부망(router:external)은 '인터넷망'으로 표시하되 흐리게(고를 수 없음). 공유된 망은 이름 옆에 '공유' 태그. */
 function NetworkPicker({ networks, loading, error, selected, onSelect }: {
@@ -471,8 +491,12 @@ function NetworkPicker({ networks, loading, error, selected, onSelect }: {
                     <span className={cn("truncate font-mono text-[13px] font-semibold", blocked && "text-[#9aa3ad]")}>{n.name}</span>
                     {n.shared && <SharedTag />}
                   </span>
-                  {blocked && <span title="외부망에 노드를 바로 붙이면 클러스터 API 주소(로드밸런서)에 밖에서 닿지 못합니다"
-                    className="truncate text-[11px] text-[#e8823f]">API 주소에 밖에서 닿지 못합니다</span>}
+                  {blocked && (
+                    <span className="flex min-w-0 items-center gap-1">
+                      <span className="truncate text-[11px] text-[#e8823f]">노드용으로 선택할 수 없습니다</span>
+                      <ExternalNetHelp />
+                    </span>
+                  )}
                 </span>
                 <span title={n.cidr} className="truncate font-mono text-[11px] text-muted-foreground">{n.cidr || "—"}</span>
                 <span className="flex flex-wrap gap-1">
