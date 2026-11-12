@@ -690,24 +690,29 @@ export interface ResourceRequest {
   cpu?: number;
   memoryGi?: number;
   storageGi?: number;
-  // 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려)
+  // 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려). *OrgName = 처리자 조직
   approvedBy?: string;
   approvedByName?: string;
+  approvedByOrgName?: string | null;
   approvedAt?: string;
   provisioningBy?: string;
   provisioningByName?: string;
+  provisioningByOrgName?: string | null;
   provisioningAt?: string;
   approvedRejectBy?: string;
   approvedRejectByName?: string;
+  approvedRejectByOrgName?: string | null;
   approvedRejectAt?: string;
   approvedRejectReason?: string;
   provisioningRejectBy?: string;
   provisioningRejectByName?: string;
+  provisioningRejectByOrgName?: string | null;
   provisioningRejectAt?: string;
   provisioningRejectReason?: string;
   // 마감(완료 · 실패) — 처리자 = 그 회차 프로비저닝을 시작한 관리자, 시각 = 워크플로가 끝낸 때(재시도 시작 때 비움)
   finishedBy?: string;
   finishedByName?: string;
+  finishedByOrgName?: string | null;
   finishedAt?: string;
   resultId?: string;
 }

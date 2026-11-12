@@ -5,14 +5,14 @@
  *  - Control Plane: 가속기 스펙은 고를 수 없다.
  *  - Worker: 고른 가속기(device-profile)와 다른 스펙은 고를 수 없다(흐리게 + 사유). 가속기를 바꿔 고른 스펙이 맞지 않으면 비운다.
  *  - 수: Control Plane 1 또는 3, Worker 1~20(0 은 애드온이 배치되지 않아 완성되지 않는다).
- * 신청 화면은 ClusterNodeConfigPanel(시안 2c), 관리자 화면은 cluster-ticket-review(시안 1b) — 아래 공용 조각(노드 카드·세그먼트·
+ * 신청 화면은 ClusterNodeCards(스테퍼 한 열 카드), 관리자 화면은 cluster-ticket-review(시안 1b) — 아래 공용 조각(노드 카드·세그먼트·
  * 스펙 표·키페어 표·페이지네이션 등)을 함께 쓴다.
  */
 import * as React from "react";
-import { AlertCircle, ArrowDown, CheckCircle2, ChevronDown, ChevronRight, Cpu, Globe, KeyRound, Search, Server, Wifi } from "lucide-react";
+import { ChevronDown, Cpu, Globe, KeyRound, Search, Server, Wifi } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { PANEL } from "@/components/request-detail";
+import { FormCard } from "@/components/request-stepper";
 import { accKindClass, cn } from "@/lib/utils";
 import { accelLabelResolver, useAccelModels, useDeviceProfiles, type FlavorSummary } from "@/lib/iaas-api";
 import type { ClusterTemplate } from "@/lib/paas-api";
@@ -119,9 +119,6 @@ export function paginate<T>(all: T[], page: number | null, isSelected?: (row: T)
   return { rows: all.slice(now * PER_PAGE, now * PER_PAGE + PER_PAGE), page: now, pages };
 }
 
-/** 아직 고르지 않은 필수 카드의 안내 줄 — 신청 마법사(가상머신 구성 · 노드 구성)와 관리자 화면(VM 승인 · 클러스터 프로비저닝) 공용. */
-export const PICK_LINE = "클릭 후 오른쪽 목록에서 선택하세요";
-
 /** 기준 값 태그 — "템플릿"(신청 화면) · "신청"(관리자 화면). */
 export function RefTag({ label }: { label: string }) {
   return <span className="whitespace-nowrap rounded bg-brand-indigo-100/70 px-[5px] py-px text-[10px] font-semibold text-primary">{label}</span>;
@@ -129,11 +126,6 @@ export function RefTag({ label }: { label: string }) {
 
 export function ChangedTag() {
   return <span className="whitespace-nowrap rounded bg-[#fdf0e3] px-[5px] py-px text-[10px] font-semibold text-[#9a4a0b]">변경</span>;
-}
-
-/** 스위치(템플릿 그대로 · 신청 값 그대로)와 무관하게 항상 직접 고르는 항목(네트워크). */
-export function ManualTag() {
-  return <span className="whitespace-nowrap rounded bg-secondary px-[5px] py-px text-[10px] font-semibold text-muted-foreground">직접 선택</span>;
 }
 
 export function Radio({ on, off }: { on: boolean; off?: boolean }) {
@@ -330,159 +322,8 @@ export function Segment<T extends string>({ options, value, onChange }: {
   );
 }
 
-/** 오른쪽 피커 머리 — 제목 · 힌트 · 오른쪽(세그먼트 등). */
-export function PickerHeader({ title, hint, children }: { title: React.ReactNode; hint: string; children?: React.ReactNode }) {
-  return (
-    <div className="mt-1 flex items-center gap-2">
-      <div className="text-[15px] font-semibold">{title}</div>
-      <div className="flex-1 text-xs text-muted-foreground">{hint}</div>
-      {children}
-    </div>
-  );
-}
-
-/** 왼쪽 노드 카드 — 누르면 오른쪽 피커 대상이 바뀐다. 범위 문구는 머리(신청 화면) 또는 수량 줄 끝(관리자 화면).
- *  status(신청 화면): done = 초록 체크, missing = 빨간 카드 + 느낌표(값 자리에 placeholder). optional = '옵션' 태그. */
-export function NodeCard({ icon, title, required, optional, tag, range, rangeAt = "head", value, valueMuted, placeholder = "선택 필요",
-  line, was, count, status, selected, onSelect, className }: {
-  icon: React.ReactNode;
-  title: string;
-  required?: boolean;
-  optional?: boolean;
-  tag?: React.ReactNode;
-  range?: string;
-  rangeAt?: "head" | "count";
-  value?: string | null;
-  valueMuted?: boolean;                      // 값이 '사용 안 함' 같은 안내 — 흐린 보통 글자
-  placeholder?: string;                      // 값이 없을 때(빨간 글자)
-  line?: React.ReactNode;
-  was?: string;                              // 바꾸기 전 값(취소선)
-  count?: [number, () => void, () => void];  // [수, −, +]
-  status?: "done" | "missing";
-  selected: boolean;
-  onSelect: () => void;
-  className?: string;
-}) {
-  const missing = status === "missing";
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onSelect()}
-      className={cn(
-        "flex flex-none cursor-pointer flex-col gap-2.5 rounded-[10px] border-[1.5px] p-3.5 transition-[border-color,background-color] duration-150",
-        // 테두리 색은 important — globals.css 의 레이어 밖 `* { border-color }` 가 Tailwind 유틸리티(@layer)를 이긴다
-        selected ? "border-primary!" : missing ? "border-[#f1aca5]!" : "border-border hover:border-primary/40!",
-        missing ? "bg-[#fff5f4]" : selected ? "bg-brand-indigo-50/50" : "bg-card",
-        className,
-      )}
-    >
-      <div className="flex items-center gap-1.5">
-        {icon}
-        <span className={cn("flex flex-1 items-center gap-1.5 whitespace-nowrap text-sm font-semibold", missing && "text-[#b42318]")}>
-          <span>{title}{required && <span className="ml-0.5 text-[#d92d20]">*</span>}</span>
-          {optional && <span className="rounded bg-[#eceff3] px-[5px] py-px text-[10px] font-semibold text-[#5b6470]">옵션</span>}
-        </span>
-        {tag}
-        {range && rangeAt === "head" && <span className="whitespace-nowrap text-[11px] text-muted-foreground">{range}</span>}
-        {status === "done" && <CheckCircle2 className="size-[18px] flex-none fill-brand-mint-500 text-white" />}
-        {missing && <AlertCircle className="size-[18px] flex-none fill-[#d92d20] text-white" />}
-        {selected && <ChevronRight className="-mr-1 size-4 flex-none text-primary" />}
-      </div>
-      <div className="flex flex-col gap-0.5">
-        {value ? (
-          <span title={value} className={cn("truncate text-[13px]", valueMuted ? "text-muted-foreground" : "font-mono font-semibold")}>{value}</span>
-        ) : (
-          <span className="text-[13px] font-semibold text-[#d92d20]">{placeholder}</span>
-        )}
-        {line && <span className={cn("text-xs", missing ? "text-[#d92d20]" : "text-muted-foreground")}>{line}</span>}
-        {was && <span title={was} className="truncate font-mono text-[11px] text-[#9aa3ad] line-through">신청 {was}</span>}
-      </div>
-      {count && (
-        <div className="flex items-center gap-2">
-          <div className="flex items-center overflow-hidden rounded-[7px] border border-input bg-card" onClick={(e) => e.stopPropagation()}>
-            <button type="button" onClick={count[1]} className="h-7 w-7 cursor-pointer text-[15px] text-muted-foreground hover:bg-secondary">−</button>
-            <span className="w-[30px] text-center font-mono text-[13px] font-semibold tabular-nums">{count[0]}</span>
-            <button type="button" onClick={count[2]} className="h-7 w-7 cursor-pointer text-[15px] text-muted-foreground hover:bg-secondary">+</button>
-          </div>
-          <span className="flex-1 text-xs text-muted-foreground">대</span>
-          {range && rangeAt === "count" && <span className="whitespace-nowrap text-[11px] text-muted-foreground">{range}</span>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** 노드 구성 머리 — 제목 + '필수 n/m 완료' + 필수 항목별 진행 막대(고르면 초록). 신청 화면·관리자 화면 공용. */
-export function RequiredProgress({ title, items }: { title: string; items: boolean[] }) {
-  return (
-    <>
-      <div className="flex items-baseline justify-between px-1">
-        <span className="text-[17px] font-bold">{title}</span>
-        <span className="text-xs text-muted-foreground">필수 <b className="text-foreground">{items.filter(Boolean).length}/{items.length}</b> 완료</span>
-      </div>
-      <div className="mb-1 grid gap-1.5 px-1" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
-        {items.map((ok, i) => <span key={i} className={cn("h-1 rounded-full", ok ? "bg-brand-mint-500" : "bg-border")} />)}
-      </div>
-    </>
-  );
-}
-
 export const serverIcon = <Server className="size-4 text-rose-600" />;
 export const keyIcon = <KeyRound className="size-4 text-amber-600" />;
-
-/** 왼쪽 아래 총 자원 — was 가 있으면 바뀐 값(신청 값 취소선 + 주황 글자). */
-export function TotalsBlock({ rows }: { rows: { k: string; v?: React.ReactNode; was?: string }[] }) {
-  return (
-    <div className="mt-auto flex flex-none flex-col gap-2 border-t border-border px-1 pt-3.5">
-      <div className="text-xs text-muted-foreground">총 자원</div>
-      {rows.map(({ k, v, was }) => (
-        <div key={k} className="flex items-center gap-2 text-[13px]">
-          <span className="flex-1 text-muted-foreground">{k}</span>
-          {was && <span className="font-mono text-[11px] text-[#9aa3ad] line-through">{was}</span>}
-          <span className={cn("font-mono font-semibold", was && "text-[#9a4a0b]")}>{v || "—"}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/** 왼쪽 카드 칸(root)에서 target 카드가 아래로 가려졌는지 — 90% 미만 보이면 hidden. 칸의 스크롤·크기가 바뀔 때마다 다시 본다.
- *  setRoot·setTarget 은 ref 에 넘기는 콜백(단계가 바뀌어 카드가 나중에 그려져도 붙는다). reveal = target 이 칸 아래 끝에 보이게 스크롤. */
-export function useHiddenBelow() {
-  const [root, setRoot] = React.useState<HTMLElement | null>(null);
-  const [target, setTarget] = React.useState<HTMLElement | null>(null);
-  const [hidden, setHidden] = React.useState(false);
-  React.useEffect(() => {
-    if (!root || !target) return;
-    const io = new IntersectionObserver(
-      ([e]) => setHidden(e.intersectionRatio < 0.9 && !!e.rootBounds && e.boundingClientRect.bottom > e.rootBounds.bottom),
-      { root, threshold: [0, 0.9] },
-    );
-    io.observe(target);
-    return () => io.disconnect();
-  }, [root, target]);
-  const reveal = () => {
-    if (root && target) root.scrollTo({ top: root.scrollTop + target.getBoundingClientRect().bottom - root.getBoundingClientRect().bottom, behavior: "smooth" });
-  };
-  return { hidden: hidden && !!root && !!target, setRoot, setTarget, reveal };
-}
-
-/** 가려진 카드 알림 줄 — 카드 칸 아래(총 자원 위)에 '↓ 키페어 (옵션) / 값'. 누르면 그 카드로 스크롤하고 고른다. */
-export function HiddenCardHint({ label, value, onClick }: { label: string; value: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex flex-none cursor-pointer items-center gap-1.5 rounded-lg border border-brand-indigo-200! bg-brand-indigo-50/60 px-3 py-2 text-left text-xs text-primary transition-colors hover:bg-brand-indigo-50"
-    >
-      <ArrowDown className="size-3.5 flex-none" />
-      <span className="flex-none font-semibold">{label}</span>
-      <span className="min-w-0 truncate">/ {value}</span>
-    </button>
-  );
-}
 
 /** 펼치기 카드(템플릿 상세 · 신청 내용) — 1행 제목 + 펼치기/접기, 2행 템플릿명. */
 export function ExpandCard({ title, sub, open, onToggle }: { title: string; sub: string; open: boolean; onToggle: () => void }) {
@@ -502,24 +343,6 @@ export function ExpandCard({ title, sub, open, onToggle }: { title: string; sub:
   );
 }
 
-/** 열기 카드(관리자 처리 화면의 신청 내용) — 1행 제목 + 보기, 2행 스펙·템플릿 이름. 누르면 창을 연다. */
-export function ViewCard({ title, sub, onOpen }: { title: string; sub: string; onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex min-w-0 cursor-pointer flex-col justify-center gap-1 rounded-[10px] border border-border px-4 py-3.5 text-left hover:bg-secondary/50"
-    >
-      <span className="flex items-center gap-2">
-        <span className="flex-1 text-sm font-semibold">{title}</span>
-        <span className="text-xs text-primary">보기</span>
-        <ChevronRight className="size-3 text-primary" />
-      </span>
-      <span className="font-mono text-xs break-all text-muted-foreground">{sub}</span>
-    </button>
-  );
-}
-
 /** 스위치 카드(템플릿 그대로 생성 · 신청 값 그대로). */
 export function SwitchCard({ title, desc, checked, onCheckedChange }: {
   title: string; desc: string; checked: boolean; onCheckedChange: (on: boolean) => void;
@@ -531,23 +354,6 @@ export function SwitchCard({ title, desc, checked, onCheckedChange }: {
         <span className="text-xs break-keep text-muted-foreground">{desc}</span>
       </div>
       <Switch checked={checked} onCheckedChange={onCheckedChange} className="data-[state=checked]:bg-brand-mint-500" aria-label={title} />
-    </div>
-  );
-}
-
-/** 펼침 패널 — 접힌 높이 0 ↔ 내용 높이(그리드 행 애니메이션). 오른쪽 영역 gap(14px)을 접혀 있을 때 없앤다. */
-export function Collapse({ open, children }: { open: boolean; children: React.ReactNode }) {
-  return (
-    <div
-      aria-hidden={!open}
-      className={cn(
-        "-mt-[14px] grid transition-[grid-template-rows,opacity] duration-[350ms] ease-[cubic-bezier(.3,.7,.3,1)]",
-        open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
-      )}
-    >
-      <div className="min-h-0 overflow-hidden">
-        <div className="pt-[14px]">{children}</div>
-      </div>
     </div>
   );
 }
@@ -862,9 +668,8 @@ export function KeypairTable({ rows: list, selected, onSelect, refId, refLabel, 
   );
 }
 
-// ── 신청 화면 노드 구성(시안 2c) ─────────────────────────────────
-// 왼쪽 = 노드 카드(Control Plane·Worker·키페어, 클릭하면 오른쪽 대상이 바뀜) + 총 자원, 오른쪽 = 템플릿 그대로 생성·템플릿 상세 +
-// 대상의 선택 목록(스펙 표 또는 키페어 표). 본문 높이는 고정이고 오른쪽만 스크롤한다.
+// ── 신청 화면 노드 구성(스테퍼 한 열 카드) ───────────────────────
+// 템플릿 그대로 생성 · 템플릿 상세 → 클러스터명 → Control Plane · Worker · 키페어 카드(항목마다 템플릿 값 / 직접 선택).
 
 export type NodeRole = "cp" | "w" | "key";
 export type NodeSource = "custom" | "tpl";
@@ -939,22 +744,20 @@ function templateMeta(t: ClusterTemplate) {
   ];
 }
 
-/** 신청 화면 노드 구성 — 망·서브넷은 묻지 않는다(관리자가 프로비저닝 때 고른다 — 사용자가 내부망/인터넷망을 고르면 헷갈릴 위험). */
-export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onChange, nameCard, nameOk }: {
+/** 신청 화면 노드 구성(시안 Stepper D — 한 열 카드) — 템플릿 그대로 생성 · 템플릿 상세 → 이름 카드(nameCard) → Control Plane · Worker ·
+ *  키페어. 항목마다 '템플릿 값 / 직접 선택'. 망·서브넷은 묻지 않는다(관리자가 프로비저닝 때 고른다 — 사용자가 내부망/인터넷망을
+ *  고르면 헷갈릴 위험). cardRef — 고정 진행 줄 · 왼쪽 '선택 필요'에서 카드로 스크롤할 때 쓴다. */
+export function ClusterNodeCards({ flavors, keypairs, template, value, onChange, nameCard, cardRef }: {
   flavors: FlavorSummary[];
   keypairs: SshKey[];
   template: ClusterTemplate;
   value: ClusterNodeConfig;
   onChange: (v: ClusterNodeConfig) => void;
-  nameCard?: React.ReactNode; // 왼쪽 맨 위(머리 바로 아래) 이름 카드 — 필수 항목에 함께 센다
-  nameOk?: boolean;
+  nameCard: React.ReactNode;
+  cardRef: (key: "cp" | "w" | "key") => (el: HTMLDivElement | null) => void;
 }) {
-  const [role, setRole] = React.useState<NodeRole>("cp");
   const [showMeta, setShowMeta] = React.useState(false);
   const modelOf = useAccelModel();
-  // 키페어 카드가 스크롤 아래로 가려지면 칸 아래에 알린다
-  const { hidden: keyHidden, setRoot: setKeyRoot, setTarget: setKeyTarget, reveal: revealKey } = useHiddenBelow();
-
   const src = value.source;
   const allTpl = Object.values(src).every((s) => s === "tpl");
   const nodes = effectiveNodes(flavors, value, template);
@@ -962,13 +765,11 @@ export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onC
   const tplWorker = findFlavor(flavors, template.flavor_id);
   const masterF = flavors.find((f) => f.id === nodes.masterFlavorId);
   const workerF = flavors.find((f) => f.id === nodes.flavorId);
-  const totals = nodeTotals(flavors, nodes);
   // 키페어 — 템플릿 값이거나 고르지 않으면 템플릿 키페어(없으면 노드에 SSH 키를 넣지 않음)
   const keyName = src.key === "custom" ? keypairs.find((k) => k.id === value.keypairId)?.name : undefined;
+  const keyShown = (src.key === "tpl" ? template.keypair_id : keyName) || "";
   const keyNone = template.keypair_id ? `템플릿 키페어(${template.keypair_id})가 적용됩니다` : "노드에 SSH 키를 넣지 않습니다";
-  // 필수 항목(Control Plane·Worker 스펙) 진행 — 빠진 카드는 빨갛게, 템플릿 값을 못 쓰면 직접 선택으로 안내
-  const required = [!!nodes.masterFlavorId, !!nodes.flavorId];
-  const missingLine = (r: "cp" | "w") => src[r] === "tpl" ? "템플릿 스펙을 사용할 수 없습니다" : PICK_LINE;
+  const missingLine = (r: "cp" | "w") => (src[r] === "tpl" ? "템플릿 스펙을 사용할 수 없습니다" : undefined);
 
   function setSource(r: NodeRole, s: NodeSource) {
     onChange({ ...value, source: { ...src, [r]: s } });
@@ -979,91 +780,78 @@ export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onC
     const cur = flavors.find((f) => f.id === value.flavorId);
     onChange({ ...value, accel: dp, flavorId: cur && !workerFlavorBlock(cur, dp, sameAccel) ? cur.id : "" });
   }
+  // 고른 행을 다시 누르면 해제
   function selectWorker(id: string) {
+    if (id === value.flavorId) return onChange({ ...value, flavorId: "" });
     onChange({ ...value, flavorId: id, accel: flavors.find((f) => f.id === id)?.accelerator ?? value.accel });
   }
-
-  const tplRef = role === "w" ? template.flavor_id : template.master_flavor_id;
-  const tplRefFlavor = findFlavor(flavors, tplRef);
-  const tplBlock = tplRefFlavor && (role === "w" ? workerFlavorBlock(tplRefFlavor, tplRefFlavor.accelerator ?? "") : masterFlavorBlock(tplRefFlavor));
-  const tplMissing = !tplRef ? "템플릿에 스펙이 없습니다"
-    : `템플릿 스펙(${tplRef})을 이 프로젝트에서 쓸 수 없습니다${tplBlock ? ` — ${tplBlock}` : ""}`;
-  const card = "gap-2 px-3.5 py-3"; // 승인 화면(1b)과 같은 카드 크기
+  const tplMissing = (r: "cp" | "w") => {
+    const ref = r === "w" ? template.flavor_id : template.master_flavor_id;
+    const f = findFlavor(flavors, ref);
+    const block = f && (r === "w" ? workerFlavorBlock(f, f.accelerator ?? "") : masterFlavorBlock(f));
+    return !ref ? "템플릿에 스펙이 없습니다" : `템플릿 스펙(${ref})을 이 프로젝트에서 쓸 수 없습니다${block ? ` — ${block}` : ""}`;
+  };
+  const srcSeg = (r: NodeRole) => (
+    <Segment options={[["tpl", "템플릿 값"], ["custom", "직접 선택"]] as const} value={src[r]} onChange={(s) => setSource(r, s)} />
+  );
+  const spec = (r: "cp" | "w") => (
+    <SpecPicker
+      key={`${r}-${src[r]}`}
+      flavors={flavors}
+      role={r}
+      fixed={src[r] === "tpl"}
+      fixedEmpty={tplMissing(r)}
+      selected={r === "w" ? nodes.flavorId : nodes.masterFlavorId}
+      onSelect={(id) => (r === "w" ? selectWorker(id) : onChange({ ...value, masterFlavorId: id === value.masterFlavorId ? "" : id }))}
+      accel={value.accel}
+      onAccel={selectAccel}
+      refLabel="템플릿"
+      refId={r === "w" ? tv.flavorId : tv.masterFlavorId}
+      refAccel={tplWorker ? tplWorker.accelerator ?? "" : undefined}
+      sortSelect
+      groupAccel
+      compactFixed
+    />
+  );
 
   return (
-    <div className="grid h-[652px] min-h-[420px] grid-cols-[270px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden rounded-xl border border-border [&_*]:leading-[1.2]">
-      {/* 왼쪽 — 노드 카드 + 총 자원(승인 화면 1b 와 같은 배치). 높이 652px 은 네트워크 카드가 있던 때 가장 긴 경우(가속기
-          Worker 스펙 줄 두 줄 + 키페어 비움 안내)에 맞춘 값 — 마법사 본문이 낮으면 최소 420px 까지 줄어든다.
-          카드만 스크롤하고 총 자원은 아래 고정 */}
-      <div className="flex min-h-0 flex-col gap-2 overflow-hidden border-r border-border bg-secondary/50 px-4 py-[18px]">
-        <div ref={setKeyRoot} className={PANEL.leftScroll}>
-        <RequiredProgress title="노드 구성" items={nameCard ? [!!nameOk, ...required] : required} />
-        {nameCard}
-        <NodeCard className={card} icon={serverIcon} title="Control Plane" required range="1 또는 3대" rangeAt="count"
-          tag={src.cp === "tpl" && <RefTag label="템플릿" />} status={masterF ? "done" : "missing"} placeholder="스펙을 고르세요"
-          value={masterF?.name} line={masterF ? specLine(masterF) : missingLine("cp")} selected={role === "cp"} onSelect={() => setRole("cp")}
-          count={[value.masterCount, () => onChange({ ...value, masterCount: 1 }), () => onChange({ ...value, masterCount: 3 })]} />
-        <NodeCard className={card} icon={serverIcon} title="Worker" required range={`1~${MAX_WORKERS}대`} rangeAt="count"
-          tag={src.w === "tpl" && <RefTag label="템플릿" />} status={workerF ? "done" : "missing"} placeholder="스펙을 고르세요"
-          value={workerF?.name} line={workerF ? <>{specLine(workerF)}<WorkerAccel f={workerF} model={modelOf(workerF.accelerator)} /></>
-            : missingLine("w")}
-          selected={role === "w"} onSelect={() => setRole("w")}
-          count={[value.nodeCount, () => onChange({ ...value, nodeCount: Math.max(1, value.nodeCount - 1) }),
-            () => onChange({ ...value, nodeCount: Math.min(MAX_WORKERS, value.nodeCount + 1) })]} />
-        <div ref={setKeyTarget} className="flex flex-none flex-col">
-        <NodeCard className={card} icon={keyIcon} title="키페어" optional tag={src.key === "tpl" && <RefTag label="템플릿" />}
-          value={(src.key === "tpl" ? template.keypair_id : keyName) || "사용 안 함"}
-          valueMuted={!(src.key === "tpl" ? template.keypair_id : keyName)}
-          line={(src.key === "tpl" ? template.keypair_id : keyName) ? undefined : keyNone}
-          selected={role === "key"} onSelect={() => setRole("key")} />
-        </div>
-        </div>
-        {keyHidden && (
-          <HiddenCardHint label="키페어 (옵션)" value={(src.key === "tpl" ? template.keypair_id : keyName) || "사용 안 함"}
-            onClick={() => { revealKey(); setRole("key"); }} />
-        )}
-        <TotalsBlock rows={[
-          { k: "vCPU", v: totals && `${totals.vcpu}` }, { k: "RAM", v: totals && `${totals.ramGb} GB` },
-          { k: "Disk", v: totals && `${totals.diskGb} GB` },
-          { k: "가속기", v: totals && workerF && <TotalAccel f={workerF} model={modelOf(workerF.accelerator)} n={nodes.nodeCount} /> },
-        ]} />
+    <>
+      <div className="grid flex-none grid-cols-2 gap-3">
+        <SwitchCard title="템플릿 그대로 생성" desc="템플릿 사양 그대로 생성합니다." checked={allTpl}
+          onCheckedChange={(on) => onChange({ ...value, source: on ? { cp: "tpl", w: "tpl", key: "tpl" } : { cp: "custom", w: "custom", key: "custom" } })} />
+        <ExpandCard title="템플릿 상세" sub={[template.name, template.kubeVersion && `v${template.kubeVersion}`].filter(Boolean).join(" · ")}
+          open={showMeta} onToggle={() => setShowMeta((o) => !o)} />
       </div>
-
-      {/* 오른쪽 — 넘치면 여기만 스크롤 */}
-      <div className="grid min-h-0 min-w-0 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-[14px] overflow-y-auto px-6 py-5 [scrollbar-width:thin]">
-        <div className="grid grid-cols-2 gap-3">
-          <SwitchCard title="템플릿 그대로 생성" desc="템플릿 사양 그대로 생성합니다." checked={allTpl}
-            onCheckedChange={(on) => onChange({ ...value, source: on ? { cp: "tpl", w: "tpl", key: "tpl" } : { cp: "custom", w: "custom", key: "custom" } })} />
-          <ExpandCard title="템플릿 상세" sub={template.name} open={showMeta} onToggle={() => setShowMeta((o) => !o)} />
+      {showMeta && <MetaGrid groups={templateMeta(template)} />}
+      {nameCard}
+      <FormCard ref={cardRef("cp")} icon={serverIcon} title="Control Plane" required range="1 또는 3대"
+        tag={src.cp === "tpl" && <RefTag label="템플릿" />} status={masterF ? "done" : "missing"} ask="스펙을 고르세요"
+        value={masterF ? `${masterF.name} × ${value.masterCount}대` : undefined} line={!masterF && missingLine("cp")} action={srcSeg("cp")}>
+        <div className="flex items-center gap-3">
+          <Segment options={[["1", "1대"], ["3", "3대"]] as const} value={String(value.masterCount) as "1" | "3"}
+            onChange={(n) => onChange({ ...value, masterCount: Number(n) })} />
         </div>
-        <Collapse open={showMeta}><MetaGrid groups={templateMeta(template)} /></Collapse>
-
-        <PickerHeader
-          title={{ cp: "Control Plane 스펙", w: "Worker 스펙", key: "키페어" }[role]}
-          hint={src[role] === "tpl" ? "템플릿 값을 사용합니다"
-            : { cp: "가속기 없는 스펙만 쓸 수 있습니다", w: "가속기를 고르면 맞는 스펙만 보입니다", key: "노드에 주입할 SSH 키페어 · 다시 누르면 선택 해제" }[role]}
-        >
-          <Segment options={[["custom", "직접 선택"], ["tpl", "템플릿 값"]] as const} value={src[role]} onChange={(s) => setSource(role, s)} />
-        </PickerHeader>
-
-        {role !== "key" ? (
-          <SpecPicker
-            key={`${role}-${src[role]}`}
-            flavors={flavors}
-            role={role}
-            fixed={src[role] === "tpl"}
-            fixedEmpty={tplMissing}
-            selected={role === "w" ? nodes.flavorId : nodes.masterFlavorId}
-            onSelect={(id) => (role === "w" ? selectWorker(id) : onChange({ ...value, masterFlavorId: id }))}
-            accel={value.accel}
-            onAccel={selectAccel}
-            refLabel="템플릿"
-            refId={role === "w" ? tv.flavorId : tv.masterFlavorId}
-            refAccel={tplWorker ? tplWorker.accelerator ?? "" : undefined}
-            sortSelect
-            groupAccel
-          />
-        ) : src.key === "tpl" ? (
+        {spec("cp")}
+      </FormCard>
+      <FormCard ref={cardRef("w")} icon={serverIcon} title="Worker" required range={`1~${MAX_WORKERS}대`}
+        tag={src.w === "tpl" && <RefTag label="템플릿" />} status={workerF ? "done" : "missing"} ask="스펙을 고르세요"
+        value={workerF ? `${workerF.name} × ${value.nodeCount}대` : undefined} line={!workerF && missingLine("w")} action={srcSeg("w")}>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center overflow-hidden rounded-[7px] border border-input bg-card">
+            <button type="button" onClick={() => onChange({ ...value, nodeCount: Math.max(1, value.nodeCount - 1) })}
+              className="h-7 w-7 cursor-pointer text-[15px] text-muted-foreground hover:bg-secondary">−</button>
+            <span className="w-[30px] text-center font-mono text-[13px] font-semibold tabular-nums">{value.nodeCount}</span>
+            <button type="button" onClick={() => onChange({ ...value, nodeCount: Math.min(MAX_WORKERS, value.nodeCount + 1) })}
+              className="h-7 w-7 cursor-pointer text-[15px] text-muted-foreground hover:bg-secondary">+</button>
+          </div>
+          <span className="text-xs text-muted-foreground">대</span>
+          {workerF && <WorkerAccel f={workerF} model={modelOf(workerF.accelerator)} />}
+        </div>
+        {spec("w")}
+      </FormCard>
+      <FormCard ref={cardRef("key")} icon={keyIcon} title="키페어" optional tag={src.key === "tpl" && <RefTag label="템플릿" />}
+        value={keyShown || "사용 안 함"} valueMuted={!keyShown} line={!keyShown && keyNone} action={srcSeg("key")}>
+        {src.key === "tpl" ? (
           /* 템플릿 값 — 템플릿 키페어 한 줄 */
           <KeypairTable
             rows={template.keypair_id ? [{ id: "tpl", name: template.keypair_id, fingerprint: "—", type: "ssh" }] : []}
@@ -1074,12 +862,12 @@ export function ClusterNodeConfigPanel({ flavors, keypairs, template, value, onC
           /* 직접 선택 — 본인 SSH 키(관리자는 OpenStack 키페어). 고른 행을 다시 누르면 해제(템플릿 키페어) */
           <KeypairTable
             rows={keypairs.map((k) => ({ id: k.id, name: k.name, fingerprint: k.fingerprint, type: keyType(k.publicKey) }))}
-            selected={value.keypairId} refLabel="템플릿"
+            selected={value.keypairId} refLabel="템플릿" paged
             onSelect={(id) => onChange({ ...value, keypairId: value.keypairId === id ? "" : id })}
             empty={<>등록된 키페어가 없습니다. <span className="font-semibold">키페어</span> 메뉴에서 생성할 수 있습니다.</>}
           />
         )}
-      </div>
-    </div>
+      </FormCard>
+    </>
   );
 }
