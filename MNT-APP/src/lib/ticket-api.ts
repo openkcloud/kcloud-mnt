@@ -250,11 +250,11 @@ async function refreshSteps(qc: QueryClient, id: string) {
   await qc.prefetchQuery({ queryKey: ["tickets", "steps", id], queryFn: () => fetchTicketSteps(id), staleTime: 0 });
 }
 
-/** 프로비저닝 진행(최신 회차 단계·상세 단계) — 생성 중이면 1초마다 다시 조회. */
-export function useTicketSteps(id: string | undefined) {
+/** 프로비저닝 진행(최신 회차 단계·상세 단계) — 생성 중이면 1초마다 다시 조회. enabled=false 면 받아 둔 값만 쓴다(닫힌 창). */
+export function useTicketSteps(id: string | undefined, enabled = true) {
   return useQuery({
     queryKey: ["tickets", "steps", id],
-    enabled: !!id,
+    enabled: !!id && enabled,
     queryFn: () => fetchTicketSteps(id!),
     refetchInterval: (query) => (query.state.data?.status === "provisioning" ? 1000 : false),
   });

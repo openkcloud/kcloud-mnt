@@ -133,6 +133,16 @@ def test_목록의_신청자_조직은_신청자_본인_조직(client):
     assert (t["requesterOrgName"], t["orgName"]) == ("ETRI", "오케스트로")  # 신청자(admin) 조직 ≠ 프로젝트 조직
 
 
+def test_처리_기록에_처리자_조직(client):
+    # 승인 = admin(ETRI), 프로비저닝 = ek.lee(오케스트로) — 처리자마다 본인 조직
+    sql("""INSERT INTO tkt_request (id, project_id, requested_by, request_spec, approved_by, approved_at,
+                                    provisioning_by, provisioning_at)
+           SELECT 'req-990101-004', :p, a.id, '{}'::jsonb, a.id, now(), e.id, now()
+             FROM iam_user a, iam_user e WHERE a.username = 'admin' AND e.username = 'ek.lee'""", p=PROJECT)
+    t = client.get("/api/core/tickets?requestedBy=admin", headers=bearer(make_token("admin"))).json()["items"][0]
+    assert (t["approvedByOrgName"], t["provisioningByOrgName"], t["finishedByOrgName"]) == ("ETRI", "오케스트로", None)
+
+
 def test_승인은_관리자만(client):
     r = client.patch("/api/core/tickets/req-x", json={"action": "approve", "processedBy": "admin"},
                      headers=bearer(make_token()))

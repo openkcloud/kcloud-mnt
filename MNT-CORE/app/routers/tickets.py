@@ -132,11 +132,11 @@ _SELECT = """
            r.approved_at, r.provisioning_at, r.approved_reject_at, r.approved_reject_reason,
            r.provisioning_reject_at, r.provisioning_reject_reason, r.error_message, r.created_at, r.finished_at,
            u.username, u.name AS requester_name, ro.name AS requester_org_name, o.id AS org_id, o.name AS org_name,
-           ap.username AS approved_by, ap.name AS approved_by_name,
-           pv.username AS provisioning_by, pv.name AS provisioning_by_name,
-           ar.username AS approved_reject_by, ar.name AS approved_reject_by_name,
-           pr.username AS provisioning_reject_by, pr.name AS provisioning_reject_by_name,
-           fn.username AS finished_by, fn.name AS finished_by_name
+           ap.username AS approved_by, ap.name AS approved_by_name, apo.name AS approved_by_org_name,
+           pv.username AS provisioning_by, pv.name AS provisioning_by_name, pvo.name AS provisioning_by_org_name,
+           ar.username AS approved_reject_by, ar.name AS approved_reject_by_name, aro.name AS approved_reject_by_org_name,
+           pr.username AS provisioning_reject_by, pr.name AS provisioning_reject_by_name, pro.name AS provisioning_reject_by_org_name,
+           fn.username AS finished_by, fn.name AS finished_by_name, fno.name AS finished_by_org_name
       FROM tkt_request r
       JOIN iam_user u ON u.id = r.requested_by
       LEFT JOIN iam_org ro ON ro.id = u.org_id  -- 신청자 본인 조직(관리자는 다른 조직 프로젝트에도 신청)
@@ -147,6 +147,12 @@ _SELECT = """
       LEFT JOIN iam_user ar ON ar.id = r.approved_reject_by
       LEFT JOIN iam_user pr ON pr.id = r.provisioning_reject_by
       LEFT JOIN iam_user fn ON fn.id = r.finished_by
+      -- 처리자 조직(처리 기록 '이름(조직)') — 신청자 조직과 같은 기준
+      LEFT JOIN iam_org apo ON apo.id = ap.org_id
+      LEFT JOIN iam_org pvo ON pvo.id = pv.org_id
+      LEFT JOIN iam_org aro ON aro.id = ar.org_id
+      LEFT JOIN iam_org pro ON pro.id = pr.org_id
+      LEFT JOIN iam_org fno ON fno.id = fn.org_id
 """
 
 
@@ -174,20 +180,25 @@ def _to_item(r) -> dict:
         # 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려) · 마감(완료 / 실패)
         "approvedBy": r["approved_by"],
         "approvedByName": r["approved_by_name"],
+        "approvedByOrgName": r["approved_by_org_name"],
         "approvedAt": _iso(r["approved_at"]),
         "provisioningBy": r["provisioning_by"],
         "provisioningByName": r["provisioning_by_name"],
+        "provisioningByOrgName": r["provisioning_by_org_name"],
         "provisioningAt": _iso(r["provisioning_at"]),
         "approvedRejectBy": r["approved_reject_by"],
         "approvedRejectByName": r["approved_reject_by_name"],
+        "approvedRejectByOrgName": r["approved_reject_by_org_name"],
         "approvedRejectAt": _iso(r["approved_reject_at"]),
         "approvedRejectReason": r["approved_reject_reason"],
         "provisioningRejectBy": r["provisioning_reject_by"],
         "provisioningRejectByName": r["provisioning_reject_by_name"],
+        "provisioningRejectByOrgName": r["provisioning_reject_by_org_name"],
         "provisioningRejectAt": _iso(r["provisioning_reject_at"]),
         "provisioningRejectReason": r["provisioning_reject_reason"],
         "finishedBy": r["finished_by"],  # 마감 처리자 = 그 회차 프로비저닝을 시작한 관리자
         "finishedByName": r["finished_by_name"],
+        "finishedByOrgName": r["finished_by_org_name"],
         "finishedAt": _iso(r["finished_at"]),
         "errorMessage": r["error_message"],
     }

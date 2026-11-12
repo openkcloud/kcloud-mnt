@@ -87,8 +87,13 @@ export function WorkspaceLimitFields({
 }
 
 /* ── 신청 폼 (사용자) ──────────────────────────────────────── */
-/** 자원 신청 창의 'AI 워크스페이스 신청' 탭과 워크스페이스 화면의 신청 창이 함께 쓴다 */
-export function WorkspaceRequestForm({ onDone }: { onDone: () => void }) {
+const LIMITS_DEFAULT: WorkspaceLimitsInput = { cpu: "4", memoryGi: "16", acceleratorCount: "1", storageGi: "50" };
+
+/**
+ * 자원 신청 창의 'AI 워크스페이스 신청' 탭과 워크스페이스 화면의 신청 창이 함께 쓴다.
+ * onDirty: 입력 여부(프로젝트 · 사용 목적을 넣었거나 한도를 기본값에서 바꿈) — 자원 신청 창의 닫기 확인 · 유형 선택 복귀용
+ */
+export function WorkspaceRequestForm({ onDone, onDirty }: { onDone: () => void; onDirty?: (dirty: boolean) => void }) {
   const user = useAuth((s) => s.user);
   const create = useCreateAiWorkspaceTicket();
   const { data: projects = [], isLoading, error, failureCount } = useTicketProjects(user?.username);
@@ -111,9 +116,10 @@ export function WorkspaceRequestForm({ onDone }: { onDone: () => void }) {
     .sort((a, b) => Number(b.projectId === projectId) - Number(a.projectId === projectId));
   const [clusterId, setClusterId] = React.useState("");
   const [purpose, setPurpose] = React.useState("");
-  const [limits, setLimits] = React.useState<WorkspaceLimitsInput>({
-    cpu: "4", memoryGi: "16", acceleratorCount: "1", storageGi: "50",
-  });
+  const [limits, setLimits] = React.useState<WorkspaceLimitsInput>(LIMITS_DEFAULT);
+  const dirty = !!projectId || !!purpose.trim()
+    || (Object.keys(LIMITS_DEFAULT) as (keyof WorkspaceLimitsInput)[]).some((k) => limits[k] !== LIMITS_DEFAULT[k]);
+  React.useEffect(() => onDirty?.(dirty), [dirty, onDirty]);
 
   function submit() {
     create.mutate(

@@ -1,38 +1,32 @@
 "use client";
 /**
- * VM 신청 프로비저닝 결정(관리자) — 승인(프로비저닝)·실패(재시도). 클러스터 1b 와 같은 2단 패널:
- *  왼쪽 카드(네트워크·보안그룹·배치 노드·키페어) + 총 자원, 오른쪽은 고른 카드의 고르기
- *  (네트워크 표 · IP 방식 · Floating IP / 보안그룹 표 / 배치·가용량 미리보기 / 키페어 표).
- * 키페어는 신청 값(사용자 = 포털 SSH 키, 관리자 = OpenStack 키페어) 또는 OpenStack 키페어 직접 선택이고 비울 수도 있다.
+ * VM 프로비저닝 설정(관리자, 시안 Stepper D) — 승인(프로비저닝) · 실패(설정 바꿔 재시도). 신청 상세 스테퍼의 STEP 03 화면.
+ *  고정 진행 줄(네트워크 · 보안그룹 · 배치 노드 + 키페어) + '사용자 희망' 줄 + 한 열 카드:
+ *  네트워크(표 · IP 자동/직접 입력 + 중복 확인 · Floating IP + 풀) · 보안그룹(체크 표) · 키페어(신청 값 / OpenStack 키페어 직접 선택,
+ *  비울 수도 있음) · 배치 노드(후보 노드 · 용량 막대 · 프로젝트 쿼터).
  * 재시도는 지난 회차 승인 설정으로 채운다. 망·IP·쿼터·키페어는 프로비저닝 요청 때 서버가 다시 확인한다(실패하면 사유가 오류로 온다).
  */
 import * as React from "react";
 import { AlertCircle, Check, Cpu, Network, RotateCcw, Server, ShieldCheck, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  AccelBadge, CapacityBar, ChangedTag, HiddenCardHint, KeypairTable, ManualTag, NetBadge, NodeCard, Pager, PickerHeader, QuotaBar,
-  Radio, RefTag, RequiredProgress, SearchInput, PICK_LINE, Segment, SharedTag, TotalsBlock, ViewCard, keyIcon, keyType, paginate,
-  useAccelModel, useHiddenBelow, type KeyRow,
+  AccelBadge, CapacityBar, ChangedTag, KeypairTable, NetBadge, Pager, QuotaBar, Radio, RefTag, SearchInput, Segment, SharedTag,
+  keyIcon, keyType, paginate, useAccelModel, type KeyRow,
 } from "@/components/cluster-node-fields";
-import { RequestContentDialog } from "@/components/request-review";
+import { QuotaBars } from "@/components/request-review";
+import { ReasonBanner } from "@/components/request-detail";
 import {
-  DETAIL_BODY, DETAIL_CONTENT, DETAIL_W, DetailFooter, DetailHeader, PANEL, ReasonBanner, RejectInput, RequestHero,
-} from "@/components/request-detail";
+  FloatProgress, FormCard, RejectBar, StepFooter, StepMain, StepperGrid, SumSection, progressStep, useCardScroll, type ProgressItem, type StepItem,
+} from "@/components/request-stepper";
 import {
   useIpCheck, useNovaKeypairs, usePlacementPreview, useProjectNetworks, useProjectSecurityGroups, type PlacementPreview,
 } from "@/lib/iaas-api";
 import type { ProvNetwork, ProvisionSpec, ResourceRequest } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-/** 이 모달로 보는 신청 — VM 의 승인(프로비저닝)·실패(재시도). 나머지 상태는 기존 상세. */
-export function isVmReview(r: ResourceRequest) {
-  return r.type === "vm" && ["approved", "failed"].includes(r.status);
-}
 
 function ipInCidr(ip: string, cidr: string) {
   const toNum = (s: string) => {
@@ -50,27 +44,29 @@ function ipInCidr(ip: string, cidr: string) {
   return n > start && n < start + size - 1;
 }
 
-type Role = "net" | "sg" | "place" | "key";
+type Card = "net" | "sg" | "key" | "place";
 const REQ_KEY = "@request"; // 키페어 표의 신청 키 행(포털 SSH 키 — OpenStack 키페어 이름과 겹치지 않는 값)
 
 /**
- * VM 프로비저닝 결정 모달 내용(DialogContent) — 공용 틀(머리 · 이름 카드 · 사유 띠 · 2단 패널 · 고정 바닥), 폭 1000px.
- * 창은 스크롤하지 않고 패널이 남는 높이에 맞춰 줄어든다(최소 420px — 신청 마법사 가상머신 구성과 같음).
- * 반려는 사유 입력을 펼친다(사유 필수). 패널 입력 상태는 반려 입력 중에도 숨겨 둘 뿐 유지한다.
+ * VM 프로비저닝 설정 화면 — 왼쪽 스테퍼(left) · 오른쪽 요약 머리(summaryTop) · 총 자원(totals)은 신청 상세가 넘긴다.
+ * 반려는 바닥 줄이 사유 입력으로 바뀐다(사유 필수). 입력 상태는 반려 입력 중에도 그대로 둔다.
  */
-export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provisioning, onReject, onProvision }: {
+export function VmSetupView({ r, left, summaryTop, totals, rejectFirst, reviewing, provisioning, onReject, onContent, onProvision }: {
   r: ResourceRequest;
-  badge: React.ReactNode;
+  left: (cur?: Partial<StepItem>) => React.ReactNode; // STEP 03 에 필수 n/m · 선택 필요를 덮어써 그린다
+  summaryTop: React.ReactNode;
+  totals: [string, React.ReactNode][];
   rejectFirst?: boolean;   // 목록의 '반려' 버튼으로 열면 반려 사유 입력부터
-  reviewing: boolean;
-  provisioning: boolean;
-  onReject: (reason: string) => void;
-  onProvision: (spec: ProvisionSpec) => void; // host 포함(노드 지정 권한이 있을 때만)
+  reviewing?: boolean;
+  provisioning?: boolean;
+  onReject?: (reason: string) => void;
+  onContent?: () => void;  // 바닥 왼쪽 '신청 내용 보기(전체)'
+  onProvision?: (spec: ProvisionSpec) => void; // host 포함(노드 지정 권한이 있을 때만)
 }) {
   const isFailed = r.status === "failed";
   const [rejecting, setRejecting] = React.useState(!!rejectFirst);
-  const [reason, setReason] = React.useState("");
-  const modelOf = useAccelModel();
+  const [tried, setTried] = React.useState(false); // [프로비저닝]을 눌러 막혔는지
+  const { scrollRef, cardRef, scrollTo } = useCardScroll<Card>();
 
   const { data: networks = [], isLoading: netLoading, error: netError } = useProjectNetworks(r.projectId);
   const { data: sgs = [], isLoading: sgLoading, error: sgError } = useProjectSecurityGroups(r.projectId);
@@ -78,8 +74,6 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
 
   // 재시도(실패한 신청)면 이전 회차의 승인 설정으로 채워 두고 고칠 수 있게 한다
   const prev = r.provisionSpec;
-  const [role, setRole] = React.useState<Role>("net");
-  const [showContent, setShowContent] = React.useState(false); // 신청 내용 창
   const [networkId, setNetworkId] = React.useState(prev?.networkId ?? "");
   const [fipOn, setFipOn] = React.useState(prev ? !!prev.floatingNetworkId : !!r.floatingIp);
   const [fipNetId, setFipNetId] = React.useState(prev?.floatingNetworkId ?? "");
@@ -93,8 +87,6 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
   const reqNova = r.keypairId ? undefined : r.novaKeypair ?? null; // 신청 키가 OpenStack 키페어면 그 이름(포털 SSH 키면 undefined)
   const [keySrc, setKeySrc] = React.useState<"req" | "custom">(prev && "novaKeypair" in prev ? "custom" : "req");
   const [keyPick, setKeyPick] = React.useState<string | null>(prev?.novaKeypair ?? null);
-  // 키페어 카드가 스크롤 아래로 가려지면 칸 아래에 알린다(클러스터 노드 구성과 같음)
-  const { hidden: keyHidden, setRoot: setKeyRoot, setTarget: setKeyTarget, reveal: revealKey } = useHiddenBelow();
 
   const net = networks.find((n) => n.id === networkId);
   const isExternal = net?.kind === "external";
@@ -114,15 +106,12 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
   const netOk = !!net && ipValid && fipOk;
   const sgOk = sgNames.length > 0;
   const placeOk = place.ok && place.pin?.candidate !== false;
-  const required = [netOk, sgOk, placeOk];
   // 키페어(옵션) — 넣을 OpenStack 키페어가 지금 없으면(지웠으면) 막는다. 신청 값이 포털 SSH 키면 서버가 확인한다
   const keyChanged = !noCloudInit && keySrc === "custom" && keyPick !== reqNova;
   const keyNova = keySrc === "custom" ? keyPick : reqNova;
   const keyMissing = !!keyNova && !!novaKeys && !novaKeys.some((k) => k.name === keyNova);
   const keyName = keySrc === "custom" ? keyPick : r.keypairName ?? null;
   const keyValue = noCloudInit ? "미적용 (cloud-init 없음)" : keyName ?? "사용 안 함";
-  const missing = [!net && "네트워크", !!net && !ipValid && "IP 확인", !!net && !fipOk && "Floating IP 풀", !sgOk && "보안그룹",
-    !place.loading && !placeOk && "배치", keyMissing && "키페어(OpenStack 에 없음)"].filter((x): x is string => !!x);
   const spec: ProvisionSpec | null = netOk && sgOk && placeOk && !keyMissing ? {
     networkId: net.id,
     networkName: net.name,
@@ -133,18 +122,22 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
     host: place.pin?.host,
     ...(keyChanged ? { novaKeypair: keyPick } : {}),
   } : null;
-  const status = place.loading && missing.length === 0 ? "배치·가용량을 확인하는 중…"
-    : spec ? `VM 1대 프로비저닝 준비됨${place.pin ? ` / ${place.pin.host}` : ""}` : `선택 필요: ${missing.join(", ")}`;
+  // 막힌 이유와 첫 빈 카드 — [프로비저닝]을 눌러 막히면 바닥에 빨갛게 보이고 그 카드로 옮긴다(평소에는 진행 알림이 빠진 항목을 보여 준다)
+  const verb = isFailed ? "재시도" : "프로비저닝";
+  const blocked: [Card, string] | null = spec ? null
+    : !net ? ["net", `네트워크를 골라야 ${verb}할 수 있습니다`]
+    : !ipValid ? ["net", `IP 중복 확인이 끝나야 ${verb}할 수 있습니다`]
+    : !fipOk ? ["net", `Floating IP 풀을 골라야 ${verb}할 수 있습니다`]
+    : !sgOk ? ["sg", `보안그룹을 하나 이상 골라야 ${verb}할 수 있습니다`]
+    : !placeOk ? ["place", place.loading ? "배치·가용량을 확인하는 중입니다" : `배치 노드 — ${place.problem ?? "확인이 필요합니다"}`]
+    : ["key", `OpenStack 에 없는 키페어입니다 — 다른 키페어를 골라야 ${verb}할 수 있습니다`];
+  const status = spec ? `VM 1대 ${verb} 준비됨${place.pin ? ` / ${place.pin.host}` : ""}`
+    : tried ? blocked?.[1]
+    : place.loading && netOk && sgOk && !keyMissing ? "배치·가용량을 확인하는 중…" : undefined;
 
-  const netLine = !net ? PICK_LINE
+  const netLine = !net ? undefined
     : [ipManual ? (ipValid ? `고정 IP ${fixedIp}` : "IP 중복 확인이 필요합니다") : "IP 자동 할당(DHCP)",
       !isExternal && fipOn && (fipNet ? `Floating IP ${fipNet.name}` : "Floating IP 풀이 없습니다")].filter(Boolean).join(" / ");
-  const disk = r.diskGb ? `${r.diskGb} GB` : r.volumeGb ? `부팅 볼륨 ${r.volumeGb} GB` : "—";
-  const accel = r.accelerators?.length
-    ? <span className="flex flex-wrap justify-end gap-1">
-        {r.accelerators.map((a) => <AccelBadge key={a.kind} kind={a.kind} model={modelOf(r.deviceProfile)} count={a.count} />)}
-      </span>
-    : r.deviceProfile ? <AccelBadge /> : "없음";
 
   // 키페어 행 — OpenStack(Nova) 키페어(이름으로 찾아 공개키를 넣는다). 신청 키는 포털 SSH 키 또는 OpenStack 키페어
   const keyRows: KeyRow[] = (novaKeys ?? []).map((k) => ({ id: k.name, name: k.name, fingerprint: k.fingerprint, type: k.type || keyType(k.publicKey) }));
@@ -153,188 +146,158 @@ export function VmProvisionContent({ r, badge, rejectFirst, reviewing, provision
     : keyRows.find((k) => k.id === r.keypairName)
       ?? { id: r.keypairName, name: r.keypairName, fingerprint: novaKeys ? "OpenStack 에 없음 — 직접 선택으로 다른 키페어를 고르세요" : "—", type: "—" };
 
+  const summary = (
+    <>
+      {summaryTop}
+      <SumSection title="사용자 희망" rows={[
+        ["네트워크(희망)", r.networkType === "external" ? "인터넷망" : "내부망"], ["Floating IP", r.floatingIp ? "희망" : "희망 안 함"],
+        ["키페어", r.keypairName || undefined],
+      ]} />
+      <SumSection title="총 자원" rows={totals} />
+      <SumSection title={<>프로젝트 쿼터 <span className="font-normal text-muted-foreground">({isFailed ? "지금 기준" : "사용 → 신청 후"})</span></>}>
+        <QuotaBars projectId={r.projectId} add={{ vcpu: r.vcpu ?? 0, ramGb: r.ramGb ?? 0, diskGb: r.volumeGb || r.diskGb || 0 }} />
+      </SumSection>
+    </>
+  );
+
+  const progress: ProgressItem[] = [
+    { key: "net", label: "네트워크", value: net?.name, ok: netOk },
+    { key: "sg", label: "보안그룹", value: sgNames.join(", "), ok: sgOk },
+    { key: "place", label: "배치 노드", value: place.loading ? undefined : place.pin?.host ?? (place.ok ? "스케줄러" : undefined), ok: placeOk },
+    { key: "key", label: "키페어", value: noCloudInit ? "미적용" : keyName ?? "사용 안 함", ok: !keyMissing, optional: true },
+  ];
+  const jump = (k: string) => scrollTo(k as Card);
+
   return (
-    <DialogContent className={cn(DETAIL_CONTENT, DETAIL_W.process)} onOpenAutoFocus={(e) => e.preventDefault()}>
-      <DetailHeader badge={badge} description={isFailed
-        ? "가상머신 구성을 확인·수정해 재시도하거나 반려하세요. 실패한 회차가 만든 자원은 정리되었습니다."
-        : "네트워크·보안그룹을 고르고 배치·키페어를 확인한 뒤 프로비저닝하거나 반려하세요."} />
-
-      {/* 세로 flex — 패널(660px)이 남는 높이에 맞춰 줄어든다 */}
-      <div className={cn(DETAIL_BODY, "flex flex-col")}>
-        <RequestHero r={r} />
-        <ReasonBanner r={r} />
-        <div className={cn(PANEL.grid, "min-h-[420px]", rejecting && "hidden")}>
-          {/* 왼쪽 — 가상머신 구성 카드(신청 마법사와 같은 이름) + 총 자원. 카드만 스크롤하고 총 자원은 아래 고정 */}
-          <div className={cn(PANEL.left, "overflow-hidden")}>
-            <div ref={setKeyRoot} className={PANEL.leftScroll}>
-            <RequiredProgress title="가상머신 구성" items={required} />
-            <NodeCard className={PANEL.card} icon={<Network className="size-4 text-primary" />} title="네트워크" required tag={<ManualTag />}
-              status={netOk ? "done" : "missing"} placeholder="네트워크를 고르세요" value={net?.name} line={netLine}
-              selected={role === "net"} onSelect={() => setRole("net")} />
-            <NodeCard className={PANEL.card} icon={<ShieldCheck className="size-4 text-emerald-600" />} title="보안그룹" required tag={<ManualTag />}
-              status={sgOk ? "done" : "missing"} placeholder="보안그룹을 고르세요" value={sgNames.join(", ")}
-              line={sgOk ? undefined : "하나 이상 고르세요"} selected={role === "sg"} onSelect={() => setRole("sg")} />
-            <NodeCard className={PANEL.card} icon={<Server className="size-4 text-rose-600" />} title="배치 노드" required
-              status={place.loading ? undefined : placeOk ? "done" : "missing"} placeholder="배치할 수 없습니다"
-              value={place.loading ? "확인 중…" : place.pin ? place.pin.host : place.ok ? "스케줄러가 후보 중에서 고름" : null}
-              valueMuted={place.loading || (!place.pin && place.ok)}
-              line={place.loading ? undefined : place.problem ?? `후보 ${place.candidates}대 / 전체 ${place.total}대`}
-              selected={role === "place"} onSelect={() => setRole("place")} />
-            <div ref={setKeyTarget} className="flex flex-none flex-col">
-            <NodeCard className={PANEL.card} icon={keyIcon} title="키페어" optional
-              tag={noCloudInit ? undefined : keyChanged ? <ChangedTag /> : <RefTag label="신청 값" />}
-              status={keyMissing ? "missing" : undefined} value={keyValue} valueMuted={noCloudInit || keyName === null}
-              line={noCloudInit ? "이 템플릿은 키페어를 넣을 수 없습니다"
-                : keyMissing ? "OpenStack 에 없는 키페어입니다. 직접 선택에서 다른 키페어를 고르세요"
-                : keyName === null ? "VM 에 SSH 키를 넣지 않습니다"
-                : keySrc === "req" && r.keypairId ? "신청자 SSH 키" : "OpenStack 키페어"}
-              was={keyChanged ? r.keypairName ?? "사용 안 함" : undefined}
-              selected={role === "key"} onSelect={() => setRole("key")} />
-            </div>
-            </div>
-            {keyHidden && <HiddenCardHint label="키페어 (옵션)" value={keyValue} onClick={() => { revealKey(); setRole("key"); }} />}
-            <TotalsBlock rows={[
-              { k: "VM", v: "1대" }, { k: "vCPU", v: r.vcpu != null ? `${r.vcpu}` : undefined },
-              { k: "RAM", v: r.ramGb != null ? `${r.ramGb} GB` : undefined }, { k: "Disk", v: disk }, { k: "가속기", v: accel },
-            ]} />
-          </div>
-
-          {/* 오른쪽 — 넘치면 여기만 스크롤 */}
-          <div className={PANEL.right}>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex min-w-0 flex-col justify-center gap-1.5 rounded-[10px] border border-border px-4 py-3.5">
-                <span className="text-sm font-semibold">사용자 희망</span>
-                <span className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                  <NetBadge type={r.networkType === "external" ? "internet" : "internal"} />
-                  {r.floatingIp ? "공인 IP 희망" : "공인 IP 희망 안 함"}
-                </span>
-              </div>
-              <ViewCard title="신청 내용" sub={r.flavorName ?? "—"} onOpen={() => setShowContent(true)} />
-            </div>
-
-            {role === "net" && (
-              <>
-                <PickerHeader title="네트워크" hint="VM 을 붙일 네트워크 · 다시 누르면 선택 해제" />
-                <NetworkTable networks={networks} loading={netLoading} error={netError?.message} selected={networkId}
-                  onSelect={(id) => { setNetworkId(networkId === id ? "" : id); setIpManual(false); setFixedIp(""); setCheckedIp(""); }} />
-                {net && (
-                  <>
-                    <PickerHeader title="IP" hint={ipManual ? `${net.cidr} 범위의 호스트 IP` : "DHCP 로 자동 할당합니다"}>
-                      <Segment options={[["auto", "자동 할당"], ["manual", "직접 입력"]] as const} value={ipManual ? "manual" : "auto"}
-                        onChange={(v) => setIpManual(v === "manual")} />
-                    </PickerHeader>
-                    {ipManual && (
-                      <div className="grid gap-1.5">
-                        <div className="flex items-center gap-2">
-                          <Input value={fixedIp} onChange={(e) => setFixedIp(e.target.value.trim())}
-                            placeholder={net.cidr.split("/")[0].replace(/\d+$/, "10")} className="h-9 w-48 font-mono text-[13px]" />
-                          <Button type="button" variant="outline" className="h-9"
-                            disabled={!ipInRange || (ipChecking && checkedIp === fixedIp)}
-                            onClick={() => (checkedIp === fixedIp ? recheckIp() : setCheckedIp(fixedIp))}>
-                            중복 확인
-                          </Button>
-                        </div>
-                        {fixedIp && (
-                          !ipInRange ? <p className="text-xs text-rose-500">{net.cidr} 범위의 호스트 IP를 입력하세요.</p>
-                            : !ipCheckReady ? <p className="text-xs text-muted-foreground">중복 확인을 눌러 IP 사용 여부를 확인하세요.</p>
-                            : ipChecking ? <p className="text-xs text-muted-foreground">IP 사용 여부 확인 중…</p>
-                            : ipCheckFailed ? <p className="text-xs text-rose-500">IP 중복 확인에 실패했습니다{ipCheckError?.message ? ` (${ipCheckError.message})` : ""}. 중복 확인을 다시 눌러 주세요.</p>
-                            : ipCheck?.available ? <p className="text-xs text-brand-mint-700">사용 가능한 IP입니다.</p>
-                            : <p className="text-xs text-rose-500">{ipCheck?.reason ?? "사용할 수 없는 IP입니다."}</p>
-                        )}
-                      </div>
-                    )}
-                    {/* Floating IP — 내부·공유망만(외부망은 받은 IP 가 곧 공인 IP) */}
-                    {!isExternal && (
-                      <>
-                        <PickerHeader title="Floating IP" hint="밖에서 접속할 공인 IP(외부망 풀에서)">
-                          <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
-                            <input type="checkbox" checked={fipOn} onChange={(e) => setFipOn(e.target.checked)} className="size-3.5 accent-primary" />
-                            연결
-                          </label>
-                        </PickerHeader>
-                        {fipOn && (externals.length ? (
-                          <Select value={fipNet?.id ?? ""} onValueChange={setFipNetId}>
-                            <SelectTrigger className="h-9 w-64 font-mono text-xs"><SelectValue placeholder="FIP 풀 (외부망)" /></SelectTrigger>
-                            <SelectContent>
-                              {externals.map((n) => <SelectItem key={n.id} value={n.id} className="font-mono text-xs">{n.name} / {n.cidr}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
-                        ) : <p className="text-xs text-rose-500">Floating IP 풀(외부망)이 없습니다. 연결을 끄거나 외부망을 준비하세요.</p>)}
-                      </>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-            {role === "sg" && (
-              <>
-                <PickerHeader title="보안그룹" hint="하나 이상 · 다시 누르면 해제" />
-                <SecurityGroupTable groups={sgs} loading={sgLoading} error={sgError?.message} selected={sgNames}
-                  onToggle={(name) => setSgNames((cur) => (cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name]))} />
-              </>
-            )}
-            {role === "key" && (
-              <>
-                <PickerHeader title="키페어" hint={noCloudInit ? "cloud-init 이 없는 템플릿이라 키페어를 넣을 수 없습니다"
-                  : keySrc === "req" ? "신청 값을 사용합니다" : "VM 에 넣을 OpenStack 키페어 · 다시 누르면 선택 해제"}>
-                  {!noCloudInit && (
-                    <Segment options={[["req", "신청 값"], ["custom", "직접 선택"]] as const} value={keySrc}
-                      onChange={(s) => { setKeySrc(s); if (s === "custom") setKeyPick(reqNova ?? null); }} />
-                  )}
-                </PickerHeader>
-                {noCloudInit ? null : keySrc === "req" ? (
-                  <KeypairTable key="key-req" rows={reqKeyRow ? [reqKeyRow] : []} selected={reqKeyRow?.id ?? null} refId={reqKeyRow?.id}
-                    refLabel="신청" nameCol="minmax(0,200px)" empty="신청 키페어가 없습니다 — VM 에 SSH 키를 넣지 않습니다" />
-                ) : keysLoading ? <Skeleton className="h-24" /> : keysError ? (
-                  <p className="text-xs text-rose-500">OpenStack 키페어를 불러오지 못했습니다 ({keysError.message}).</p>
-                ) : (
-                  <KeypairTable key="key-custom" rows={keyRows} selected={keyPick} refId={reqNova} refLabel="신청" nameCol="minmax(0,200px)"
-                    paged onSelect={(id) => setKeyPick(keyPick === id ? null : id)} empty="OpenStack 키페어가 없습니다" />
-                )}
-              </>
-            )}
-            {/* 배치 미리보기는 늘 그려 둔다(왼쪽 카드·준비 판정이 결과를 쓴다) — 고른 카드가 아니면 숨김 */}
-            <div className={cn("grid gap-[14px]", role !== "place" && "hidden")}>
-              <PickerHeader title="배치 노드" hint="Nova 스케줄러와 같은 기준 — 노드마다 여유와 쿼터" />
-              <PlacementView r={r} onState={setPlace} />
-            </div>
-          </div>
-        </div>
-        {rejecting && <RejectInput value={reason} onChange={setReason} />}
-      </div>
-
-      <DetailFooter status={!rejecting && status} ok={!!spec}>
-        {rejecting ? (
-          <>
-            <Button variant="outline" onClick={() => setRejecting(false)}>취소</Button>
-            <Button variant="destructive" onClick={() => onReject(reason.trim())} disabled={reviewing || !reason.trim()}>
-              <XCircle className="size-3.5" /> 반려 확정
-            </Button>
-          </>
+    <StepperGrid left={left(progressStep(progress, jump))} summary={summary} summaryTitle="신청 요약">
+      <StepMain step={["03", "04"]} title={isFailed ? "프로비저닝 설정 · 재시도" : "프로비저닝 설정"} scrollRef={scrollRef}
+        desc={isFailed ? "지난 회차 설정으로 채웠습니다. 확인·수정해 재시도하거나 반려하세요." : "네트워크·보안그룹을 고르고 배치·키페어를 확인한 뒤 프로비저닝하거나 반려하세요."}
+        progress={<FloatProgress onJump={jump} items={progress} />}
+        footer={rejecting ? (
+          <RejectBar onCancel={() => setRejecting(false)} onConfirm={(reason) => onReject?.(reason)} busy={reviewing} />
         ) : (
-          <>
+          <StepFooter status={status} tone={spec ? "ok" : tried ? "bad" : "muted"}
+            left={onContent && <Button variant="outline" onClick={onContent}>신청 내용 보기(전체)</Button>}>
             <Button variant="outline" className="border-rose-200 text-rose-600 hover:bg-rose-50" onClick={() => setRejecting(true)}>
               <XCircle className="size-3.5" /> 반려
             </Button>
-            <Button onClick={() => spec && onProvision(spec)} disabled={!spec || provisioning}>
+            <Button onClick={() => { if (spec) onProvision?.(spec); else { setTried(true); if (blocked) scrollTo(blocked[0]); } }}
+              disabled={provisioning} className={cn(!spec && "bg-brand-indigo-300 hover:bg-brand-indigo-300")}>
               {isFailed ? <RotateCcw className="size-3.5" /> : <Server className="size-3.5" />}
               {provisioning ? "시작 중…" : isFailed ? "재시도" : "프로비저닝"}
             </Button>
-          </>
-        )}
-      </DetailFooter>
-      <RequestContentDialog r={r} open={showContent} onClose={() => setShowContent(false)} />
-    </DialogContent>
+          </StepFooter>
+        )}>
+        <ReasonBanner r={r} />
+        <div className="flex flex-none items-center gap-3 rounded-[10px] border border-border bg-secondary/40 px-4 py-2.5 text-[13px]">
+          <span className="font-semibold">사용자 희망</span>
+          <NetBadge type={r.networkType === "external" ? "internet" : "internal"} />
+          <span className="text-muted-foreground">{r.floatingIp ? "공인 IP 희망" : "공인 IP 희망 안 함"}</span>
+        </div>
+        <FormCard ref={cardRef("net")} icon={<Network className="size-4 text-primary" />} title="네트워크" required
+          status={netOk ? "done" : "missing"} value={net?.name} line={netLine}>
+          <NetworkTable networks={networks} loading={netLoading} error={netError?.message} selected={networkId}
+            onSelect={(id) => { setNetworkId(networkId === id ? "" : id); setIpManual(false); setFixedIp(""); setCheckedIp(""); }} />
+          {net && (
+            <>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold">IP</span>
+                <span className="flex-1 text-xs text-muted-foreground">{ipManual ? `${net.cidr} 범위의 호스트 IP` : "DHCP 로 자동 할당합니다"}</span>
+                <Segment options={[["auto", "자동 할당"], ["manual", "직접 입력"]] as const} value={ipManual ? "manual" : "auto"}
+                  onChange={(v) => setIpManual(v === "manual")} />
+              </div>
+              {ipManual && (
+                <div className="grid gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <Input value={fixedIp} onChange={(e) => setFixedIp(e.target.value.trim())}
+                      placeholder={net.cidr.split("/")[0].replace(/\d+$/, "10")} className="h-9 w-48 bg-card font-mono text-[13px]" />
+                    <Button type="button" variant="outline" className="h-9"
+                      disabled={!ipInRange || (ipChecking && checkedIp === fixedIp)}
+                      onClick={() => (checkedIp === fixedIp ? recheckIp() : setCheckedIp(fixedIp))}>
+                      중복 확인
+                    </Button>
+                  </div>
+                  {fixedIp && (
+                    !ipInRange ? <p className="text-xs text-rose-500">{net.cidr} 범위의 호스트 IP를 입력하세요.</p>
+                      : !ipCheckReady ? <p className="text-xs text-muted-foreground">중복 확인을 눌러 IP 사용 여부를 확인하세요.</p>
+                      : ipChecking ? <p className="text-xs text-muted-foreground">IP 사용 여부 확인 중…</p>
+                      : ipCheckFailed ? <p className="text-xs text-rose-500">IP 중복 확인에 실패했습니다{ipCheckError?.message ? ` (${ipCheckError.message})` : ""}. 중복 확인을 다시 눌러 주세요.</p>
+                      : ipCheck?.available ? <p className="text-xs text-brand-mint-700">사용 가능한 IP입니다.</p>
+                      : <p className="text-xs text-rose-500">{ipCheck?.reason ?? "사용할 수 없는 IP입니다."}</p>
+                  )}
+                </div>
+              )}
+              {/* Floating IP — 내부·공유망만(외부망은 받은 IP 가 곧 공인 IP) */}
+              {!isExternal && (
+                <>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-semibold">Floating IP</span>
+                    <span className="flex-1 text-xs text-muted-foreground">밖에서 접속할 공인 IP(외부망 풀에서)</span>
+                    <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
+                      <input type="checkbox" checked={fipOn} onChange={(e) => setFipOn(e.target.checked)} className="size-3.5 accent-primary" />
+                      연결
+                    </label>
+                  </div>
+                  {fipOn && (externals.length ? (
+                    <Select value={fipNet?.id ?? ""} onValueChange={setFipNetId}>
+                      <SelectTrigger className="h-9 w-64 bg-card font-mono text-xs"><SelectValue placeholder="FIP 풀 (외부망)" /></SelectTrigger>
+                      <SelectContent>
+                        {externals.map((n) => <SelectItem key={n.id} value={n.id} className="font-mono text-xs">{n.name} / {n.cidr}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  ) : <p className="text-xs text-rose-500">Floating IP 풀(외부망)이 없습니다. 연결을 끄거나 외부망을 준비하세요.</p>)}
+                </>
+              )}
+            </>
+          )}
+        </FormCard>
+        <FormCard ref={cardRef("sg")} icon={<ShieldCheck className="size-4 text-emerald-600" />} title="보안그룹" required
+          status={sgOk ? "done" : "missing"} value={sgOk ? sgNames.join(", ") : undefined} ask="하나 이상 고르세요">
+          <SecurityGroupTable groups={sgs} loading={sgLoading} error={sgError?.message} selected={sgNames}
+            onToggle={(name) => setSgNames((cur) => (cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name]))} />
+        </FormCard>
+        {/* 배치 노드 — 막힌 이유는 값(고른 노드)이 없으면 머리 오른쪽 안내로, 있으면 아래 줄로 */}
+        <FormCard ref={cardRef("place")} icon={<Server className="size-4 text-rose-600" />} title="배치 노드" required
+          status={place.loading ? undefined : placeOk ? "done" : "missing"}
+          value={place.loading ? "확인 중…" : place.pin ? place.pin.host : place.ok ? "스케줄러가 후보 중에서 고름" : undefined}
+          valueMuted={place.loading || (!place.pin && place.ok)}
+          ask={place.problem}
+          line={place.loading ? undefined : place.problem ? (place.pin || place.ok ? place.problem : undefined) : `후보 ${place.candidates}대 / 전체 ${place.total}대`}>
+          <PlacementView r={r} onState={setPlace} />
+        </FormCard>
+        <FormCard ref={cardRef("key")} icon={keyIcon} title="키페어" optional
+          tag={noCloudInit ? undefined : keyChanged ? <ChangedTag /> : <RefTag label="신청 값" />}
+          status={keyMissing ? "missing" : undefined} value={keyValue} valueMuted={noCloudInit || keyName === null}
+          line={noCloudInit ? "이 템플릿은 키페어를 넣을 수 없습니다"
+            : keyMissing ? "OpenStack 에 없는 키페어입니다. 직접 선택에서 다른 키페어를 고르세요"
+            : keyName === null ? "VM 에 SSH 키를 넣지 않습니다"
+            : keyChanged ? <span className="font-mono text-[#9aa3ad] line-through">신청 {r.keypairName ?? "사용 안 함"}</span>
+            : keySrc === "req" && r.keypairId ? "신청자 SSH 키" : "OpenStack 키페어"}
+          action={!noCloudInit && (
+            <Segment options={[["req", "신청 값"], ["custom", "직접 선택"]] as const} value={keySrc}
+              onChange={(s) => { setKeySrc(s); if (s === "custom") setKeyPick(reqNova ?? null); }} />
+          )}>
+          {noCloudInit ? null : keySrc === "req" ? (
+            <KeypairTable key="key-req" rows={reqKeyRow ? [reqKeyRow] : []} selected={reqKeyRow?.id ?? null} refId={reqKeyRow?.id}
+              refLabel="신청" nameCol="minmax(0,200px)" empty="신청 키페어가 없습니다 — VM 에 SSH 키를 넣지 않습니다" />
+          ) : keysLoading ? <Skeleton className="h-24" /> : keysError ? (
+            <p className="text-xs text-rose-500">OpenStack 키페어를 불러오지 못했습니다 ({keysError.message}).</p>
+          ) : (
+            <KeypairTable key="key-custom" rows={keyRows} selected={keyPick} refId={reqNova} refLabel="신청" nameCol="minmax(0,200px)"
+              paged onSelect={(id) => setKeyPick(keyPick === id ? null : id)} empty="OpenStack 키페어가 없습니다" />
+          )}
+        </FormCard>
+      </StepMain>
+    </StepperGrid>
   );
 }
 
-// ── 오른쪽 고르기 ──────────────────────────────────────────────────
+// ── 고르기 표 ─────────────────────────────────────────────────────
 
 const NET_COLS = "grid grid-cols-[22px_minmax(0,1fr)_minmax(0,1.2fr)_168px] items-center gap-[14px] px-4";
 const SG_COLS = "grid grid-cols-[22px_minmax(0,160px)_minmax(0,1fr)] items-center gap-[14px] px-4";
 
-/** 네트워크 표 — 검색 · 4개씩. 유형: 외부망은 인터넷망, 그 밖은 서브넷마다 인터넷망(외부 게이트웨이 라우터)·내부망. */
+/** 네트워크 표 — 검색 · 4개씩. 유형: 외부망은 인터넷망, 그 밖은 서브넷마다 인터넷망(외부 게이트웨이 라우터)·내부망. 다시 누르면 해제. */
 function NetworkTable({ networks, loading, error, selected, onSelect }: {
   networks: ProvNetwork[]; loading: boolean; error?: string; selected: string; onSelect: (id: string) => void;
 }) {
@@ -346,7 +309,7 @@ function NetworkTable({ networks, loading, error, selected, onSelect }: {
   return (
     <>
       <SearchInput value={query} onChange={(v) => { setQuery(v); setPage(0); }} placeholder="네트워크 이름 검색" />
-      <div className="flex flex-col overflow-hidden rounded-[10px] border border-border">
+      <div className="flex flex-col overflow-hidden rounded-[10px] border border-border bg-card">
         <div className={cn(NET_COLS, "border-b border-border bg-secondary/50 py-[9px] text-xs text-muted-foreground")}>
           <span /><span>이름</span><span>서브넷</span><span>유형</span>
         </div>
@@ -381,35 +344,46 @@ function NetworkTable({ networks, loading, error, selected, onSelect }: {
   );
 }
 
-/** 보안그룹 표 — 여러 개 고름(다시 누르면 해제). */
+/** 보안그룹 표 — 검색 · 4개씩, 여러 개 고름(다시 누르면 해제). */
 function SecurityGroupTable({ groups, loading, error, selected, onToggle }: {
   groups: { id: string; name: string; description?: string }[]; loading: boolean; error?: string; selected: string[];
   onToggle: (name: string) => void;
 }) {
+  const [query, setQuery] = React.useState("");
+  const [page, setPage] = React.useState<number | null>(null);
+  const q = query.trim().toLowerCase();
+  const all = groups.filter((g) => g.name.toLowerCase().includes(q));
+  const { rows, page: pageNow, pages } = paginate(all, page, (g) => selected.includes(g.name));
   return (
-    <div className="flex flex-col overflow-hidden rounded-[10px] border border-border">
-      <div className={cn(SG_COLS, "border-b border-border bg-secondary/50 py-[9px] text-xs text-muted-foreground")}>
-        <span /><span>이름</span><span>설명</span>
+    <>
+      <SearchInput value={query} onChange={(v) => { setQuery(v); setPage(0); }} placeholder="보안그룹 이름 검색" />
+      <div className="flex flex-col overflow-hidden rounded-[10px] border border-border bg-card">
+        <div className={cn(SG_COLS, "border-b border-border bg-secondary/50 py-[9px] text-xs text-muted-foreground")}>
+          <span /><span>이름</span><span>설명</span>
+        </div>
+        <div className="h-[184px] border-b border-border/60">
+          {loading ? <Skeleton className="m-3 h-20" /> : error ? (
+            <div className="p-5 text-center text-[13px] text-rose-600">보안그룹을 불러오지 못했습니다 ({error}).</div>
+          ) : rows.map((g) => {
+            const on = selected.includes(g.name);
+            return (
+              <div key={g.id} onClick={() => onToggle(g.name)}
+                className={cn(SG_COLS, "h-[46px] cursor-pointer border-b border-border/60 last:border-b-0",
+                  on ? "bg-brand-indigo-50/60" : "hover:bg-secondary/40")}>
+                <span className={cn("flex size-4 items-center justify-center rounded-[4px] border-[1.6px]",
+                  on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40")}>
+                  {on && <Check className="size-3" />}
+                </span>
+                <span className="truncate font-mono text-[13px] font-semibold">{g.name}</span>
+                <span title={g.description} className="truncate text-xs text-muted-foreground">{g.description || "—"}</span>
+              </div>
+            );
+          })}
+          {!loading && !error && rows.length === 0 && <div className="p-5 text-center text-[13px] text-muted-foreground">{groups.length ? "조건에 맞는 보안그룹이 없습니다" : "보안그룹이 없습니다"}</div>}
+        </div>
+        <Pager total={all.length} page={pageNow} pages={pages} onPage={setPage} />
       </div>
-      {loading ? <Skeleton className="m-3 h-20" /> : error ? (
-        <div className="p-5 text-center text-[13px] text-rose-600">보안그룹을 불러오지 못했습니다 ({error}).</div>
-      ) : groups.map((g) => {
-        const on = selected.includes(g.name);
-        return (
-          <div key={g.id} onClick={() => onToggle(g.name)}
-            className={cn(SG_COLS, "min-h-[46px] cursor-pointer border-b border-border/60 py-2 last:border-b-0",
-              on ? "bg-brand-indigo-50/60" : "hover:bg-secondary/40")}>
-            <span className={cn("flex size-4 items-center justify-center rounded-[4px] border-[1.6px]",
-              on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40")}>
-              {on && <Check className="size-3" />}
-            </span>
-            <span className="truncate font-mono text-[13px] font-semibold">{g.name}</span>
-            <span className="text-xs text-muted-foreground">{g.description || "—"}</span>
-          </div>
-        );
-      })}
-      {!loading && !error && groups.length === 0 && <div className="p-5 text-center text-[13px] text-muted-foreground">보안그룹이 없습니다</div>}
-    </div>
+    </>
   );
 }
 
@@ -468,10 +442,11 @@ function PlacementView({ r, onState }: { r: ResourceRequest; onState: (s: Placem
   };
 
   if (isLoading) return <Skeleton className="h-24" />;
-  if (error) return <p className="text-xs text-rose-500">가용량을 불러오지 못했습니다 ({error.message}). 확인할 수 없어 프로비저닝할 수 없습니다.</p>;
+  // '가용량을 불러오지 못했습니다'는 카드 요약 줄(problem)이 이미 보여 준다 — 본문은 원인과 결과만
+  if (error) return <p className="text-xs text-rose-500">{error.message} — 확인할 수 없어 프로비저닝할 수 없습니다.</p>;
   if (!data) return null;
   return (
-    <div className="space-y-2.5 rounded-[10px] border border-border p-4">
+    <div className="space-y-2.5">
       <div className="flex items-center justify-between text-xs">
         <span className="text-muted-foreground">후보 노드</span>
         <span className="font-mono">{candidates.length}대 <span className="text-muted-foreground">/ 전체 {data.nodes.length}대</span></span>
