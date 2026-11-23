@@ -61,6 +61,7 @@ export interface ClusterNodegroup {
   imageId: string;
   nodeCount: number;
   status: string;
+  isDefault: boolean; // 기본(default-master/worker) — 삭제 불가
 }
 export interface ClusterDetail extends ClusterSummary {
   healthReason: Record<string, string>;
@@ -110,6 +111,38 @@ export async function downloadKubeconfig(id: string, name: string): Promise<void
     throw new Error(String(msg));
   }
   downloadText(`${name}-kubeconfig.yaml`, await res.text());
+}
+
+// ── 노드그룹 관리(관리자) — Magnum 비동기(UPDATE_IN_PROGRESS 로 바뀐 뒤 반영) ──
+export interface CreateNodegroupInput { name: string; nodeCount: number; flavorId?: string }
+
+function invalidateCluster(qc: ReturnType<typeof useQueryClient>, clusterId: string) {
+  qc.invalidateQueries({ queryKey: ["paas-cluster", clusterId] });
+  qc.invalidateQueries({ queryKey: ["paas-clusters"] });
+}
+export function useCreateNodegroup(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateNodegroupInput) =>
+      sendJson("POST", `/api/paas/clusters/${clusterId}/nodegroups`, body),
+    onSuccess: () => invalidateCluster(qc, clusterId),
+  });
+}
+export function useResizeNodegroup(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodegroup, nodeCount }: { nodegroup: string; nodeCount: number }) =>
+      sendJson("POST", `/api/paas/clusters/${clusterId}/nodegroups/${nodegroup}/resize`, { nodeCount }),
+    onSuccess: () => invalidateCluster(qc, clusterId),
+  });
+}
+export function useDeleteNodegroup(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (nodegroup: string) =>
+      sendJson<void>("DELETE", `/api/paas/clusters/${clusterId}/nodegroups/${nodegroup}`),
+    onSuccess: () => invalidateCluster(qc, clusterId),
+  });
 }
 
 /** 클러스터 삭제(관리자). Magnum DELETE 는 비동기 — 목록은 DELETE_IN_PROGRESS 로 바뀐 뒤 소멸. */
