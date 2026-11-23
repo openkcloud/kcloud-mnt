@@ -936,6 +936,8 @@ export interface ServerDetail extends ServerSummary {
   attachedVolumes: { volumeId: string; device: string | null }[];
   interfaces: ServerInterface[];
   securityGroups: string[];
+  imageName?: string | null;    // 볼륨 부팅 VM — 부팅 볼륨의 원본 이미지 이름(volume_image_metadata)
+  bootVolumeId?: string | null; // 볼륨 부팅 VM 의 부팅 볼륨
 }
 
 // 진행 중(전이) 상태면 폴링, 안정되면 중단
