@@ -810,7 +810,7 @@ def add_cover(wb):
     ws["A1"].font = Font(name=FONT_NAME, size=18, bold=True, color="1B3A8A")
     ws["A2"] = "현재 mockup(v1.0) 기준 · OpenStack(IaaS) + Kubernetes(PaaS) 통합 관리"
     ws["A2"].font = Font(name=FONT_NAME, size=12, bold=True, color="475569")
-    ws["A3"] = "작성: 오케스트로(주) · 2026.06.04 · 대상 저장소: github.com/YunHoYoung-okestro/openkcloud"
+    ws["A3"] = "작성: 오케스트로(주) · 2026.06.04 · 대상 저장소: github.com/openkcloud/kcloud-mnt"
     ws["A3"].font = Font(name=FONT_NAME, size=10, color="64748B")
 
     # 범례
