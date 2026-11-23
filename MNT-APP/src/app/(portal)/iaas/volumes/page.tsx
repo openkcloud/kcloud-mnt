@@ -1,6 +1,6 @@
 "use client";
 import * as React from "react";
-import { HardDrive, Plus, Search, Trash2, Camera, Expand, Loader2, Database } from "lucide-react";
+import { HardDrive, Plus, Search, Settings, Trash2, Camera, Expand, Loader2, Database } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -153,7 +153,7 @@ export default function VolumesPage() {
                 <TableCell className="text-center font-mono tabular-nums">{v.attachments.length}</TableCell>
                 <TableCell><Badge variant={STATUS_VARIANT[v.status] ?? "secondary"} className="text-[10px]">{v.status}</Badge></TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
-                  <Button variant="ghost" size="sm" onClick={() => setSelected(v)}>관리</Button>
+                  <Button variant="ghost" size="sm" onClick={() => setSelected(v)}><Settings className="size-3.5" /> 관리</Button>
                 </TableCell>
               </TableRow>
             ))}
