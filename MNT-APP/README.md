@@ -200,6 +200,6 @@ AI 개발환경         → /ai-development + profiles·notebooks·pipelines
 
 ## 🔗 링크
 
-- **저장소**: https://github.com/YunHoYoung-okestro/openkcloud
+- **저장소**: https://github.com/openkcloud/kcloud-mnt
 - **원본 피드백 PDF**: `260615_openKcloud Portal 검토 의견_v1.0.pdf` (ETRI)
 - **연락**: 오케스트로(주) · 윤호영 (hy.yun@okestro.com)
