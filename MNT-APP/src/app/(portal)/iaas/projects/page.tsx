@@ -269,12 +269,15 @@ function ProjectDetailBody({ project, isAdmin, onClose }: { project: Tenant; isA
         </Tabs>
       </div>
 
-      {isAdmin && (
-        <DialogFooter className="border-t border-border pt-4">
-          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}><Edit className="size-3.5" /> 편집</Button>
-          <Button variant="destructive" size="sm" className="ml-auto" onClick={() => setConfirmOpen(true)}><Trash2 className="size-3.5" /> 삭제</Button>
-        </DialogFooter>
-      )}
+      <DialogFooter className="border-t border-border pt-4">
+        {isAdmin && (
+          <>
+            <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}><Edit className="size-3.5" /> 편집</Button>
+            <Button variant="destructive" size="sm" onClick={() => setConfirmOpen(true)}><Trash2 className="size-3.5" /> 삭제</Button>
+          </>
+        )}
+        <Button variant="outline" size="sm" className="ml-auto" onClick={onClose}>닫기</Button>
+      </DialogFooter>
 
       {isAdmin && (
         <>
