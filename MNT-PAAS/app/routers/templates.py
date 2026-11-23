@@ -115,14 +115,20 @@ def update_template(template_id: str, body: dict = Body(...)):
     """수정 — Magnum 은 JSON Patch(RFC 6902) 를 받는다.
     - 일반 필드: replace. 빈 값(None·""·{}·[])은 제외('operations needs value' 방지).
     - labels(dict): Magnum 이 /labels 에 dict 통째 replace 를 안 받으므로(값 타입은 str/int)
-      키 단위('/labels/<키>', 값=문자열)로 보낸다."""
+      키 단위('/labels/<키>')로 보낸다. 화면은 라벨 편집창의 최종 상태 전체를 보내므로
+      제출된 키는 add, 기존에 있는데 제출에서 빠진 키는 remove — 항목 삭제가 반영된다(ETRI 검토의견)."""
     patch: list[dict] = []
     for k, v in body.items():
         if k not in _WRITABLE:
             continue
         if k == "labels":
             if isinstance(v, dict):
+                try:
+                    cur = magnum.request("GET", f"/clustertemplates/{template_id}").get("labels") or {}
+                except Exception as e:  # noqa: BLE001
+                    raise _err(e)
                 patch += [{"op": "add", "path": f"/labels/{lk}", "value": str(lv)} for lk, lv in v.items()]
+                patch += [{"op": "remove", "path": f"/labels/{lk}"} for lk in cur if lk not in v]
             continue
         if v not in (None, "", {}, []):
             patch.append({"op": "replace", "path": f"/{k}", "value": v})
