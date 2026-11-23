@@ -5,19 +5,20 @@
  * 레이아웃·폰트는 IaaS 목록 화면 규약(툴바 Card + 테이블 Card, font-mono 셀)과 동일.
  */
 import * as React from "react";
-import { Boxes, Download, Search, Loader2, Plus, Trash2, Users } from "lucide-react";
+import { Boxes, Download, Search, Loader2, Plus, Scale, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -25,7 +26,11 @@ import {
 import { useConfirm } from "@/components/ui/confirm";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useProjects, useFlavors, useDeviceProfiles, useAccelModels, accelLabelResolver } from "@/lib/iaas-api";
-import { useClusters, useCluster, useDeleteCluster, downloadKubeconfig, type ClusterSummary } from "@/lib/paas-api";
+import {
+  useClusters, useCluster, useDeleteCluster, downloadKubeconfig,
+  useCreateNodegroup, useResizeNodegroup, useDeleteNodegroup,
+  type ClusterSummary, type ClusterNodegroup,
+} from "@/lib/paas-api";
 import { useAuth } from "@/lib/auth";
 import {
   useMyClusterIds, useClusterAccess, useGrantClusterAccess, useRevokeClusterAccess,
@@ -331,39 +336,7 @@ function ClusterDetailDialog({
               )}
             </Card>
 
-            <div className="min-w-0">
-              <div className="mb-1.5 text-xs font-medium text-muted-foreground">노드풀</div>
-              <Card className="overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>이름</TableHead>
-                      <TableHead>역할</TableHead>
-                      <TableHead>노드 수</TableHead>
-                      <TableHead>Flavor</TableHead>
-                      <TableHead>이미지</TableHead>
-                      <TableHead>상태</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {d.nodegroups.map((g) => (
-                      <TableRow key={g.id}>
-                        <TableCell className="text-xs font-medium">{g.name}</TableCell>
-                        <TableCell>
-                          <Badge variant={g.role === "master" ? "secondary" : "outline"} className="text-[10px]">{g.role === "master" ? "Control Plane" : g.role === "worker" ? "Worker" : g.role}</Badge>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{g.nodeCount}</TableCell>
-                        <TableCell className="font-mono text-xs">{g.flavorId}</TableCell>
-                        <TableCell className="break-all font-mono text-[11px] text-muted-foreground">{g.imageId}</TableCell>
-                        <TableCell>
-                          <Badge variant={stVariant(g.status)} className="text-[10px]">{g.status}</Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Card>
-            </div>
+            <NodegroupSection clusterId={d.id} status={d.status} nodegroups={d.nodegroups} isAdmin={isAdmin} />
 
             {isAdmin && <ClusterAccessSection clusterId={d.id} />}
 
@@ -389,6 +362,186 @@ function ClusterDetailDialog({
             </div>
           </>
         )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── 노드그룹(노드풀) — 조회는 전체, 추가·크기 조정·삭제는 관리자(Magnum 비동기 — UPDATE_IN_PROGRESS 뒤 반영) ──
+function NodegroupSection({
+  clusterId, status, nodegroups, isAdmin,
+}: {
+  clusterId: string; status: string; nodegroups: ClusterNodegroup[]; isAdmin: boolean;
+}) {
+  const [addOpen, setAddOpen] = React.useState(false);
+  const [resizeTarget, setResizeTarget] = React.useState<ClusterNodegroup | null>(null);
+  const delNg = useDeleteNodegroup(clusterId);
+  const confirm = useConfirm();
+  // 클러스터가 작업 중(*_IN_PROGRESS)이면 Magnum 이 변경을 거부하므로 버튼을 잠근다
+  const busy = status.endsWith("_IN_PROGRESS") || delNg.isPending;
+
+  async function handleDelete(g: ClusterNodegroup) {
+    if (!(await confirm({
+      title: "노드그룹 삭제", destructive: true, confirmLabel: "삭제",
+      description: `${g.name} 노드그룹과 그 노드 ${g.nodeCount}대를 삭제할까요? 노드에서 실행 중인 파드는 다른 노드로 밀려나거나 중단됩니다.`,
+    }))) return;
+    delNg.mutate(g.name, {
+      onSuccess: () => toast.success(`${g.name} 삭제 요청됨 — 반영까지 시간이 걸립니다`),
+      onError: (e) => toast.error("노드그룹 삭제 실패", { description: String((e as Error).message) }),
+    });
+  }
+
+  return (
+    <div className="min-w-0">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-xs font-medium text-muted-foreground">노드풀</span>
+        {isAdmin && (
+          <Button variant="outline" size="sm" className="h-7" disabled={busy} onClick={() => setAddOpen(true)}>
+            <Plus className="size-3.5" /> 노드그룹 추가
+          </Button>
+        )}
+      </div>
+      <Card className="overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>이름</TableHead>
+              <TableHead>역할</TableHead>
+              <TableHead>노드 수</TableHead>
+              <TableHead>Flavor</TableHead>
+              <TableHead>이미지</TableHead>
+              <TableHead>상태</TableHead>
+              {isAdmin && <TableHead className="w-20" />}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {nodegroups.map((g) => (
+              <TableRow key={g.id}>
+                <TableCell className="text-xs font-medium">{g.name}</TableCell>
+                <TableCell>
+                  <Badge variant={g.role === "master" ? "secondary" : "outline"} className="text-[10px]">{g.role === "master" ? "Control Plane" : g.role === "worker" ? "Worker" : g.role}</Badge>
+                </TableCell>
+                <TableCell className="font-mono text-xs">{g.nodeCount}</TableCell>
+                <TableCell className="font-mono text-xs">{g.flavorId}</TableCell>
+                <TableCell className="break-all font-mono text-[11px] text-muted-foreground">{g.imageId}</TableCell>
+                <TableCell>
+                  <Badge variant={stVariant(g.status)} className="text-[10px]">{g.status}</Badge>
+                </TableCell>
+                {isAdmin && (
+                  <TableCell>
+                    <div className="flex items-center gap-0.5">
+                      {g.role !== "master" && (
+                        <Button variant="ghost" size="icon-sm" title="노드 수 조정" disabled={busy} onClick={() => setResizeTarget(g)}>
+                          <Scale className="size-3.5" />
+                        </Button>
+                      )}
+                      {!g.isDefault && (
+                        <Button variant="ghost" size="icon-sm" title="노드그룹 삭제" disabled={busy} onClick={() => handleDelete(g)}>
+                          <Trash2 className="size-3.5 text-rose-600" />
+                        </Button>
+                      )}
+                    </div>
+                  </TableCell>
+                )}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
+      {addOpen && <AddNodegroupDialog clusterId={clusterId} existing={nodegroups.map((g) => g.name)} onClose={() => setAddOpen(false)} />}
+      {resizeTarget && <ResizeNodegroupDialog clusterId={clusterId} g={resizeTarget} onClose={() => setResizeTarget(null)} />}
+    </div>
+  );
+}
+
+function AddNodegroupDialog({ clusterId, existing, onClose }: { clusterId: string; existing: string[]; onClose: () => void }) {
+  const create = useCreateNodegroup(clusterId);
+  const flavors = useFlavors();
+  const [name, setName] = React.useState("");
+  const [flavorId, setFlavorId] = React.useState("default");
+  const [nodeCount, setNodeCount] = React.useState("1");
+  const dup = existing.includes(name.trim());
+  const submit = () => create.mutate(
+    {
+      name: name.trim(), nodeCount: Math.max(1, Number(nodeCount) || 1),
+      ...(flavorId !== "default" ? { flavorId } : {}),
+    },
+    {
+      onSuccess: () => { toast.success(`${name.trim()} 노드그룹 추가 요청됨 — 반영까지 시간이 걸립니다`); onClose(); },
+      onError: (e) => toast.error("노드그룹 추가 실패", { description: String((e as Error).message) }),
+    },
+  );
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>노드그룹 추가</DialogTitle>
+          <DialogDescription className="text-xs">워커 노드그룹을 추가합니다. 반영까지 몇 분 걸립니다.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-1">
+          <div className="space-y-1.5">
+            <Label>이름</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="gpu-pool" className="font-mono text-xs" />
+            {dup && <p className="text-[11px] text-rose-600">같은 이름의 노드그룹이 이미 있습니다.</p>}
+          </div>
+          <div className="space-y-1.5">
+            <Label>워커 Flavor</Label>
+            <Select value={flavorId} onValueChange={setFlavorId}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">클러스터 기본 Flavor</SelectItem>
+                {(flavors.data ?? []).map((f) => (
+                  <SelectItem key={f.id} value={f.id} className="font-mono text-xs">
+                    {f.name} — {f.vcpus}vCPU · {Math.round(f.ramMb / 1024)}GiB{f.accelerator ? ` · ${f.accelerator}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>노드 수</Label>
+            <Input type="number" min={1} value={nodeCount} onChange={(e) => setNodeCount(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>취소</Button>
+          <Button disabled={!name.trim() || dup || create.isPending} onClick={submit}>
+            {create.isPending && <Loader2 className="size-3.5 animate-spin" />} 추가
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ResizeNodegroupDialog({ clusterId, g, onClose }: { clusterId: string; g: ClusterNodegroup; onClose: () => void }) {
+  const resize = useResizeNodegroup(clusterId);
+  const [nodeCount, setNodeCount] = React.useState(String(g.nodeCount));
+  const submit = () => resize.mutate(
+    { nodegroup: g.name, nodeCount: Math.max(1, Number(nodeCount) || 1) },
+    {
+      onSuccess: () => { toast.success(`${g.name} → ${nodeCount}대 조정 요청됨 — 반영까지 시간이 걸립니다`); onClose(); },
+      onError: (e) => toast.error("노드 수 조정 실패", { description: String((e as Error).message) }),
+    },
+  );
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>노드 수 조정</DialogTitle>
+          <DialogDescription className="font-mono text-xs">{g.name} · 현재 {g.nodeCount}대</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5 py-1">
+          <Label>노드 수</Label>
+          <Input type="number" min={1} value={nodeCount} onChange={(e) => setNodeCount(e.target.value)} />
+          <p className="text-[11px] text-muted-foreground">줄이면 Magnum 이 고른 노드가 제거됩니다 — 실행 중인 파드는 다른 노드로 밀려납니다.</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>취소</Button>
+          <Button disabled={resize.isPending || Number(nodeCount) === g.nodeCount} onClick={submit}>
+            {resize.isPending && <Loader2 className="size-3.5 animate-spin" />} 적용
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

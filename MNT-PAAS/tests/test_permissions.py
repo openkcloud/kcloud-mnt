@@ -1,5 +1,5 @@
-"""역할별 권한 — API 35개 전부. 사용자(gy.yang)는 접근 권한이 있는 클러스터(c-mine)의 상세·kubeconfig·내부(K8s)
-조회·쓰기와 템플릿 조회만, 클러스터 삭제와 템플릿 생성·수정·삭제는 관리자만."""
+"""역할별 권한 — API 38개 전부. 사용자(gy.yang)는 접근 권한이 있는 클러스터(c-mine)의 상세·kubeconfig·내부(K8s)
+조회·쓰기와 템플릿 조회만, 클러스터 삭제·노드그룹 변경과 템플릿 생성·수정·삭제는 관리자만."""
 import httpx
 import pytest
 from conftest import ADMIN, MINE, OTHER, USER, client_as
@@ -17,6 +17,10 @@ CASES = [
     ("GET", "/clusters", None, A),
     ("GET", f"/clusters/{MINE}", None, A), ("GET", f"/clusters/{OTHER}", None, D),
     ("DELETE", f"/clusters/{MINE}", None, D),                    # 삭제는 접근 권한이 있어도 관리자만
+    # 노드그룹 변경(추가·크기조정·삭제)도 관리자만 — 클러스터 인프라 영역
+    ("POST", f"/clusters/{MINE}/nodegroups", {"name": "ng-1"}, D),
+    ("POST", f"/clusters/{MINE}/nodegroups/ng-1/resize", {"nodeCount": 2}, D),
+    ("DELETE", f"/clusters/{MINE}/nodegroups/ng-1", None, D),
     ("GET", f"/clusters/{MINE}/kubeconfig", None, A), ("GET", f"/clusters/{OTHER}/kubeconfig", None, D),
     ("GET", "/cluster-name-check?name=abc", None, A),            # 신청 화면 — 이름 사용 여부만
     # 템플릿 — 조회는 신청 화면용
