@@ -92,7 +92,9 @@ function ServerDetailPage() {
   if (isError || !s) return <Card className="p-6 text-sm text-rose-600">가상서버를 찾을 수 없습니다.</Card>;
 
   const busy = power.isPending || del.isPending || detach.isPending || detachNic.isPending;
-  const imageName = !s.imageId ? "(볼륨 부팅)" : (images?.find((i) => i.id === s.imageId)?.name ?? s.imageId);
+  // 볼륨 부팅 VM 은 부팅 볼륨의 원본 이미지 이름을 함께 표시 — "(볼륨 부팅)"만 보이던 것 보완(ETRI 검토의견)
+  const srcImage = s.imageId ? (images?.find((i) => i.id === s.imageId)?.name ?? s.imageName ?? s.imageId) : null;
+  const imageName = s.bootVolumeId ? `${srcImage ?? ""} (볼륨 부팅)`.trim() : (srcImage ?? "(볼륨 부팅)");
   const sshIp = s.addresses.find((a) => a.type === "floating")?.ip ?? s.addresses[0]?.ip;
   const copy = (txt: string, label: string) => { navigator.clipboard.writeText(txt); toast.success(`${label} 복사됨`); };
 
