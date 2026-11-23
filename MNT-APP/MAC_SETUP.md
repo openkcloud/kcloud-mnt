@@ -50,10 +50,10 @@ cat ~/.ssh/id_ed25519.pub | pbcopy   # 클립보드에 복사됨
 mkdir -p ~/projects && cd ~/projects
 
 # SSH clone (권장)
-git clone git@github.com:YunHoYoung-okestro/openkcloud.git openkcloud-cmp
+git clone git@github.com:openkcloud/kcloud-mnt.git openkcloud-cmp
 
 # 또는 HTTPS clone
-git clone https://github.com/YunHoYoung-okestro/openkcloud.git openkcloud-cmp
+git clone https://github.com/openkcloud/kcloud-mnt.git openkcloud-cmp
 
 cd openkcloud-cmp
 
@@ -203,6 +203,6 @@ openkcloud-cmp/
 ---
 
 ## 🔗 링크
-- **저장소**: https://github.com/YunHoYoung-okestro/openkcloud
+- **저장소**: https://github.com/openkcloud/kcloud-mnt
 - **Netlify 대시보드**: https://app.netlify.com
 - **연락**: hy.yun@okestro.com
