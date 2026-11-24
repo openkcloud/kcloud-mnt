@@ -1002,6 +1002,14 @@ export function usePowerAction() {
 export function useDeleteServer() {
   return useServerMutation((id: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/servers/${id}`));
 }
+/** 인스턴스 스냅샷 — 현재 서버를 이미지로 저장(그 이미지로 새 VM 생성 가능). 생성 후 이미지 목록 갱신. */
+export function useCreateServerSnapshot() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean; imageId: string | null; name: string }, Error, { id: string; name: string }>({
+    mutationFn: ({ id, name }) => postJson(`${IAAS_BASE}/api/iaas/servers/${id}/snapshot`, { name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-images"] }),
+  });
+}
 export function useAttachVolume() {
   return useServerMutation(({ serverId, volumeId }: { serverId: string; volumeId: string }) =>
     postJson<ServerDetail>(`${IAAS_BASE}/api/iaas/servers/${serverId}/volumes`, { volumeId }));
