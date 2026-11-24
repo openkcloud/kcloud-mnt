@@ -30,6 +30,8 @@ CASES = [
     ("GET", "/servers/mine-s/diagnostics", None, A), ("GET", "/servers/other-s/diagnostics", None, D),
     ("POST", "/servers/mine-s/power", {"action": "stop"}, A), ("POST", "/servers/other-s/power", {"action": "stop"}, D),
     ("GET", "/servers/mine-s/console", None, A), ("GET", "/servers/other-s/console", None, D),
+    # 인스턴스 스냅샷 — 서버 접근 권한(server_access)
+    ("POST", "/servers/mine-s/snapshot", {"name": "snap"}, A), ("POST", "/servers/other-s/snapshot", {"name": "snap"}, D),
     ("DELETE", "/servers/mine-s", None, D),
     ("POST", "/servers/mine-s/volumes", {"volumeId": "mine-v"}, A),
     ("POST", "/servers/mine-s/volumes", {"volumeId": "other-v"}, D),
