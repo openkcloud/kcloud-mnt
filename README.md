@@ -1,10 +1,7 @@
-# openKcloud CMP — AI반도체 클라우드 통합관리 플랫폼 (Mockup)
+# openKcloud CMP — AI반도체 클라우드 통합관리 플랫폼 포털
 
-> **정부 R&D 과제**: AI반도체 클라우드 플랫폼 구축 및 최적화 기술 개발 (IITP)
-> **작성**: 오케스트로(주) · **연동**: ETRI · 이노그리드 · KETI · 경희대
-> **상태**: 목업 v1.0 (ETRI 260615 검토 의견 반영 완료)
 
-이종 AI반도체(GPU·NPU·PIM·HBM-PIM)를 단일 콘솔에서 관리하는 CMP(Cloud Management Platform)의 UI 목업이다.
+이종 AI반도체(GPU·NPU·PIM·HBM-PIM)를 단일 콘솔에서 관리하는 CMP(Cloud Management Platform)의 포털이다.
 OpenStack(IaaS) · Kubernetes(PaaS) · Kubeflow(AI 개발환경) · Rebellions ModelZoo(마켓플레이스)를 하나의 포탈로 통합.
 
 ---
