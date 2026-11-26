@@ -936,6 +936,8 @@ export interface ServerDetail extends ServerSummary {
   attachedVolumes: { volumeId: string; device: string | null }[];
   interfaces: ServerInterface[];
   securityGroups: string[];
+  imageName?: string | null;    // 볼륨 부팅 VM — 부팅 볼륨의 원본 이미지 이름(volume_image_metadata)
+  bootVolumeId?: string | null; // 볼륨 부팅 VM 의 부팅 볼륨
 }
 
 // 진행 중(전이) 상태면 폴링, 안정되면 중단
@@ -999,6 +1001,14 @@ export function usePowerAction() {
 }
 export function useDeleteServer() {
   return useServerMutation((id: string) => sendJson<void>("DELETE", `${IAAS_BASE}/api/iaas/servers/${id}`));
+}
+/** 인스턴스 스냅샷 — 현재 서버를 이미지로 저장(그 이미지로 새 VM 생성 가능). 생성 후 이미지 목록 갱신. */
+export function useCreateServerSnapshot() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean; imageId: string | null; name: string }, Error, { id: string; name: string }>({
+    mutationFn: ({ id, name }) => postJson(`${IAAS_BASE}/api/iaas/servers/${id}/snapshot`, { name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-images"] }),
+  });
 }
 export function useAttachVolume() {
   return useServerMutation(({ serverId, volumeId }: { serverId: string; volumeId: string }) =>

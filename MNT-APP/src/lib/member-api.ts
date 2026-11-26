@@ -46,7 +46,10 @@ export function useAddProjectMember(projectId: string) {
   return useMutation({
     mutationFn: (input: { userId: number; role: string }) =>
       coreFetch(`/projects/${projectId}/members`, { method: "POST", body: JSON.stringify(input) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["core-members", projectId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["core-members", projectId] });
+      qc.invalidateQueries({ queryKey: ["core-project-member-counts"] }); // 프로젝트 목록의 멤버 수
+    },
   });
 }
 
@@ -64,7 +67,10 @@ export function useRemoveProjectMember(projectId: string) {
   return useMutation({
     mutationFn: (userId: string) =>
       coreFetch<void>(`/projects/${projectId}/members/${userId}`, { method: "DELETE" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["core-members", projectId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["core-members", projectId] });
+      qc.invalidateQueries({ queryKey: ["core-project-member-counts"] }); // 프로젝트 목록의 멤버 수
+    },
   });
 }
 

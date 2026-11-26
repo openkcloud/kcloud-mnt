@@ -1,9 +1,9 @@
 "use client";
 /**
- * 자원 신청 상세의 공용 틀 — VM·클러스터·AI 워크스페이스, 사용자·관리자가 같은 모양으로 본다.
- *  머리(DetailHeader) → 이름 카드(RequestHero, 오른쪽에 진행 결과) → 사유 띠(ReasonBanner) → 섹션 카드(Section·InfoRow)
- *  → 고정 바닥(DetailFooter). 본문만 스크롤하고 바닥은 늘 보인다.
- * 폭: 읽기·승인 760px, 2단 처리 화면(클러스터 프로비저닝 1b) 1000px.
+ * 자원 신청 상세의 공용 틀(AI 워크스페이스 상세) — 머리(DetailHeader) → 이름 카드(RequestHero, 오른쪽에 진행 결과) → 사유 띠
+ *  (ReasonBanner) → 섹션 카드(Section·InfoRow) → 고정 바닥(DetailFooter). 본문만 스크롤하고 바닥은 늘 보인다.
+ *  가상머신 · 서비스 클러스터는 스테퍼 상세(request-detail-stepper)가 사유 띠(ReasonBanner)만 함께 쓴다.
+ * 폭: 읽기·승인 760px, 처리 화면 1000px.
  */
 import * as React from "react";
 import { BrainCircuit, Boxes, Building2, Copy, FolderKanban, Server, XCircle } from "lucide-react";
@@ -18,18 +18,6 @@ export const DETAIL_W = { read: "max-w-[760px]", process: "max-w-[1000px]" } as 
 export const DETAIL_CONTENT = "flex max-h-[92vh] flex-col gap-0 overflow-hidden rounded-[14px] p-0 outline-none";
 /** 본문 — 스크롤 영역(카드 사이 14px). */
 export const DETAIL_BODY = "grid min-h-0 flex-1 content-start gap-[14px] overflow-y-auto px-7 pt-4 pb-6";
-
-/** 2단 처리 패널(클러스터 1b · VM 승인) — 왼쪽 카드(270px, 넘치면 왼쪽만 스크롤) + 오른쪽 고르기(넘치면 오른쪽만 스크롤).
- *  높이 660px — 카드 네 장 + 총 자원이 레티나에서도 넘치지 않는 값. */
-export const PANEL = {
-  grid: "grid h-[660px] grid-cols-[270px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden rounded-xl border border-border [&_*]:leading-[1.2]",
-  left: "flex min-h-0 flex-col gap-2 overflow-y-auto border-r border-border bg-secondary/50 px-4 py-[18px] [scrollbar-width:thin]",
-  right: "grid min-h-0 min-w-0 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-[14px] overflow-y-auto px-6 py-5 [scrollbar-width:thin]",
-  card: "gap-2 px-3.5 py-3", // 왼쪽 카드 여백
-  // 신청 마법사 — 왼쪽은 카드만 스크롤하고 총 자원은 아래 고정. left 를 overflow-hidden 으로 덮고 그 안에 카드를 이것으로 감싼다.
-  // 오른쪽 여백 8px + 스크롤바 자리(늘 비워 둠) 8px = 16px — 스크롤바가 생겨도 카드 폭이 줄지 않는다
-  leftScroll: "-mx-4 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-2 pl-4 [scrollbar-gutter:stable] [scrollbar-width:thin]",
-} as const;
 
 /** 머리 — 제목(신청 상세 + 상태 배지) + 설명. 설명이 없으면 DialogContent 에 aria-describedby={undefined} 를 준다. */
 export function DetailHeader({ badge, description }: { badge: React.ReactNode; description?: React.ReactNode }) {

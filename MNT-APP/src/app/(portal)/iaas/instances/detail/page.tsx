@@ -3,12 +3,14 @@ import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Server, Play, Square, RotateCw, Trash2, Loader2, Plus, HardDrive, ArrowLeft,
-  Cpu, MemoryStick, Network as NetIcon, Database, Gauge, SlidersHorizontal, MonitorPlay, ShieldCheck, X,
+  Cpu, MemoryStick, Network as NetIcon, Database, Gauge, SlidersHorizontal, MonitorPlay, ShieldCheck, X, Camera,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -18,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useConfirm } from "@/components/ui/confirm";
 import { useAuth } from "@/lib/auth";
 import {
-  useServer, useServerDiagnostics, usePowerAction, useDeleteServer,
+  useServer, useServerDiagnostics, usePowerAction, useDeleteServer, useCreateServerSnapshot,
   useAttachVolume, useDetachVolume, useAttachInterface, useDetachInterface,
   useResizeServer, useResizeConfirm, useResizeRevert,
   useProjects, useVolumes, useImages, useNetworks, useFlavors,
@@ -70,6 +72,7 @@ function ServerDetailPage() {
   const [attachVolOpen, setAttachVolOpen] = React.useState(false);
   const [attachNetOpen, setAttachNetOpen] = React.useState(false);
   const [resizeOpen, setResizeOpen] = React.useState(false);
+  const [snapshotOpen, setSnapshotOpen] = React.useState(false);
 
   const projName = React.useMemo(() => {
     const m: Record<string, string> = {};
@@ -92,7 +95,9 @@ function ServerDetailPage() {
   if (isError || !s) return <Card className="p-6 text-sm text-rose-600">가상서버를 찾을 수 없습니다.</Card>;
 
   const busy = power.isPending || del.isPending || detach.isPending || detachNic.isPending;
-  const imageName = !s.imageId ? "(볼륨 부팅)" : (images?.find((i) => i.id === s.imageId)?.name ?? s.imageId);
+  // 볼륨 부팅 VM 은 부팅 볼륨의 원본 이미지 이름을 함께 표시 — "(볼륨 부팅)"만 보이던 것 보완(ETRI 검토의견)
+  const srcImage = s.imageId ? (images?.find((i) => i.id === s.imageId)?.name ?? s.imageName ?? s.imageId) : null;
+  const imageName = s.bootVolumeId ? `${srcImage ?? ""} (볼륨 부팅)`.trim() : (srcImage ?? "(볼륨 부팅)");
   const sshIp = s.addresses.find((a) => a.type === "floating")?.ip ?? s.addresses[0]?.ip;
   const copy = (txt: string, label: string) => { navigator.clipboard.writeText(txt); toast.success(`${label} 복사됨`); };
 
@@ -142,6 +147,7 @@ function ServerDetailPage() {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={openConsole} title="noVNC 웹 콘솔 새 탭으로 열기"><MonitorPlay className="size-3.5" /> 웹 콘솔</Button>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => setSnapshotOpen(true)} title="현재 상태를 이미지로 저장 — 그 이미지로 새 가상서버를 만들 수 있습니다"><Camera className="size-3.5" /> 스냅샷</Button>
           {isAdmin && <Button variant="outline" size="sm" disabled={busy} onClick={() => setResizeOpen(true)}><SlidersHorizontal className="size-3.5" /> 스펙 변경</Button>}
           {s.status === "SHUTOFF" ? (
             <Button variant="outline" size="sm" disabled={busy} onClick={() => doPower("start")}><Play className="size-3.5" /> 시작</Button>
@@ -268,7 +274,42 @@ function ServerDetailPage() {
       <AttachVolumeDialog serverId={s.id} projectId={s.tenantId} attached={new Set(s.attachedVolumes.map((v) => v.volumeId))} open={attachVolOpen} onClose={() => setAttachVolOpen(false)} />
       <AttachNetworkDialog serverId={s.id} projectId={s.tenantId} attached={new Set(s.interfaces.map((i) => i.netId))} open={attachNetOpen} onClose={() => setAttachNetOpen(false)} />
       {isAdmin && <ResizeDialog serverId={s.id} currentFlavor={s.flavorName} open={resizeOpen} onClose={() => setResizeOpen(false)} />}
+      {/* open 일 때만 마운트 — 열릴 때마다 이름이 서버명 기본값으로 리셋된다(effect 불필요) */}
+      {snapshotOpen && <SnapshotDialog serverId={s.id} serverName={s.name} onClose={() => setSnapshotOpen(false)} />}
     </div>
+  );
+}
+
+function SnapshotDialog({ serverId, serverName, onClose }: { serverId: string; serverName: string; onClose: () => void }) {
+  const snap = useCreateServerSnapshot();
+  const [name, setName] = React.useState(`${serverName}-snapshot`);
+  const submit = () => snap.mutate(
+    { id: serverId, name: name.trim() },
+    {
+      onSuccess: () => { toast.success("스냅샷 생성 요청됨 — 이미지 메뉴에서 확인할 수 있습니다", { description: "완료까지 수 분 걸릴 수 있습니다" }); onClose(); },
+      onError: (e) => toast.error("스냅샷 생성 실패", { description: String((e as Error).message) }),
+    },
+  );
+  return (
+    <Dialog open onOpenChange={(o) => !o && !snap.isPending && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Camera className="size-4 text-brand-indigo-600" /> 스냅샷 생성</DialogTitle>
+          <DialogDescription className="text-xs">현재 가상서버 상태를 이미지로 저장합니다. 그 이미지로 같은 상태의 가상서버를 새로 만들 수 있습니다.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5 py-1">
+          <Label>스냅샷(이미지) 이름</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} className="font-mono text-xs" />
+          <p className="text-[11px] text-muted-foreground">실행 중에도 생성되지만, 디스크 정합성을 위해 정지 상태를 권장합니다.</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={snap.isPending}>취소</Button>
+          <Button onClick={submit} disabled={!name.trim() || snap.isPending}>
+            {snap.isPending && <Loader2 className="size-3.5 animate-spin" />} 생성
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

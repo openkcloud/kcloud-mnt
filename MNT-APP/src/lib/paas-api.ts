@@ -61,6 +61,7 @@ export interface ClusterNodegroup {
   imageId: string;
   nodeCount: number;
   status: string;
+  isDefault: boolean; // 기본(default-master/worker) — 삭제 불가
 }
 export interface ClusterDetail extends ClusterSummary {
   healthReason: Record<string, string>;
@@ -75,10 +76,11 @@ export interface ClusterDetail extends ClusterSummary {
 // 진행 중(…_IN_PROGRESS)이면 4초, 평상시엔 사용자 설정 주기 (IaaS 서버 목록과 동일 패턴)
 const isClusterBusy = (s: string) => s.endsWith("_IN_PROGRESS");
 
-export function useClusters() {
+export function useClusters(enabled = true) {
   const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["paas-clusters"],
+    enabled,
     queryFn: async (): Promise<ClusterSummary[]> =>
       (await fetchJson<{ items: ClusterSummary[] }>(`${PAAS_BASE}/api/paas/clusters`)).items,
     staleTime: 20 * 1000, retry: 0,
@@ -109,6 +111,38 @@ export async function downloadKubeconfig(id: string, name: string): Promise<void
     throw new Error(String(msg));
   }
   downloadText(`${name}-kubeconfig.yaml`, await res.text());
+}
+
+// ── 노드그룹 관리(관리자) — Magnum 비동기(UPDATE_IN_PROGRESS 로 바뀐 뒤 반영) ──
+export interface CreateNodegroupInput { name: string; nodeCount: number; flavorId?: string }
+
+function invalidateCluster(qc: ReturnType<typeof useQueryClient>, clusterId: string) {
+  qc.invalidateQueries({ queryKey: ["paas-cluster", clusterId] });
+  qc.invalidateQueries({ queryKey: ["paas-clusters"] });
+}
+export function useCreateNodegroup(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateNodegroupInput) =>
+      sendJson("POST", `/api/paas/clusters/${clusterId}/nodegroups`, body),
+    onSuccess: () => invalidateCluster(qc, clusterId),
+  });
+}
+export function useResizeNodegroup(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodegroup, nodeCount }: { nodegroup: string; nodeCount: number }) =>
+      sendJson("POST", `/api/paas/clusters/${clusterId}/nodegroups/${nodegroup}/resize`, { nodeCount }),
+    onSuccess: () => invalidateCluster(qc, clusterId),
+  });
+}
+export function useDeleteNodegroup(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (nodegroup: string) =>
+      sendJson<void>("DELETE", `/api/paas/clusters/${clusterId}/nodegroups/${nodegroup}`),
+    onSuccess: () => invalidateCluster(qc, clusterId),
+  });
 }
 
 /** 클러스터 삭제(관리자). Magnum DELETE 는 비동기 — 목록은 DELETE_IN_PROGRESS 로 바뀐 뒤 소멸. */
@@ -165,19 +199,38 @@ export interface WorkloadRow {
   total: number;
   requests: { cpu: string; memory: string };
   accelerator: { kind: string; count: number } | null;
-  schedule: string;
+  schedule?: string;   // CronJob 만 — 파드 목록(PodListRow)에는 없다
   status: string;
   labels: Record<string, string>;
   createdAt: string;
 }
-export function useWorkloads(clusterId: string, namespace?: string) {
+export function useWorkloads(clusterId: string, namespace?: string, enabled = true) {
   const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["paas-workloads", clusterId, namespace ?? "all"],
-    enabled: !!clusterId,
+    enabled: enabled && !!clusterId,
     queryFn: async () =>
       (await fetchJson<{ items: WorkloadRow[] }>(
         `${PAAS_BASE}/api/paas/clusters/${clusterId}/workloads${nsQ(namespace)}`)).items,
+    retry: 0, refetchInterval: pollMs || false,
+  });
+}
+
+/** 파드 목록(워크로드 화면에서 Pod 유형 선택 시) — 워크로드 행 + 소유자·재시작·노드·컨테이너 */
+export interface PodListRow extends WorkloadRow {
+  owner: { kind: string; name: string } | null;   // 소유 워크로드 — 없으면 독립 파드
+  restarts: number;
+  node: string;
+  containers: string[];
+}
+export function usePods(clusterId: string, namespace?: string, enabled = true) {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["paas-pod-list", clusterId, namespace ?? "all"],
+    enabled: enabled && !!clusterId,
+    queryFn: async () =>
+      (await fetchJson<{ items: PodListRow[] }>(
+        `${PAAS_BASE}/api/paas/clusters/${clusterId}/pods${nsQ(namespace)}`)).items,
     retry: 0, refetchInterval: pollMs || false,
   });
 }
@@ -356,15 +409,22 @@ export function useDeleteWorkload(clusterId: string) {
   return useMutation({
     mutationFn: ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) =>
       sendJson<void>("DELETE", `${base(clusterId)}/workloads/${kind}/${namespace}/${name}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] }),
+    onSuccess: () => {   // 파드 목록·드릴다운도 갱신(파드 삭제 가능)
+      qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] });
+      qc.invalidateQueries({ queryKey: ["paas-pod-list", clusterId] });
+      qc.invalidateQueries({ queryKey: ["paas-pods", clusterId] });
+    },
   });
 }
-/** YAML 로 워크로드 생성/적용(server-side apply) — Job/CronJob 등 모든 종류 */
+/** YAML 로 워크로드 생성/적용(server-side apply) — Pod/Job/CronJob 등 모든 종류 */
 export function useApplyWorkload(clusterId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (yaml: string) => sendJson("POST", `${base(clusterId)}/workloads/apply`, { yaml }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["paas-workloads", clusterId] });
+      qc.invalidateQueries({ queryKey: ["paas-pod-list", clusterId] });
+    },
   });
 }
 /** YAML 직접 수정 저장 */

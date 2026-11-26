@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import {
   useCancelProvisionQueue, useOrgs, useProvisionAiWorkspaceTicket, useProvisionClusterTicket, useProvisionTicket,
@@ -55,16 +55,16 @@ import { ResourceRequestWizard } from "@/components/resource-request-wizard";
 import {
   WorkspaceLimitFields, limitsBody, limitsOf, limitsOk, limitsText, toLimitsInput, type WorkspaceLimitsInput,
 } from "@/components/workspace-requests";
-import { ClusterRequestSections, ClusterReviewContent, isClusterReview, type ClusterProvisionValue } from "@/components/cluster-ticket-review";
-import { VmProvisionContent, isVmReview } from "@/components/vm-ticket-review";
-import { RequestReviewContent, isRequestReview } from "@/components/request-review";
+import { ClusterRequestSections, type ClusterProvisionValue } from "@/components/cluster-ticket-review";
+import { RequestDetailStepper, isStepperDetail, type DetailView } from "@/components/request-detail-stepper";
+import { fmtSec, fmtWait, shownStatus, stepDurationMs, toastStarted, useShownClock } from "@/components/provision-progress";
 import {
   DETAIL_BODY, DETAIL_CONTENT, DETAIL_W, DetailFooter, DetailHeader, InfoRow, ReasonBanner, RejectInput, RequestHero, Section,
 } from "@/components/request-detail";
 import { AccelBadge, NetBadge, useAccelModel } from "@/components/cluster-node-fields";
 import { cn, formatDateTime } from "@/lib/utils";
 import type {
-  ClusterProvisionSpec, ProvisionSpec, ProvisionStep, ProvisionStepsResp, ProvStepStatus, ResourceRequest, RequestStatus,
+  ClusterProvisionSpec, ProvisionSpec, ProvisionStep, ProvStepStatus, ResourceRequest, RequestStatus,
   RequestType,
 } from "@/lib/types";
 
@@ -318,6 +318,9 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
       ) : isWs ? (
         <Section icon={<BrainCircuit className="size-4 text-brand-indigo-600" />} title="AI 워크스페이스">
           <InfoRow label="워크스페이스"><span className="font-mono">{r.result?.namespace ?? r.workspaceName ?? "—"}</span></InfoRow>
+          {(r.clusterName || r.clusterId) && (
+            <InfoRow label="서비스 클러스터"><span className="font-mono">{r.clusterName ?? r.clusterId}</span></InfoRow>
+          )}
           <InfoRow label="사용 목적">{r.purpose || <span className="text-muted-foreground">—</span>}</InfoRow>
           <InfoRow label="신청 한도"><span className="font-mono">{limitsText(r)}</span></InfoRow>
           {/* 관리자가 생성 시작 때 조정한 한도 */}
@@ -363,60 +366,7 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
   );
 }
 
-// 프로비저닝 진행 사이드 시트 — 큰 단계 5개 + 세부 단계, MNT-CORE(tkt_provision_step) 폴링
-function fmtSec(ms: number) {
-  return `${(Math.max(0, ms) / 1000).toFixed(1)}초`;
-}
-
-/** 보이는 단계의 소요 시간 — 끝났으면 기록된 시각끼리, 진행 중이면 화면 시계(t)까지. */
-function stepDurationMs(s: ProvisionStep, t: number) {
-  if (!s.startedAt || s.status === "waiting") return undefined;
-  const end = s.status === "running" ? t : s.endedAt ? Date.parse(s.endedAt) : NaN;
-  return Number.isFinite(end) ? end - Date.parse(s.startedAt) : undefined;
-}
-
-// 진행 중엔 서버 시각보다 1.5초 늦게 그린다 — 조회(1초)가 먼저 와 있어, 끝난 단계를 모른 채 시간을 더 세다 되돌아가지 않게
-const LIVE_DELAY_MS = 1500;
-
-type StepsData = ProvisionStepsResp & { receivedAt: number };
-
-/** 화면 시계 t 에서 보이는 상태 — 기록된 시작·종료 시각으로 정한다(Infinity 면 기록 그대로). */
-function shownStatus(x: { status: ProvStepStatus; startedAt?: string; endedAt?: string }, t: number): ProvStepStatus {
-  if (t === Infinity || x.status === "waiting" || x.status === "skipped" || !x.startedAt) return x.status;
-  if (Date.parse(x.startedAt) > t) return "waiting";
-  return x.endedAt && Date.parse(x.endedAt) <= t ? x.status : "running";
-}
-
-/** 진행 창의 화면 시계(서버 시각, ms) — 진행 중에만 서버 시각보다 LIVE_DELAY_MS 늦게 따라간다.
- *  서버가 확인해 준 시각(응답의 now)을 넘지 않고(응답이 늦으면 잠깐 멈춤), 뒤로 가지 않는다.
- *  끝난 신청을 열었거나 끝난 뒤 다 따라잡으면 Infinity — 기록된 값을 그대로 보여 준다. */
-function useShownClock(data: StepsData | undefined) {
-  const [clock, setClock] = React.useState<{ attempt?: number; t: number }>({ t: Infinity });
-  const live = data?.status === "provisioning";
-  const following = live || Number.isFinite(clock.t);
-  React.useEffect(() => {
-    if (!data || !following) return;
-    const horizon = Date.parse(data.now);
-    const times = data.items.flatMap((s) => [s, ...s.details]).flatMap((x) => [x.startedAt, x.endedAt]);
-    const lastEvent = Math.max(-Infinity, ...times.filter((v): v is string => !!v).map(Date.parse));
-    const tick = () => setClock((c) => {
-      const target = Math.min(horizon + (performance.now() - data.receivedAt) - LIVE_DELAY_MS, horizon);
-      const fresh = c.attempt !== data.attempt || !Number.isFinite(c.t);  // 새로 진행 중 — 지금부터 따라간다
-      const t = fresh ? target : Math.max(c.t, target);
-      return { attempt: data.attempt, t: !live && t >= lastEvent ? Infinity : t };  // 끝났고 다 따라잡음
-    });
-    const id = window.setInterval(tick, 100);
-    const first = window.requestAnimationFrame(tick);
-    return () => {
-      window.clearInterval(id);
-      window.cancelAnimationFrame(first);
-    };
-  }, [data, following, live]);
-  // 진행 중인데 아직 따라가기 전(첫 응답 직후 한 번) — 응답 기준 시각으로 그려 앞선 상태가 비치지 않게
-  if (live && (clock.attempt !== data.attempt || !Number.isFinite(clock.t))) return Date.parse(data.now) - LIVE_DELAY_MS;
-  return clock.t;
-}
-
+// 프로비저닝 진행 사이드 시트(AI 워크스페이스) — 큰 단계 + 세부 단계, MNT-CORE(tkt_provision_step) 폴링
 function StepIcon({ status }: { status: ProvStepStatus }) {
   return status === "done" ? <CircleCheck className="size-5 text-foreground" />
     : status === "running" ? <Loader2 className="size-5 animate-spin text-brand-mint-500" />
@@ -430,21 +380,6 @@ function SubIcon({ status }: { status: ProvStepStatus }) {
     : status === "running" ? <Loader2 className="size-3.5 animate-spin text-brand-mint-500" />
     : status === "failed" ? <XCircle className="size-3.5 text-rose-600" />
     : <span className="mx-[5px] size-1 rounded-full bg-muted-foreground/40" />;
-}
-
-/** 시작·재시도 알림 — 시작 직후 받아 둔 진행 기록으로: 시작 대기(예약)면 '프로비저닝을 예약했습니다'(시작한 것으로
- *  오해하지 않게), 바로 시작했으면 started. 설명은 신청 ID 와 몇 번째 시도인지(2회차부터). */
-function toastStarted(qc: QueryClient, id: string, started: string) {
-  const s = qc.getQueryData<ProvisionStepsResp>(["tickets", "steps", id]);
-  const attempt = s?.attempt ?? 1;
-  toast.success(s?.status === "provisioning" && s.queue ? "프로비저닝을 예약했습니다" : started, {
-    description: `신청 ID: ${id}${attempt > 1 ? ` · ${attempt}차 시도` : ""}`,
-  });
-}
-
-function fmtWait(sec: number) {
-  const m = Math.floor(sec / 60);
-  return m ? `${m}분 ${sec % 60}초` : `${sec}초`;
 }
 
 /** VM 시작 대기(예약) 모달 — 동시에 진행할 수 있는 프로비저닝이 모두 진행 중이라 자리를 기다리는 동안.
@@ -824,6 +759,8 @@ function AdminView() {
 
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
+  const [detailView, setDetailView] = React.useState<DetailView | undefined>(undefined);
+  const [openSeq, setOpenSeq] = React.useState(0); // 연 횟수 — 상세(스테퍼)는 닫아도 마운트된 채라, 열 때마다 새로 그린다
   const [rejecting, setRejecting] = React.useState(false);
   const [rejectReason, setRejectReason] = React.useState("");
   // AI 워크스페이스 생성 시작 — 신청(또는 지난 회차) 한도로 채워 두고 조정할 수 있게 한다
@@ -831,12 +768,14 @@ function AdminView() {
   const [sheetReq, setSheetReq] = React.useState<ResourceRequest | null>(null);
   const [sheetOpen, setSheetOpen] = React.useState(false);
 
-  // 승인·반려 버튼 모두 상세 모달을 연다 (반려는 사유 입력 펼침)
-  function openDetail(r: ResourceRequest, mode?: "reject") {
+  // 승인·반려·프로비저닝·진행 보기 버튼 모두 상세 모달을 연다 (반려는 사유 입력 펼침, 진행 보기는 진행 화면부터)
+  function openDetail(r: ResourceRequest, mode?: "reject" | "progress") {
     setDetail(r);
+    setDetailView(mode === "progress" ? "progress" : undefined);
     setRejecting(mode === "reject");
     setRejectReason("");
     setWsLimits(r.type === "ai-workspace" ? toLimitsInput(limitsOf(r)) : null);
+    setOpenSeq((n) => n + 1);
     setDetailOpen(true);
   }
   function openSheet(r: ResourceRequest) {
@@ -845,21 +784,25 @@ function AdminView() {
   }
 
   const items = (data?.items ?? []).filter((r) => matchesQuery(r, q));
+  // 열어 둔 신청 — 목록이 다시 오면(진행 중 상태가 바뀌면 갱신) 그 값으로 그린다
+  const shown = detail && (data?.items.find((x) => x.id === detail.id) ?? detail);
 
   const pending = items.filter((r) => r.status === "pending").length;
   const inProgress = items.filter((r) => ["approved", "provisioning", "completed"].includes(r.status)).length;
   const failed = items.filter((r) => r.status === "failed").length;
   const rejected = items.filter((r) => r.status === "rejected").length;
 
-  async function review(action: "approve" | "reject", reason = rejectReason) {
-    if (!detail) return;
-    const r = detail;
+  // 처리는 열어 둔 신청의 지금 값(목록에서 다시 받은 상태)으로 — 진행 중에 실패로 바뀐 뒤 반려·재시도해도 상태가 맞게
+  // expected — 상세 창이 보고 있는 지금 상태(VM·클러스터 스테퍼가 진행 기록으로 맞춰 넘긴다). 없으면 열어 둔 신청의 상태
+  async function review(action: "approve" | "reject", reason = rejectReason, expected?: RequestStatus) {
+    if (!shown) return;
+    const r = shown;
     try {
       await reviewMutation.mutateAsync({
         id: r.id,
         action,
         reason: action === "reject" ? reason.trim() : undefined,
-        expectedStatus: r.status,
+        expectedStatus: expected ?? r.status,
       });
       setDetailOpen(false);
       if (action === "approve") {
@@ -872,44 +815,59 @@ function AdminView() {
     }
   }
 
-  // 승인(VM) → 생성 중: 승인 설정으로 Temporal 워크플로 시작 후 진행 시트를 연다
-  // 승인(AI 워크스페이스) → 생성 중: 확정한 한도로 시작 / 승인(클러스터) → 생성 중: 망·서브넷·노드 구성으로 시작
+  // 승인(VM) → 생성 중: 승인 설정으로 Temporal 워크플로 시작 후 같은 상세 창이 진행 화면으로
+  // 승인(AI 워크스페이스) → 생성 중: 확정한 한도로 시작(진행 시트) / 승인(클러스터) → 생성 중: 망·서브넷·노드 구성으로 시작
   // (실패 → 재시도도 같은 경로)
-  async function provision(clusterSpec?: ClusterProvisionValue, vmSpec?: ProvisionSpec) {
-    if (!detail) return;
-    const r = detail;
+  async function provision(clusterSpec?: ClusterProvisionValue, vmSpec?: ProvisionSpec, expected?: RequestStatus) {
+    if (!shown) return;
+    const r = shown;
+    const cur = expected ?? r.status;
     const isWs = r.type === "ai-workspace";
     const isCluster = r.type === "cluster";
     if (isWs ? !wsLimits || !limitsOk(wsLimits) : isCluster ? !clusterSpec : !vmSpec) return;
     try {
       const started = isCluster
-        ? await provisionClusterMutation.mutateAsync({ id: r.id, expectedStatus: r.status, provisionSpec: clusterSpec! })
+        ? await provisionClusterMutation.mutateAsync({ id: r.id, expectedStatus: cur, provisionSpec: clusterSpec! })
         : isWs
         ? await provisionWsMutation.mutateAsync({
             id: r.id,
             processedBy: user?.username ?? "",
-            expectedStatus: r.status,
+            expectedStatus: cur,
             ...limitsBody(wsLimits!),
           })
         : await provisionMutation.mutateAsync({
             id: r.id,
-            expectedStatus: r.status,
+            expectedStatus: cur,
             provisionSpec: toProvisionBody(vmSpec!),
           });
-      setDetailOpen(false);
       toastStarted(qc, r.id,
-        r.status === "failed" ? "재시도를 시작했습니다" : isWs ? "워크스페이스 생성을 시작했습니다"
+        cur === "failed" ? "재시도를 시작했습니다" : isWs ? "워크스페이스 생성을 시작했습니다"
           : isCluster ? "클러스터 생성을 시작했습니다" : "프로비저닝을 시작했습니다");
-      openSheet(started);
+      if (isWs) {
+        setDetailOpen(false);
+        openSheet(started);
+      } else {
+        setDetail(started); // 같은 창이 진행 화면으로 바뀐다
+      }
     } catch (e) {
-      toast.error(r.status === "failed" ? "재시도하지 못했습니다" : "프로비저닝을 시작하지 못했습니다", {
+      toast.error(cur === "failed" ? "재시도하지 못했습니다" : "프로비저닝을 시작하지 못했습니다", {
         description: e instanceof Error ? <span className="whitespace-pre-line">{e.message}</span> : undefined, // 서버 사유의 줄바꿈 유지
       });
     }
   }
 
+  // 그대로 재시도 — 지난 회차의 승인 설정 그대로(VM: 망·IP·보안그룹·배치·키페어, 클러스터: 망·서브넷·노드 구성·키페어)
+  function retrySame(r: ResourceRequest, expected: RequestStatus) {
+    if (r.type === "cluster") {
+      const cp = clusterSpecOf(r);
+      if (cp) provision(toClusterProvisionBody(cp), undefined, expected);
+    } else if (r.provisionSpec) {
+      provision(undefined, r.provisionSpec, expected);
+    }
+  }
+
   // 대기 → 승인·반려. AI 워크스페이스: 승인 → 생성 시작(한도 조정)·반려, 실패 → 한도 확인 후 재시도·반려
-  // (VM 승인·실패는 VmProvisionContent, 클러스터 대기·승인·실패는 ClusterReviewContent)
+  // (VM·클러스터는 RequestDetailStepper)
   const isPending = detail?.status === "pending";
   const canProvisionWs = detail?.type === "ai-workspace" && (detail.status === "approved" || detail.status === "failed");
   const canProcess = isPending || canProvisionWs;
@@ -1027,7 +985,7 @@ function AdminView() {
                           </Button>
                         </div>
                       ) : inProvision ? (
-                        <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => openSheet(r)}>
+                        <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => (isWsRow ? openSheet(r) : openDetail(r, "progress"))}>
                           {r.status === "completed" ? <CheckCircle2 className="size-3.5" />
                             : r.status === "failed" ? <AlertCircle className="size-3.5 text-rose-600" />
                             : <Loader2 className="size-3.5 animate-spin" />}
@@ -1052,46 +1010,28 @@ function AdminView() {
         </Card>
       )}
 
-      {/* 프로비저닝 진행 사이드 시트 */}
+      {/* 프로비저닝 진행 사이드 시트(AI 워크스페이스) */}
       <ProvisioningSheet key={sheetReq?.id} req={sheetReq} open={sheetOpen} onClose={() => setSheetOpen(false)} canRetry />
 
-      {/* 신청 상세 — VM·클러스터: 승인·실패는 처리 화면(VM 승인 설정 · 클러스터 1b), 그 밖은 신청 단계와 같은 모양
-          (RequestReviewContent — 대기면 승인·반려, 진행 중·완료면 진행 보기)
+      {/* 신청 상세 — VM·클러스터: 스테퍼(RequestDetailStepper — 신청 내용 · 프로비저닝 설정 · 진행을 한 창에서)
           / 대기(AI 워크스페이스): 승인·반려 / 승인·실패(AI 워크스페이스): 한도 확인·조정 후 생성 시작(재시도)·반려 */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        {detail && isRequestReview(detail, true) ? (
-          <RequestReviewContent
-            key={`${detail.id}:${rejecting}`} // 같은 신청이라도 '반려' 버튼으로 열면 반려 입력부터
-            r={detail}
-            badge={<StatusBadge status={detail.status} />}
+        {shown && isStepperDetail(shown) ? (
+          <RequestDetailStepper
+            key={`${shown.id}:${openSeq}`} // 열 때마다 처음부터 — 같은 신청이라도 '반려'·'진행 보기' 버튼으로 열면 그 화면부터
+            r={shown}
             admin
+            open={detailOpen}
+            initialView={detailView}
             rejectFirst={rejecting}
             reviewing={reviewMutation.isPending}
-            onApprove={() => review("approve")}
-            onReject={(reason) => review("reject", reason)}
-            onWatch={() => { setDetailOpen(false); openSheet(detail); }}
-          />
-        ) : detail && isClusterReview(detail) ? (
-          <ClusterReviewContent
-            key={`${detail.id}:${rejecting}`} // 같은 신청이라도 '반려' 버튼으로 열면 반려 입력부터
-            r={detail}
-            badge={<StatusBadge status={detail.status} />}
-            rejectFirst={rejecting}
-            reviewing={reviewMutation.isPending}
-            provisioning={provisionClusterMutation.isPending}
-            onReject={(reason) => review("reject", reason)}
-            onProvision={(s) => provision(s)}
-          />
-        ) : detail && isVmReview(detail) ? (
-          <VmProvisionContent
-            key={`${detail.id}:${rejecting}`} // 같은 신청이라도 '반려' 버튼으로 열면 반려 입력부터
-            r={detail}
-            badge={<StatusBadge status={detail.status} />}
-            rejectFirst={rejecting}
-            reviewing={reviewMutation.isPending}
-            provisioning={provisionMutation.isPending}
-            onReject={(reason) => review("reject", reason)}
-            onProvision={(s) => provision(undefined, s)}
+            provisioning={provisionMutation.isPending || provisionClusterMutation.isPending}
+            onApprove={(st) => review("approve", undefined, st)}
+            onReject={(reason, st) => review("reject", reason, st)}
+            onProvisionVm={(spec, st) => provision(undefined, spec, st)}
+            onProvisionCluster={(spec, st) => provision(spec, undefined, st)}
+            onRetry={(st) => retrySame(shown, st)}
+            onClose={() => setDetailOpen(false)}
           />
         ) : (
         <DialogContent className={cn(DETAIL_CONTENT, DETAIL_W.read)} onOpenAutoFocus={(e) => e.preventDefault()}>
@@ -1169,10 +1109,7 @@ function UserView({ username }: { username: string }) {
   const [q, setQ] = React.useState("");
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
-  const [sheetReq, setSheetReq] = React.useState<ResourceRequest | null>(null);
-  const [sheetOpen, setSheetOpen] = React.useState(false);
-  // 진행 보기(읽기 전용 — 재시도·예약 취소 없음): VM·클러스터의 생성 중·완료·실패. AI 워크스페이스는 이 화면 작업 대상 밖
-  const canWatch = (r: ResourceRequest) => r.type !== "ai-workspace" && IN_PROVISION.includes(r.status);
+  const [openSeq, setOpenSeq] = React.useState(0); // 연 횟수 — 상세(스테퍼)는 닫아도 마운트된 채라, 열 때마다 새로 그린다
 
   // 내 신청 = MNT-CORE 실제 티켓 (목업 폴백 없음). 신청자는 서버가 토큰으로 정한다
   const filters: Record<string, string> = {};
@@ -1181,6 +1118,8 @@ function UserView({ username }: { username: string }) {
   const { data, isLoading, error } = useTickets(filters, !!username);
 
   const items = (data?.items ?? []).filter((r) => matchesQuery(r, q));
+  // 열어 둔 신청 — 목록이 다시 오면(진행 중 상태가 바뀌면 갱신) 그 값으로 그린다
+  const shown = detail && (data?.items.find((x) => x.id === detail.id) ?? detail);
   const pending = items.filter((r) => r.status === "pending").length;
   const inProgress = items.filter((r) => r.status === "approved" || r.status === "provisioning").length;
   const done = items.filter((r) => r.status === "completed").length;
@@ -1245,7 +1184,7 @@ function UserView({ username }: { username: string }) {
             </TableHeader>
             <TableBody>
               {items.map((r) => (
-                <TableRow key={r.id} className="cursor-pointer" onClick={() => { setDetail(r); setDetailOpen(true); }}>
+                <TableRow key={r.id} className="cursor-pointer" onClick={() => { setDetail(r); setOpenSeq((n) => n + 1); setDetailOpen(true); }}>
                   <CopyCell value={r.id} label="신청 ID" className="whitespace-nowrap font-semibold" after={<TypeBadge type={r.type} />} />
                   <TableCell className="whitespace-nowrap"><ProjectRequesterCell r={r} /></TableCell>
                   <TableCell className="max-w-0"><TitleCell r={r} /></TableCell>
@@ -1269,28 +1208,18 @@ function UserView({ username }: { username: string }) {
         </Card>
       )}
 
-      {/* 내 신청 상세 (읽기 전용) — VM·클러스터는 신청 단계와 같은 모양(상태별 오른쪽 칸 · 진행 순서), AI 워크스페이스는 기존 상세 */}
+      {/* 내 신청 상세 (읽기 전용) — VM·클러스터: 스테퍼(지금 단계 안내 · 진행은 04 단계, 재시도·예약 취소 없음),
+          AI 워크스페이스는 기존 상세 */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        {detail && isRequestReview(detail, false) ? (
-          <RequestReviewContent key={detail.id} r={detail} badge={<StatusBadge status={detail.status} />}
-            onWatch={() => { setDetailOpen(false); setSheetReq(detail); setSheetOpen(true); }} />
+        {shown && isStepperDetail(shown) ? (
+          <RequestDetailStepper key={`${shown.id}:${openSeq}`} r={shown} admin={false} open={detailOpen} onClose={() => setDetailOpen(false)} />
         ) : (
         <DialogContent className={cn(DETAIL_CONTENT, DETAIL_W.read)} aria-describedby={undefined} onOpenAutoFocus={(e) => e.preventDefault()}>
           <DetailHeader badge={detail && <StatusBadge status={detail.status} />} />
           <div className={DETAIL_BODY}>{detail && <RequestDetailBody r={detail} />}</div>
-          {detail && canWatch(detail) && (
-            <DetailFooter>
-              <Button variant="outline" onClick={() => { setDetailOpen(false); setSheetReq(detail); setSheetOpen(true); }}>
-                {detail.type === "cluster" ? <Boxes className="size-3.5" /> : <Server className="size-3.5" />} 진행 보기
-              </Button>
-            </DetailFooter>
-          )}
         </DialogContent>
         )}
       </Dialog>
-
-      {/* 프로비저닝 진행 사이드 시트(읽기 전용) */}
-      <ProvisioningSheet key={sheetReq?.id} req={sheetReq} open={sheetOpen} onClose={() => setSheetOpen(false)} />
 
       <ResourceRequestWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
     </div>

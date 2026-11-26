@@ -8,7 +8,8 @@ from __future__ import annotations
 import base64
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import Response
 
 from ..auth import Caller, caller, cluster_member, require_admin
@@ -18,6 +19,14 @@ router = APIRouter(tags=["clusters"])
 
 
 def _err(e: Exception) -> HTTPException:  # noqa: ANN001
+    # Magnum 이 준 상태·메시지는 그대로 전달(중복 이름 409·기본 노드그룹 삭제 400 등 — 화면이 구분)
+    if isinstance(e, httpx.HTTPStatusError):
+        try:
+            d = e.response.json()
+            msg = (d.get("errors") or [{}])[0].get("detail") or d.get("title") or e.response.text
+        except Exception:  # noqa: BLE001
+            msg = e.response.text
+        return HTTPException(status_code=e.response.status_code, detail=msg)
     return HTTPException(status_code=502, detail=f"magnum api error: {type(e).__name__}: {e}")
 
 
@@ -103,11 +112,54 @@ def get_cluster(cluster_id: str):
                 "imageId": g.get("image_id") or "",
                 "nodeCount": g.get("node_count", 0),
                 "status": g.get("status", ""),
+                "isDefault": bool(g.get("is_default")),   # 기본(default-master/worker) — 삭제 불가
             }
             for g in ngs
         ],
     })
     return d
+
+
+# ── 노드그룹(관리자) — CLI(openstack coe nodegroup ...)와 같은 Magnum API. 모두 비동기(UPDATE_IN_PROGRESS) ──
+
+@router.post("/clusters/{cluster_id}/nodegroups", status_code=202, dependencies=[Depends(require_admin)])
+def create_nodegroup(cluster_id: str, body: dict = Body(...)):
+    """노드그룹 추가 — 이름·워커 플레이버(비우면 클러스터 기본)·노드 수(기본 1)·역할(기본 worker)."""
+    name = (body.get("name") or "").strip()
+    if not name_rule_ok(name):
+        raise HTTPException(status_code=400, detail=NAME_RULE.replace("클러스터", "노드그룹"))
+    payload: dict = {"name": name, "node_count": max(1, int(body.get("nodeCount") or 1))}
+    for src, dst in (("flavorId", "flavor_id"), ("imageId", "image_id"), ("role", "role")):
+        if body.get(src):
+            payload[dst] = body[src]
+    try:
+        return magnum.request("POST", f"/clusters/{cluster_id}/nodegroups", json=payload)
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.post("/clusters/{cluster_id}/nodegroups/{nodegroup}/resize", status_code=202,
+             dependencies=[Depends(require_admin)])
+def resize_nodegroup(cluster_id: str, nodegroup: str, body: dict = Body(...)):
+    """노드그룹 노드 수 조정 — Magnum resize 액션(nodegroup 지정)."""
+    count = int(body.get("nodeCount") or 0)
+    if count < 1:
+        raise HTTPException(status_code=400, detail="노드 수는 1 이상이어야 합니다.")
+    try:
+        return magnum.request("POST", f"/clusters/{cluster_id}/actions/resize",
+                              json={"node_count": count, "nodegroup": nodegroup})
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
+
+
+@router.delete("/clusters/{cluster_id}/nodegroups/{nodegroup}", status_code=202,
+               dependencies=[Depends(require_admin)])
+def delete_nodegroup(cluster_id: str, nodegroup: str):
+    """노드그룹 삭제 — 기본 노드그룹(default-master/worker)은 Magnum 이 거부한다(그대로 전달)."""
+    try:
+        return magnum.request("DELETE", f"/clusters/{cluster_id}/nodegroups/{nodegroup}")
+    except Exception as e:  # noqa: BLE001
+        raise _err(e)
 
 
 @router.delete("/clusters/{cluster_id}", dependencies=[Depends(require_admin)])

@@ -132,11 +132,11 @@ _SELECT = """
            r.approved_at, r.provisioning_at, r.approved_reject_at, r.approved_reject_reason,
            r.provisioning_reject_at, r.provisioning_reject_reason, r.error_message, r.created_at, r.finished_at,
            u.username, u.name AS requester_name, ro.name AS requester_org_name, o.id AS org_id, o.name AS org_name,
-           ap.username AS approved_by, ap.name AS approved_by_name,
-           pv.username AS provisioning_by, pv.name AS provisioning_by_name,
-           ar.username AS approved_reject_by, ar.name AS approved_reject_by_name,
-           pr.username AS provisioning_reject_by, pr.name AS provisioning_reject_by_name,
-           fn.username AS finished_by, fn.name AS finished_by_name
+           ap.username AS approved_by, ap.name AS approved_by_name, apo.name AS approved_by_org_name,
+           pv.username AS provisioning_by, pv.name AS provisioning_by_name, pvo.name AS provisioning_by_org_name,
+           ar.username AS approved_reject_by, ar.name AS approved_reject_by_name, aro.name AS approved_reject_by_org_name,
+           pr.username AS provisioning_reject_by, pr.name AS provisioning_reject_by_name, pro.name AS provisioning_reject_by_org_name,
+           fn.username AS finished_by, fn.name AS finished_by_name, fno.name AS finished_by_org_name
       FROM tkt_request r
       JOIN iam_user u ON u.id = r.requested_by
       LEFT JOIN iam_org ro ON ro.id = u.org_id  -- 신청자 본인 조직(관리자는 다른 조직 프로젝트에도 신청)
@@ -147,6 +147,12 @@ _SELECT = """
       LEFT JOIN iam_user ar ON ar.id = r.approved_reject_by
       LEFT JOIN iam_user pr ON pr.id = r.provisioning_reject_by
       LEFT JOIN iam_user fn ON fn.id = r.finished_by
+      -- 처리자 조직(처리 기록 '이름(조직)') — 신청자 조직과 같은 기준
+      LEFT JOIN iam_org apo ON apo.id = ap.org_id
+      LEFT JOIN iam_org pvo ON pvo.id = pv.org_id
+      LEFT JOIN iam_org aro ON aro.id = ar.org_id
+      LEFT JOIN iam_org pro ON pro.id = pr.org_id
+      LEFT JOIN iam_org fno ON fno.id = fn.org_id
 """
 
 
@@ -174,20 +180,25 @@ def _to_item(r) -> dict:
         # 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려) · 마감(완료 / 실패)
         "approvedBy": r["approved_by"],
         "approvedByName": r["approved_by_name"],
+        "approvedByOrgName": r["approved_by_org_name"],
         "approvedAt": _iso(r["approved_at"]),
         "provisioningBy": r["provisioning_by"],
         "provisioningByName": r["provisioning_by_name"],
+        "provisioningByOrgName": r["provisioning_by_org_name"],
         "provisioningAt": _iso(r["provisioning_at"]),
         "approvedRejectBy": r["approved_reject_by"],
         "approvedRejectByName": r["approved_reject_by_name"],
+        "approvedRejectByOrgName": r["approved_reject_by_org_name"],
         "approvedRejectAt": _iso(r["approved_reject_at"]),
         "approvedRejectReason": r["approved_reject_reason"],
         "provisioningRejectBy": r["provisioning_reject_by"],
         "provisioningRejectByName": r["provisioning_reject_by_name"],
+        "provisioningRejectByOrgName": r["provisioning_reject_by_org_name"],
         "provisioningRejectAt": _iso(r["provisioning_reject_at"]),
         "provisioningRejectReason": r["provisioning_reject_reason"],
         "finishedBy": r["finished_by"],  # 마감 처리자 = 그 회차 프로비저닝을 시작한 관리자
         "finishedByName": r["finished_by_name"],
+        "finishedByOrgName": r["finished_by_org_name"],
         "finishedAt": _iso(r["finished_at"]),
         "errorMessage": r["error_message"],
     }
@@ -393,13 +404,15 @@ def create_ticket(body: CreateTicketBody, user: CurrentUser = Depends(current_us
 _WS_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 
 
-def _ainb(path: str):
-    """MNT-AINB GET(JSON). 주소 미설정은 503, 연결·응답 실패는 502."""
+def _ainb(path: str, token: str | None = None):
+    """MNT-AINB GET(JSON). 주소 미설정은 503, 연결·응답 실패는 502.
+    token 을 주면 신청자 토큰을 넘긴다 — AINB 가 그 토큰으로 서비스 클러스터 접속 정보(MNT-PAAS kubeconfig)를 받아 둔다."""
     if not settings.ainb_api_base:
         raise HTTPException(503, "MNT-AINB 주소(AINB_API_BASE)가 설정되지 않았습니다")
     url = settings.ainb_api_base.rstrip("/") + "/api/ainb" + path
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"} if token else {})
     try:
-        with urllib.request.urlopen(url, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
         raise HTTPException(502, f"AI 노트북(MNT-AINB) 조회 실패: {e.read().decode(errors='replace')[:300] or e}")
@@ -416,6 +429,7 @@ def _workspace_name(project_name: str, project_id: str) -> str:
 class CreateAiWorkspaceBody(BaseModel):
     requestedBy: str | None = None  # 옛 화면 호환용 — 쓰지 않음(신청자 = 토큰 사용자)
     projectId: str               # OpenStack 프로젝트 UUID — 이 프로젝트의 AI 워크스페이스
+    clusterId: str | None = None  # 만들 서비스 클러스터(MNT-PAAS 클러스터 ID) — AINB 가 여러 클러스터를 쓸 때(PaaS 모드) 필요
     purpose: str = ""
     cpu: int = 4
     memoryGi: int = 16
@@ -442,8 +456,28 @@ def create_ai_workspace_ticket(body: CreateAiWorkspaceBody, user: CurrentUser = 
     if not project:
         raise HTTPException(400, "OpenStack 프로젝트를 찾을 수 없습니다")
     ws_name = _workspace_name(project["name"], body.projectId)
-    # 워크스페이스가 이미 있는지는 클러스터(프로젝트 라벨·이름)로 본다 — 완료된 신청이 있어도 워크스페이스를 지웠으면 다시 신청할 수 있다
-    chk = _ainb(f"/workspace-name-check?name={quote(ws_name, safe='')}&projectId={quote(body.projectId, safe='')}")
+    cluster_q, cluster_name = "", None
+    if body.clusterId:
+        # 서비스 클러스터 — 사용자는 이 프로젝트에 연결된 클러스터만(관리자는 어느 클러스터든).
+        # 연결에 네임스페이스가 정해져 있으면(공유 클러스터) 그 네임스페이스를 워크스페이스로 쓴다.
+        row = db.execute(text("""SELECT namespace FROM paas_project_cluster
+                                  WHERE project_id = :p AND cluster_id = :c
+                                  ORDER BY namespace NULLS FIRST LIMIT 1"""),
+                         {"p": body.projectId, "c": body.clusterId}).first()
+        db.rollback()
+        if row is None and not user.is_admin:
+            raise HTTPException(400, "이 프로젝트에 연결된 서비스 클러스터가 아닙니다")
+        if row is not None and row[0]:
+            ws_name = row[0]
+        try:
+            cluster_name = _paas("/clusters/" + quote(body.clusterId, safe=""), user.token).get("name")
+        except HTTPException:
+            cluster_name = None   # 이름은 표시용 — 접근 가능 여부는 아래 AINB 확인(신청자 토큰)이 판정한다
+        cluster_q = f"&clusterId={quote(body.clusterId, safe='')}"
+    # 워크스페이스가 이미 있는지는 클러스터(프로젝트 라벨·이름)로 본다 — 완료된 신청이 있어도 워크스페이스를 지웠으면 다시 신청할 수 있다.
+    # 신청자 토큰을 넘겨, AINB 가 그 클러스터 접속 정보가 없으면 받아 두게 한다(승인 뒤 생성은 사용자 없이 돈다).
+    chk = _ainb(f"/workspace-name-check?name={quote(ws_name, safe='')}&projectId={quote(body.projectId, safe='')}"
+                + cluster_q, user.token)
     if not chk["available"]:
         raise HTTPException(409, f"AI 워크스페이스를 신청할 수 없습니다 — {chk['reason']}")
 
@@ -471,6 +505,8 @@ def create_ai_workspace_ticket(body: CreateAiWorkspaceBody, user: CurrentUser = 
         "acceleratorCount": body.acceleratorCount,
         "storageGi": body.storageGi,
     }
+    if body.clusterId:
+        spec.update(clusterId=body.clusterId, clusterName=cluster_name or body.clusterId)
     db.execute(
         text("""INSERT INTO tkt_request (id, type, project_id, requested_by, request_spec)
                 VALUES (:id, 'ai-workspace', :p, :u, CAST(:s AS jsonb))"""),
@@ -805,6 +841,7 @@ def provision_ai_workspace_ticket(ticket_id: str, body: ProvisionAiWorkspaceBody
     inp = {
         "ticketId": ticket_id, "attempt": attempt, "projectId": t["project_id"],
         "projectName": rs.get("projectName"), "workspaceName": rs["workspaceName"],
+        "clusterId": rs.get("clusterId"),   # 신청 때 고른 서비스 클러스터(PaaS 모드) — 없으면 AINB 기본 클러스터
         "ownerEmail": t["email"] or f"{t['username']}@openkcloud.local", **spec,
     }
     try:
@@ -1068,7 +1105,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     if not net:
         raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
     if net["kind"] == "external":
-        raise HTTPException(400, "외부망에는 클러스터를 만들 수 없습니다 — 클러스터 API 주소(로드밸런서)에 밖에서 닿지 못합니다")
+        raise HTTPException(400, "외부망에는 클러스터를 만들 수 없습니다 — 노드를 외부망에 직접 연결하면 클러스터 외부에서 API 주소(OVN 로드밸런서)에 접근할 수 없습니다")
     subnet = next((s for s in _iaas(f"/networks/{quote(net['id'], safe='')}", token)["subnets"] if s["id"] == ps.subnetId),
                   None)
     if not subnet:

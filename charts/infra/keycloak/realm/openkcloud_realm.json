@@ -841,7 +841,7 @@
       "enabled": true,
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "YC1lVqa9LxwSx43CXlGTk8Yj4T1wDpO7CadawUU2CehGLEPr8xv5jGkjLJ3w1dBxnIy28mdji627YvC203fov4",
+      "secret": "CHANGE_ME",
       "redirectUris": [
         "/*"
       ],

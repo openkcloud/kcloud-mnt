@@ -685,28 +685,34 @@ export interface ResourceRequest {
   // AI 워크스페이스 (프로젝트당 1개) — 가속기 수는 위 acceleratorCount.
   // 생성 시작 때 관리자가 조정한 한도는 provisionSpec 에 {cpu, memoryGi, acceleratorCount, storageGi} 로 담긴다
   workspaceName?: string;  // = Kubeflow Profile·네임스페이스 이름 (서버가 프로젝트 이름으로 정함)
+  clusterId?: string;      // 워크스페이스를 만들 서비스 클러스터(MNT-PAAS ID, AI 노트북 PaaS 모드) — 이름은 위 clusterName
   purpose?: string;
   cpu?: number;
   memoryGi?: number;
   storageGi?: number;
-  // 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려)
+  // 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려). *OrgName = 처리자 조직
   approvedBy?: string;
   approvedByName?: string;
+  approvedByOrgName?: string | null;
   approvedAt?: string;
   provisioningBy?: string;
   provisioningByName?: string;
+  provisioningByOrgName?: string | null;
   provisioningAt?: string;
   approvedRejectBy?: string;
   approvedRejectByName?: string;
+  approvedRejectByOrgName?: string | null;
   approvedRejectAt?: string;
   approvedRejectReason?: string;
   provisioningRejectBy?: string;
   provisioningRejectByName?: string;
+  provisioningRejectByOrgName?: string | null;
   provisioningRejectAt?: string;
   provisioningRejectReason?: string;
   // 마감(완료 · 실패) — 처리자 = 그 회차 프로비저닝을 시작한 관리자, 시각 = 워크플로가 끝낸 때(재시도 시작 때 비움)
   finishedBy?: string;
   finishedByName?: string;
+  finishedByOrgName?: string | null;
   finishedAt?: string;
   resultId?: string;
 }

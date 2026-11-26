@@ -78,17 +78,163 @@ def _pin_selector() -> dict:
     """DEV_PIN_NODE 설정 시에만 nodeSelector 반환 (정상 클러스터에선 빈 dict)."""
     return ({"kubernetes.io/hostname": DEV_PIN_NODE} if DEV_PIN_NODE else {})
 
-# 클러스터 안(Pod)에서 돌면 ServiceAccount 토큰으로, 밖(개발 PC)이면 kubeconfig로 접속.
-# 포털(관리 클러스터) 파드가 노트북용 서비스 클러스터를 조작할 때는 KUBECONFIG 를 주면
-# 파드 안이어도 그 kubeconfig 로 붙는다(노트북·MinIO 접근도 port-forward 경유).
-IN_CLUSTER = (bool(_os.environ.get("KUBERNETES_SERVICE_HOST"))
-              and not _os.environ.get("KUBECONFIG"))
-if IN_CLUSTER:
-    config.load_incluster_config()
-else:
-    config.load_kube_config()
-crd = client.CustomObjectsApi()
-core = client.CoreV1Api()
+# ══════════════════════════════════════════════════════════════════
+# 서비스 클러스터 연결 — 클러스터마다 kubeconfig 하나
+#   단일 모드(CLUSTER_SOURCE 비움, 기존 방식): 파드 안이면 ServiceAccount, 밖(개발 PC)이면 kubeconfig 로
+#     클러스터 하나에 붙는다. 포털 파드가 다른(서비스) 클러스터를 조작할 때는 KUBECONFIG 를 준다.
+#   PaaS 모드(CLUSTER_SOURCE=paas): MNT-PAAS 가 클러스터마다 발급하는 kubeconfig(GET /clusters/{id}/kubeconfig)를
+#     사용자가 AI 노트북에 로그인하거나 AI 워크스페이스를 신청할 때 그 사용자의 토큰으로 받아 보관하고 쓴다.
+#     보관은 관리 클러스터의 Secret(CLUSTER_STORE_SECRET) — 재시작 뒤에도, 사용자 없이 도는 작업
+#     (워크스페이스 생성·IDE 연결 유지)에도 쓰인다. 파드 밖(개발 PC)에서는 CLUSTER_STORE_DIR 의 파일에 둔다.
+#   요청마다 '지금 어느 클러스터 일인지'를 _cluster_var 에 두고, crd·core 등은 호출하는 순간 그 클러스터로 간다.
+#   클러스터는 ?clusterId= 로 고르거나, 워크스페이스(네임스페이스)가 있는 클러스터로 정해진다.
+# ══════════════════════════════════════════════════════════════════
+import base64
+import contextvars
+from contextlib import contextmanager
+
+CLUSTER_SOURCE =_os.environ.get("CLUSTER_SOURCE", "").strip().lower()   # "" | "paas"
+MULTI = CLUSTER_SOURCE == "paas"
+PAAS_API_BASE = _os.environ.get("PAAS_API_BASE", "").rstrip("/")
+PAAS_API_PREFIX = _os.environ.get("PAAS_API_PREFIX", "/api/paas").rstrip("/")
+CLUSTER_STORE_SECRET = _os.environ.get("CLUSTER_STORE_SECRET", "mnt-ainb-clusters")
+CLUSTER_STORE_DIR = _os.environ.get("CLUSTER_STORE_DIR", _os.path.expanduser("~/.mnt-ainb-clusters"))
+CLUSTER_REFRESH_DAYS = int(_os.environ.get("CLUSTER_REFRESH_DAYS", "7"))   # 이보다 오래된 접속 정보는 로그인 때 새로 받는다
+DEFAULT_CLUSTER_ID = _os.environ.get("DEFAULT_CLUSTER_ID", "")
+_IN_POD = bool(_os.environ.get("KUBERNETES_SERVICE_HOST"))
+# 단일 모드에서 파드 안의 ServiceAccount 로 붙는 경우(노트북이 같은 클러스터에서 돈다)
+IN_CLUSTER = _IN_POD and not _os.environ.get("KUBECONFIG") and not MULTI
+_STORE_ANN = "openkcloud.io/clusters"
+_CID_RE = __import__("re").compile(r"^[-._a-zA-Z0-9]{1,200}$")   # Secret 키로 쓸 수 있는 클러스터 ID
+_kc_tmp: Optional[str] = None
+
+
+def _kc_dir() -> str:
+    """kubectl 에 넘길 kubeconfig 파일을 두는 곳(이 프로세스 전용, 0700)."""
+    global _kc_tmp
+    if _kc_tmp is None:
+        import tempfile
+        _kc_tmp = tempfile.mkdtemp(prefix="mnt-ainb-kc-")
+    return _kc_tmp
+
+
+class _Cluster:
+    """서비스 클러스터 하나 — 쿠버네티스 클라이언트와 kubectl 용 kubeconfig 파일."""
+
+    def __init__(self, cid: str, name: str = "", kubeconfig: Optional[str] = None, fetched_at: str = ""):
+        self.id, self.name, self.fetched_at = cid, name or cid, fetched_at
+        self.cfg = client.Configuration()
+        self.kubeconfig_path: Optional[str] = None
+        if kubeconfig is not None:          # PaaS 모드 — MNT-PAAS 가 발급한 kubeconfig
+            self.kubeconfig_path = _os.path.join(_kc_dir(), f"{zlib.crc32(cid.encode()):08x}.yaml")
+            fd = _os.open(self.kubeconfig_path, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
+            with _os.fdopen(fd, "w") as f:
+                f.write(kubeconfig)
+            config.load_kube_config(config_file=self.kubeconfig_path, client_configuration=self.cfg)
+            self.in_cluster = False
+        elif IN_CLUSTER:
+            config.load_incluster_config(client_configuration=self.cfg)
+            self.in_cluster = True
+        else:
+            config.load_kube_config(client_configuration=self.cfg)
+            self.kubeconfig_path = _os.environ.get("KUBECONFIG") or None
+            self.in_cluster = False
+        # ClusterIP·파드 IP 로 바로 닿는지 — 같은 클러스터 안(파드)이거나 클러스터 노드에서 도는 개발 PC.
+        # 다른 클러스터를 kubeconfig 로 조작할 때는 닿지 않으므로 port-forward 로 간다
+        direct = self.in_cluster or (kubeconfig is None and not _IN_POD)
+        self.direct_net = _os.environ.get("CLUSTER_DIRECT_NET", "1" if direct else "0") == "1"
+        self.api = client.ApiClient(self.cfg)
+        self.crd = client.CustomObjectsApi(self.api)
+        self.core = client.CoreV1Api(self.api)
+
+    def env(self) -> dict:
+        """kubectl 이 이 클러스터로 가도록 하는 환경변수."""
+        e = dict(_os.environ)
+        if self.kubeconfig_path:
+            e["KUBECONFIG"] = self.kubeconfig_path
+        return e
+
+
+_clusters: dict[str, _Cluster] = {}
+_clusters_lock = threading.Lock()
+_cluster_var: contextvars.ContextVar[str] = contextvars.ContextVar("ainb_cluster", default="")
+
+
+def _default_cid() -> str:
+    if DEFAULT_CLUSTER_ID in _clusters:
+        return DEFAULT_CLUSTER_ID
+    return next(iter(_clusters), "")
+
+
+def _cid() -> str:
+    """지금 요청(작업)의 클러스터 ID."""
+    return _cluster_var.get() or _default_cid()
+
+
+def _cur() -> _Cluster:
+    c = _clusters.get(_cid())
+    if c is None:
+        raise HTTPException(503, "서비스 클러스터의 접속 정보가 아직 없습니다 — 포털에 다시 로그인하면 받아 옵니다"
+                            if MULTI else "쿠버네티스 연결 설정이 없습니다")
+    return c
+
+
+def _set_cluster(cid: str) -> None:
+    """이 요청(작업)의 이후 호출을 그 클러스터로 보낸다 — 요청마다 컨텍스트가 따로라 다른 요청에는 번지지 않는다."""
+    _cluster_var.set(cid or "")
+
+
+@contextmanager
+def _use_cluster(cid: Optional[str]):
+    tok = _cluster_var.set(cid or "")
+    try:
+        yield
+    finally:
+        _cluster_var.reset(tok)
+
+
+def _listing_cids() -> list[str]:
+    """목록을 합칠 클러스터 — ?clusterId= 로 하나를 골랐으면 그 클러스터만, 아니면 전부."""
+    chosen = _cluster_var.get()
+    return [chosen] if chosen else list(_clusters)
+
+
+def _search_cids() -> list[str]:
+    """이름으로 찾을 때 볼 클러스터 순서 — 지금 클러스터부터."""
+    cur = _cid()
+    return ([cur] if cur in _clusters else []) + [c for c in list(_clusters) if c != cur]
+
+
+def _tag(item: dict) -> dict:
+    """목록 항목에 어느 클러스터 것인지 붙인다(PaaS 모드만)."""
+    if MULTI:
+        c = _clusters.get(_cid())
+        item["clusterId"] = _cid()
+        item["clusterName"] = c.name if c else _cid()
+    return item
+
+
+class _OnCluster:
+    """crd·core 자리 — 호출하는 순간 '지금 클러스터'의 클라이언트로 보낸다."""
+
+    def __init__(self, attr: str):
+        self._attr = attr
+
+    def __getattr__(self, name):
+        return getattr(getattr(_cur(), self._attr), name)
+
+
+crd = _OnCluster("crd")
+core = _OnCluster("core")
+
+
+def _apps() -> client.AppsV1Api:
+    return client.AppsV1Api(_cur().api)
+
+
+def _kenv() -> dict:
+    """kubectl 을 부를 때 넘길 env — 지금 클러스터로 가게 한다."""
+    return _cur().env()
 
 
 def _exec_api() -> client.CoreV1Api:
@@ -96,7 +242,269 @@ def _exec_api() -> client.CoreV1Api:
     # 바꿔치기한다. 공유 core 클라이언트로 exec하면 같은 순간 들어온 일반
     # API 호출이 websocket 경로로 새어 들어가 간헐 500이 난다(레이스).
     # exec 계열은 매번 전용 클라이언트를 쓴다.
-    return client.CoreV1Api(client.ApiClient())
+    return client.CoreV1Api(client.ApiClient(_cur().cfg))
+
+
+# ── 접속 정보 보관 — 관리 클러스터 Secret(파드) 또는 파일(개발 PC) ─────────
+def _mgmt_core() -> client.CoreV1Api:
+    cfg = client.Configuration()
+    config.load_incluster_config(client_configuration=cfg)
+    return client.CoreV1Api(client.ApiClient(cfg))
+
+
+def _mgmt_ns() -> str:
+    try:
+        with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
+            return f.read().strip()
+    except OSError:
+        return "default"
+
+
+def _store_read() -> dict:
+    """보관된 접속 정보 — {클러스터 ID: {"name", "fetchedAt", "kubeconfig"}}."""
+    out: dict = {}
+    if _IN_POD:
+        try:
+            s = _mgmt_core().read_namespaced_secret(CLUSTER_STORE_SECRET, _mgmt_ns())
+        except client.exceptions.ApiException as e:
+            if e.status == 404:
+                return out
+            raise
+        meta = json.loads((s.metadata.annotations or {}).get(_STORE_ANN, "{}"))
+        for key, b64 in (s.data or {}).items():
+            if key.endswith(".yaml"):
+                cid = key[:-5]
+                out[cid] = {**meta.get(cid, {}), "kubeconfig": base64.b64decode(b64).decode()}
+        return out
+    if _os.path.isdir(CLUSTER_STORE_DIR):
+        for fn in _os.listdir(CLUSTER_STORE_DIR):
+            if fn.endswith(".json"):
+                with open(_os.path.join(CLUSTER_STORE_DIR, fn), encoding="utf-8") as f:
+                    out[fn[:-5]] = json.load(f)
+    return out
+
+
+def _store_write(cid: str, entry: Optional[dict]) -> None:
+    """한 클러스터의 접속 정보를 저장(entry)하거나 지운다(None). 동시에 저장하다 충돌하면 다시 읽어 재시도한다."""
+    if not _CID_RE.match(cid):
+        raise ValueError(f"보관할 수 없는 클러스터 ID: {cid!r}")
+    if _IN_POD:
+        api, ns = _mgmt_core(), _mgmt_ns()
+        for _ in range(5):
+            try:
+                s, exists = api.read_namespaced_secret(CLUSTER_STORE_SECRET, ns), True
+            except client.exceptions.ApiException as e:
+                if e.status != 404:
+                    raise
+                s, exists = client.V1Secret(metadata=client.V1ObjectMeta(name=CLUSTER_STORE_SECRET),
+                                            type="Opaque"), False
+            ann = dict(s.metadata.annotations or {})
+            meta, data = json.loads(ann.get(_STORE_ANN, "{}")), dict(s.data or {})
+            if entry is None:
+                meta.pop(cid, None)
+                data.pop(f"{cid}.yaml", None)
+            else:
+                meta[cid] = {"name": entry["name"], "fetchedAt": entry["fetchedAt"]}
+                data[f"{cid}.yaml"] = base64.b64encode(entry["kubeconfig"].encode()).decode()
+            ann[_STORE_ANN] = json.dumps(meta, ensure_ascii=False)
+            s.metadata.annotations, s.data = ann, data
+            try:
+                if exists:
+                    api.replace_namespaced_secret(CLUSTER_STORE_SECRET, ns, s)
+                else:
+                    api.create_namespaced_secret(ns, s)
+                return
+            except client.exceptions.ApiException as e:
+                if e.status != 409:      # 409 = 그사이 다른 저장이 있었다 → 다시 읽어 합친다
+                    raise
+        raise RuntimeError("접속 정보 저장이 계속 충돌합니다")
+    path = _os.path.join(CLUSTER_STORE_DIR, f"{cid}.json")
+    if entry is None:
+        try:
+            _os.remove(path)
+        except FileNotFoundError:
+            pass
+        return
+    _os.makedirs(CLUSTER_STORE_DIR, mode=0o700, exist_ok=True)
+    fd = _os.open(path, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
+    with _os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(entry, f, ensure_ascii=False)
+
+
+def _add_cluster(cid: str, name: str, kubeconfig: str, fetched_at: str, persist: bool = True) -> _Cluster:
+    c = _Cluster(cid, name, kubeconfig, fetched_at)   # kubeconfig 가 잘못됐으면 여기서 실패 — 보관하지 않는다
+    with _clusters_lock:
+        _clusters[cid] = c
+    if persist:
+        try:
+            _store_write(cid, {"name": name, "fetchedAt": fetched_at, "kubeconfig": kubeconfig})
+        except Exception as e:  # noqa: BLE001 — 보관에 실패해도 이번 실행에는 쓴다(재시작하면 다시 받아야 한다)
+            print(f"[mnt-ainb] 서비스 클러스터 {cid} 접속 정보 보관 실패: {e}")
+    return c
+
+
+def _store_load() -> None:
+    for cid, e in _store_read().items():
+        try:
+            _add_cluster(cid, e.get("name") or cid, e["kubeconfig"], e.get("fetchedAt", ""), persist=False)
+        except Exception as ex:  # noqa: BLE001
+            print(f"[mnt-ainb] 보관된 서비스 클러스터 {cid} 접속 정보를 읽지 못했습니다: {ex}")
+
+
+# ── MNT-PAAS 에서 접속 정보 받기 — 요청자의 토큰으로 ─────────────────
+def _paas(path: str, authz: str):
+    """MNT-PAAS GET — 요청자 토큰(Authorization)을 그대로 넘긴다. 권한·존재 판정은 MNT-PAAS 가 한다."""
+    if not PAAS_API_BASE:
+        raise HTTPException(503, "MNT-PAAS 주소(PAAS_API_BASE)가 설정되지 않았습니다")
+    try:
+        r = httpx.get(f"{PAAS_API_BASE}{PAAS_API_PREFIX}{path}", headers={"Authorization": authz}, timeout=30)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"MNT-PAAS 연결 실패: {type(e).__name__}")
+    if r.status_code < 400:
+        return r
+    try:
+        detail = r.json().get("detail") or r.text[:200]
+    except ValueError:
+        detail = r.text[:200]
+    if r.status_code == 401:
+        raise HTTPException(401, "로그인이 필요합니다")
+    if r.status_code == 403:
+        raise HTTPException(403, "이 서비스 클러스터에 접근할 권한이 없습니다")
+    if r.status_code == 404:
+        raise HTTPException(404, "서비스 클러스터를 찾을 수 없습니다")
+    if r.status_code == 409:
+        raise HTTPException(409, f"서비스 클러스터가 아직 준비되지 않았습니다: {detail}")
+    raise HTTPException(502, f"MNT-PAAS 응답 오류(HTTP {r.status_code}): {detail}")
+
+
+def _fetch_cluster(cid: str, authz: str, name: str = "") -> _Cluster:
+    from urllib.parse import quote as _q
+    kubeconfig = _paas(f"/clusters/{_q(cid, safe='')}/kubeconfig", authz).text
+    if not name:
+        try:
+            name = _paas(f"/clusters/{_q(cid, safe='')}", authz).json().get("name") or cid
+        except HTTPException:
+            name = cid
+    return _add_cluster(cid, name, kubeconfig, datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+
+def _ensure_cluster(cid: str, authz: Optional[str] = None) -> _Cluster:
+    """그 클러스터의 접속 정보 — 없으면 요청자의 토큰(authz)으로 MNT-PAAS 에서 받아 온다."""
+    c = _clusters.get(cid)
+    if c is not None:
+        return c
+    if not MULTI:
+        raise HTTPException(404, f"서비스 클러스터 {cid}를 찾을 수 없습니다")
+    if not authz:
+        raise HTTPException(503, "이 서비스 클러스터의 접속 정보가 아직 없습니다 — 포털에 다시 로그인하면 받아 옵니다")
+    return _fetch_cluster(cid, authz)
+
+
+def _usable(status: str) -> bool:
+    """API 주소가 있어 접속 정보를 받을 수 있는 클러스터 상태(Magnum)."""
+    return (status.endswith("_COMPLETE") and not status.startswith("DELETE")) or status.startswith("UPDATE_")
+
+
+def _stale(c: _Cluster) -> bool:
+    try:
+        return (datetime.now() - datetime.strptime(c.fetched_at, "%Y-%m-%d %H:%M")).days >= CLUSTER_REFRESH_DAYS
+    except ValueError:
+        return True
+
+
+def _sync_clusters(authz: str, prune: bool = False, force: bool = False) -> list[dict]:
+    """이 사용자가 쓸 수 있는 서비스 클러스터의 접속 정보를 받아 둔다 — 없거나 오래된 것만(force 면 전부).
+    prune(관리자 토큰 — 전체 목록이 보임)이면 MNT-PAAS 에 더는 없는 클러스터의 보관분을 지운다."""
+    items = _paas("/clusters", authz).json().get("items", [])
+    out = []
+    for it in items:
+        cid = it.get("id")
+        if not cid:
+            continue
+        name, st = it.get("name") or cid, it.get("status") or ""
+        known = _clusters.get(cid)
+        row = {"id": cid, "name": name, "status": st, "connected": known is not None, "error": None}
+        if _usable(st) and (force or known is None or _stale(known)):
+            try:
+                _fetch_cluster(cid, authz, name)
+                row["connected"] = True
+            except HTTPException as e:
+                row["error"] = e.detail
+            except Exception as e:  # noqa: BLE001
+                row["error"] = f"{type(e).__name__}: {e}"
+        out.append(row)
+    if prune:
+        alive = {it.get("id") for it in items}
+        for cid in [c for c in list(_clusters) if c not in alive]:
+            with _clusters_lock:
+                _clusters.pop(cid, None)
+            try:
+                _store_write(cid, None)
+            except Exception:  # noqa: BLE001
+                pass
+    _refresh_ws_index(force=True)
+    return out
+
+
+def _sync_quiet(authz: str, prune: bool) -> None:
+    try:
+        _sync_clusters(authz, prune=prune)
+    except Exception as e:  # noqa: BLE001 — 로그인 뒤 백그라운드 — 실패해도 다음 로그인에 다시 시도
+        print(f"[mnt-ainb] 서비스 클러스터 접속 정보 받기 실패: {getattr(e, 'detail', e)}")
+
+
+# ── 워크스페이스(네임스페이스) → 클러스터 ────────────────────────────
+_ws_index: dict[str, str] = {}
+_ws_index_at = 0.0
+_ws_index_lock = threading.Lock()
+
+
+def _refresh_ws_index(force: bool = False) -> None:
+    """워크스페이스가 어느 클러스터에 있는지 — 클러스터마다 Profile 목록으로 만든다(30초 보관)."""
+    global _ws_index_at
+    if not MULTI or (not force and time.time() - _ws_index_at < 30):
+        return
+    with _ws_index_lock:
+        idx: dict[str, str] = {}
+        for cid, c in list(_clusters.items()):
+            try:
+                for p in c.crd.list_cluster_custom_object(GROUP, VERSION, P_PLURAL, _request_timeout=10)["items"]:
+                    idx.setdefault(p["metadata"]["name"], cid)
+            except Exception:  # noqa: BLE001 — 닿지 않는 클러스터는 건너뛴다
+                pass
+        _ws_index.clear()
+        _ws_index.update(idx)
+        _ws_index_at = time.time()
+
+
+def _ws_index_loop() -> None:
+    while True:
+        time.sleep(30)
+        try:
+            _refresh_ws_index()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _route_ns(ns: Optional[str]) -> None:
+    """이 요청의 이후 호출을 워크스페이스(ns)가 있는 클러스터로 — ?clusterId= 등으로 이미 정해졌으면 그대로."""
+    if not MULTI or not ns or _cluster_var.get():
+        return
+    cid = _ws_index.get(ns)
+    if cid is None:
+        _refresh_ws_index(force=True)
+        cid = _ws_index.get(ns)
+    if cid:
+        _set_cluster(cid)
+
+
+if MULTI:
+    try:
+        _store_load()
+    except Exception as _e:  # noqa: BLE001
+        print(f"[mnt-ainb] 보관된 서비스 클러스터 접속 정보를 읽지 못했습니다: {_e}")
+else:
+    _clusters["default"] = _Cluster("default")
 
 app = FastAPI(title="openKcloud CMP Backend", version="0.1.0")
 
@@ -175,12 +583,48 @@ class _ApiPrefix:
 
 app.add_middleware(_ApiPrefix, prefix=API_PREFIX)
 
+
+class _ClusterRoute:
+    """요청의 클러스터를 정한다(PaaS 모드) — ?clusterId=, 아니면 ?namespace=·IDE 경로(/notebook/{ns}/)의 워크스페이스가 있는 클러스터.
+    여기서는 보관된 색인만 본다 — 못 찾으면 엔드포인트가 _route_ns·_get_nb 로 다시 찾는다."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if not MULTI or scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        from urllib.parse import parse_qs
+        qs = parse_qs((scope.get("query_string") or b"").decode(errors="replace"))
+        cid = (qs.get("clusterId") or [""])[0]
+        if not cid:
+            ns = (qs.get("namespace") or [""])[0]
+            path = scope.get("path", "")
+            if not ns and path.startswith("/notebook/"):
+                parts = path.split("/")
+                ns = parts[2] if len(parts) > 2 else ""
+            cid = _ws_index.get(ns, "") if ns else ""
+        tok = _cluster_var.set(cid)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _cluster_var.reset(tok)
+
+
+app.add_middleware(_ClusterRoute)
+
+
+@app.on_event("startup")
+def _start_ws_index() -> None:
+    if MULTI:
+        threading.Thread(target=_ws_index_loop, daemon=True, name="ws-index").start()
+
 # ══════════════════════════════════════════════════════════════════
 # Auth — CMP 세션 (HMAC 서명 토큰, HttpOnly 쿠키)
 #   포털 로그인 시 발급 → IDE 프록시(/notebook/*)가 검증
 #   (운영 전환 시 IAM/oauth2-proxy로 대체되는 자리)
 # ══════════════════════════════════════════════════════════════════
-import base64
 import hashlib
 import hmac as _hmac
 import json as _json_auth
@@ -247,8 +691,13 @@ class LoginBody(BaseModel):
 _forwards: dict[str, subprocess.Popen] = {}
 
 
+def _fw_key(ns: str, name: str) -> str:
+    """port-forward 구분 키 — PaaS 모드는 클러스터마다 같은 이름이 있을 수 있어 클러스터 ID 를 붙인다."""
+    return f"{_cid()}/{ns}/{name}" if MULTI else f"{ns}/{name}"
+
+
 def _port_for(ns: str, name: str) -> int:
-    return 20000 + zlib.crc32(f"{ns}/{name}".encode()) % 10000
+    return 20000 + zlib.crc32(_fw_key(ns, name).encode()) % 10000
 
 
 def _port_open(port: int) -> bool:
@@ -279,7 +728,7 @@ def _ensure_forward(ns: str, name: str) -> int:
     Pod이 아직 Ready 전이면 스폰이 곧바로 죽을 수 있어 재시도한다."""
     import time
     port = _port_for(ns, name)
-    key = f"{ns}/{name}"
+    key = _fw_key(ns, name)
     for _ in range(3):
         proc = _forwards.get(key)
         if proc and proc.poll() is None and _port_open(port):
@@ -300,7 +749,7 @@ def _ensure_forward(ns: str, name: str) -> int:
         _forwards[key] = subprocess.Popen(
             ["kubectl", "-n", ns, "port-forward", "--address", "0.0.0.0",
              f"svc/{name}", f"{port}:80"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_kenv(),
         )
         time.sleep(1.5)
     if not _port_open(port):
@@ -309,8 +758,8 @@ def _ensure_forward(ns: str, name: str) -> int:
 
 
 def _stop_forward(ns: str, name: str) -> None:
-    _fw_verified.pop(f"{ns}/{name}", None)
-    proc = _forwards.pop(f"{ns}/{name}", None)
+    _fw_verified.pop(_fw_key(ns, name), None)
+    proc = _forwards.pop(_fw_key(ns, name), None)
     if proc and proc.poll() is None:
         proc.terminate()
 
@@ -426,23 +875,43 @@ class CreateNotebook(BaseModel):
 @app.get("/api/v1/notebooks")
 def list_notebooks(namespace: Optional[str] = None):
     if namespace:
+        _route_ns(namespace)
         items = crd.list_namespaced_custom_object(GROUP, VERSION, namespace, PLURAL)["items"]
-    else:
-        items = crd.list_cluster_custom_object(GROUP, VERSION, PLURAL)["items"]
-    return {"items": [_to_kf_notebook(nb) for nb in items]}
+        return {"items": [_tag(_to_kf_notebook(nb)) for nb in items]}
+    out = []
+    for cid in _listing_cids():          # PaaS 모드는 클러스터마다 모아 합친다
+        with _use_cluster(cid):
+            try:
+                items = crd.list_cluster_custom_object(GROUP, VERSION, PLURAL)["items"]
+            except Exception:
+                if not MULTI:
+                    raise
+                continue                 # 닿지 않는 클러스터는 건너뛴다
+            out += [_tag(_to_kf_notebook(nb)) for nb in items]
+    return {"items": out}
 
 
 def _get_nb(name: str, namespace: str) -> dict:
     """지정 네임스페이스에서 찾고, 없으면 이름으로 전체 네임스페이스 탐색.
-    (프론트가 namespace를 넘기지 않는 경로 대응 — id=name 전역 유일 가정)"""
-    try:
-        return crd.get_namespaced_custom_object(GROUP, VERSION, namespace, PLURAL, name)
-    except client.exceptions.ApiException as e:
-        if e.status != 404:
-            raise
-    for nb in crd.list_cluster_custom_object(GROUP, VERSION, PLURAL)["items"]:
-        if nb["metadata"]["name"] == name:
-            return nb
+    (프론트가 namespace를 넘기지 않는 경로 대응 — id=name 전역 유일 가정)
+    PaaS 모드는 알려진 클러스터를 차례로 보고, 찾은 클러스터를 이 요청의 이후 호출 대상으로 정한다."""
+    _route_ns(namespace)
+    for cid in _search_cids():
+        _set_cluster(cid)
+        try:
+            return crd.get_namespaced_custom_object(GROUP, VERSION, namespace, PLURAL, name)
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                if not MULTI:
+                    raise
+                continue
+        try:
+            for nb in crd.list_cluster_custom_object(GROUP, VERSION, PLURAL)["items"]:
+                if nb["metadata"]["name"] == name:
+                    return nb
+        except client.exceptions.ApiException:
+            if not MULTI:
+                raise
     raise HTTPException(404, f"notebook {name} not found in any namespace")
 
 
@@ -453,6 +922,7 @@ def get_notebook(name: str, namespace: str = DEFAULT_NS):
 
 @app.post("/api/v1/notebooks", status_code=201)
 def create_notebook(body: CreateNotebook):
+    _route_ns(body.namespace)            # 워크스페이스가 있는 클러스터에 만든다
     resources: dict = {
         "requests": {"cpu": body.cpu, "memory": f"{body.memoryGi}Gi"},
         "limits": {},
@@ -727,7 +1197,7 @@ def _ns_deployment_count(ns: str) -> int:
     except Exception:
         pass
     try:
-        apps = client.AppsV1Api()
+        apps = _apps()
         for d in apps.list_namespaced_deployment(ns).items:
             # KServe가 만든 predictor Deployment는 위에서 이미 셌다
             if (d.metadata.labels or {}).get("component") == "predictor":
@@ -806,27 +1276,64 @@ class CreateProfile(BaseModel):
     storageGi: int = 50
     projectId: Optional[str] = None     # 포털 프로젝트 UUID (자원신청 프로비저닝이 채운다)
     projectName: Optional[str] = None
+    clusterId: Optional[str] = None     # PaaS 모드 — 만들 서비스 클러스터(비우면 지금 클러스터)
 
 
 @app.get("/api/v1/profiles")
 def list_profiles():
-    items = crd.list_cluster_custom_object(GROUP, VERSION, P_PLURAL)["items"]
-    return {"items": [_to_profile(p) for p in items]}
+    out = []
+    for cid in _listing_cids():          # PaaS 모드는 클러스터마다 모아 합친다
+        with _use_cluster(cid):
+            try:
+                items = crd.list_cluster_custom_object(GROUP, VERSION, P_PLURAL)["items"]
+            except Exception:
+                if not MULTI:
+                    raise
+                continue
+            out += [_tag(_to_profile(p)) for p in items]
+    return {"items": out}
+
+
+def _find_profile(name: str) -> Optional[dict]:
+    """Profile 을 찾는다 — PaaS 모드는 클러스터를 차례로 보고, 찾은 클러스터를 이 요청의 이후 호출 대상으로 정한다."""
+    _route_ns(name)
+    for cid in _search_cids():
+        _set_cluster(cid)
+        try:
+            return crd.get_cluster_custom_object(GROUP, VERSION, P_PLURAL, name)
+        except client.exceptions.ApiException as e:
+            if e.status != 404 and not MULTI:
+                raise
+    return None
 
 
 @app.get("/api/v1/profiles/{name}")
 def get_profile(name: str):
+    p = _find_profile(name)
+    if p is None:
+        raise HTTPException(404, f"profile {name} not found")
+    return _tag(_to_profile(p))
+
+
+def _adopt_namespace(name: str, project_id: Optional[str], owner: str) -> None:
+    """같은 이름의 네임스페이스가 이미 있으면(클러스터 신청이 미리 만든 프로젝트 네임스페이스) 워크스페이스로 넘겨받는다.
+    같은 프로젝트 라벨일 때만 — Kubeflow Profile 컨트롤러는 네임스페이스의 owner 주석이 Profile 소유자와 같아야 넘겨받는다."""
     try:
-        p = crd.get_cluster_custom_object(GROUP, VERSION, P_PLURAL, name)
+        ns = core.read_namespace(name)
     except client.exceptions.ApiException as e:
         if e.status == 404:
-            raise HTTPException(404, f"profile {name} not found")
+            return
         raise
-    return _to_profile(p)
+    if not project_id or (ns.metadata.labels or {}).get(PROJECT_LABEL) != project_id:
+        raise HTTPException(409, f"'{name}' 네임스페이스가 이미 있습니다(다른 용도)")
+    core.patch_namespace(name, {"metadata": {"annotations": {"owner": owner}}})
 
 
 @app.post("/api/v1/profiles", status_code=201)
 def create_profile(body: CreateProfile):
+    if MULTI and body.clusterId:
+        _ensure_cluster(body.clusterId)
+        _set_cluster(body.clusterId)
     hard = {
         "cpu": str(body.cpu),
         "memory": f"{body.memoryGi}Gi",
@@ -847,8 +1354,10 @@ def create_profile(body: CreateProfile):
             "resourceQuotaSpec": {"hard": hard},
         },
     }
+    _adopt_namespace(body.name, body.projectId, body.ownerEmail)
     crd.create_cluster_custom_object(GROUP, VERSION, P_PLURAL, profile)
-    return {"name": body.name, "status": "Provisioning"}
+    _ws_index[body.name] = _cid()
+    return _tag({"name": body.name, "status": "Provisioning"})
 
 
 class UpdateProfile(BaseModel):
@@ -864,10 +1373,11 @@ class UpdateProfile(BaseModel):
 def update_profile(name: str, body: UpdateProfile):
     """쿼터·소유자 변경 — 컨트롤러가 ResourceQuota를 즉시 반영한다."""
     try:
-        cur = crd.get_cluster_custom_object(GROUP, VERSION, P_PLURAL, name)
+        cur = _find_profile(name)
     except client.exceptions.ApiException as e:
-        raise HTTPException(404 if e.status == 404 else 500,
-                            f"profile {name} not found")
+        raise HTTPException(500, f"profile {name} 조회 실패: {e.reason}")
+    if cur is None:
+        raise HTTPException(404, f"profile {name} not found")
 
     hard = dict((cur.get("spec", {}).get("resourceQuotaSpec", {})
                  .get("hard", {})) or {})
@@ -904,7 +1414,10 @@ def update_profile(name: str, body: UpdateProfile):
 
 @app.delete("/api/v1/profiles/{name}")
 def delete_profile(name: str):
-    """⚠ Profile 삭제는 네임스페이스와 그 안의 노트북·PVC까지 함께 삭제한다."""
+    """⚠ Profile 삭제는 네임스페이스와 그 안의 노트북·PVC까지 함께 삭제한다.
+    (클러스터 신청이 미리 만들어 넘겨받은 네임스페이스는 Profile 만 지워지고 네임스페이스는 남는다)"""
+    if _find_profile(name) is None:
+        raise HTTPException(404, f"profile {name} not found")
     try:
         crd.delete_cluster_custom_object(GROUP, VERSION, P_PLURAL, name)
     except client.exceptions.ApiException as e:
@@ -941,19 +1454,78 @@ def _profile_exists(name: str) -> bool:
         raise
 
 
+def _ns_adoptable(name: str, project_id: Optional[str]) -> bool:
+    """Profile 없이 같은 프로젝트 라벨의 네임스페이스만 있으면 True — 클러스터 신청이 미리 만든 프로젝트 네임스페이스."""
+    if not project_id:
+        return False
+    try:
+        crd.get_cluster_custom_object(GROUP, VERSION, P_PLURAL, name)
+        return False
+    except client.exceptions.ApiException as e:
+        if e.status != 404:
+            raise
+    try:
+        ns = core.read_namespace(name)
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            return False
+        raise
+    return (ns.metadata.labels or {}).get(PROJECT_LABEL) == project_id
+
+
+@app.get("/api/v1/clusters")
+def list_known_clusters():
+    """이 모듈이 접속 정보를 가진 서비스 클러스터 — 화면이 모드(single·paas)를 보고 클러스터 선택 칸을 띄운다."""
+    return {"mode": "paas" if MULTI else "single",
+            "items": [{"id": c.id, "name": c.name, "fetchedAt": c.fetched_at} for c in list(_clusters.values())]}
+
+
+@app.post("/api/v1/clusters/sync")
+def sync_clusters(request: Request, force: bool = False):
+    """요청자 토큰으로 쓸 수 있는 서비스 클러스터의 접속 정보를 지금 받아 둔다(PaaS 모드) — 로그인 때도 백그라운드로 한다."""
+    if not MULTI:
+        return list_known_clusters()
+    authz = request.headers.get("authorization", "")
+    if not authz.lower().startswith("bearer "):
+        raise HTTPException(401, "로그인 토큰(Authorization: Bearer)이 필요합니다")
+    return {"mode": "paas", "items": _sync_clusters(authz, force=force)}
+
+
 @app.get("/api/v1/workspace-name-check")
-def workspace_name_check(name: str, projectId: Optional[str] = None):
+def workspace_name_check(name: str, request: Request, projectId: Optional[str] = None,
+                         clusterId: Optional[str] = None):
     """워크스페이스(=Profile·네임스페이스) 이름 사용 가능 여부 — 포털 자원신청 접수 때 확인용.
-    projectId 를 주면 그 프로젝트의 워크스페이스(프로젝트 라벨)가 이미 있는지도 본다(프로젝트당 1개)."""
+    projectId 를 주면 그 프로젝트의 워크스페이스(프로젝트 라벨)가 이미 있는지도 본다(프로젝트당 1개 — PaaS 모드는 모든 클러스터).
+    PaaS 모드는 clusterId(만들 클러스터)를 받는다 — 그 클러스터 접속 정보가 없으면 요청자 토큰(Authorization)으로 받아 온다.
+    같은 프로젝트 라벨의 네임스페이스만 있으면(클러스터 신청이 미리 만든 것) 넘겨받아 쓰므로 사용 가능으로 본다."""
     if not _WS_NAME.match(name):
         return {"available": False, "reason": "영문 소문자·숫자·하이픈(-) 63자 이내여야 합니다."}
+    if MULTI:
+        if not clusterId:
+            if len(_clusters) != 1:
+                return {"available": False, "reason": "AI 워크스페이스를 만들 서비스 클러스터를 선택하세요."}
+            clusterId = next(iter(_clusters))
+        try:
+            _ensure_cluster(clusterId, request.headers.get("authorization"))
+        except HTTPException as e:
+            return {"available": False, "reason": e.detail}
     if projectId:
-        own = crd.list_cluster_custom_object(GROUP, VERSION, P_PLURAL,
-                                             label_selector=f"{PROJECT_LABEL}={projectId}")["items"]
-        if own:
-            return {"available": False,
-                    "reason": f"이 프로젝트의 워크스페이스({own[0]['metadata']['name']})가 이미 있습니다."}
-    if _profile_exists(name):
+        for cid in (list(_clusters) if MULTI else [_cid()]):
+            with _use_cluster(cid):
+                try:
+                    own = crd.list_cluster_custom_object(GROUP, VERSION, P_PLURAL,
+                                                         label_selector=f"{PROJECT_LABEL}={projectId}")["items"]
+                except Exception:
+                    if not MULTI:
+                        raise
+                    continue
+            if own:
+                where = f", 클러스터 {_clusters[cid].name}" if MULTI else ""
+                return {"available": False,
+                        "reason": f"이 프로젝트의 워크스페이스({own[0]['metadata']['name']}{where})가 이미 있습니다."}
+    if MULTI:
+        _set_cluster(clusterId)
+    if _profile_exists(name) and not _ns_adoptable(name, projectId):
         return {"available": False, "reason": f"'{name}' 워크스페이스가 이미 있습니다."}
     return {"available": True, "reason": None}
 
@@ -964,15 +1536,19 @@ def workspace_name_check(name: str, projectId: Optional[str] = None):
 # ══════════════════════════════════════════════════════════════════
 import httpx
 
-_kfp_base: Optional[str] = None
+_kfp_bases: dict[str, str] = {}   # 클러스터 ID → KFP API 주소
 
 
 def _kfp() -> str:
-    global _kfp_base
-    if not _kfp_base:
+    """지금 클러스터의 KFP API 주소 — 클러스터 안 IP 로 닿으면 ClusterIP, 아니면(다른 클러스터를 조작) port-forward."""
+    c = _cur()
+    if not c.direct_net:
+        return f"http://127.0.0.1:{_ensure_svc_forward('kubeflow', 'ml-pipeline', 8888)}"
+    base = _kfp_bases.get(c.id)
+    if not base:
         svc = core.read_namespaced_service("ml-pipeline", "kubeflow")
-        _kfp_base = f"http://{svc.spec.cluster_ip}:8888"
-    return _kfp_base
+        base = _kfp_bases[c.id] = f"http://{svc.spec.cluster_ip}:8888"
+    return base
 
 
 def _kfp_get(path: str, params: dict | None = None) -> dict:
@@ -1399,7 +1975,7 @@ def download_workspace_file(name: str, path: str, namespace: str = DEFAULT_NS):
     proc = subprocess.run(
         ["kubectl", "-n", ns, "exec", f"{name}-0", "--", "sh", "-c",
          f"cat '{target}'"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=300)
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=300, env=_kenv())
     if proc.returncode != 0 or not proc.stdout:
         raise HTTPException(404, "파일을 찾을 수 없습니다")
     fname = path.split("/")[-1]
@@ -1480,8 +2056,17 @@ def _to_experiment(e: dict) -> dict:
 
 @app.get("/api/v1/experiments")
 def list_experiments():
-    items = crd.list_cluster_custom_object(GROUP, KATIB_VERSION, E_PLURAL)["items"]
-    return {"items": [_to_experiment(e) for e in items]}
+    out = []
+    for cid in _listing_cids():          # PaaS 모드는 클러스터마다 모아 합친다
+        with _use_cluster(cid):
+            try:
+                items = crd.list_cluster_custom_object(GROUP, KATIB_VERSION, E_PLURAL)["items"]
+            except Exception:
+                if not MULTI:
+                    raise
+                continue
+            out += [_tag(_to_experiment(e)) for e in items]
+    return {"items": out}
 
 
 class CreateExperiment(BaseModel):
@@ -1580,6 +2165,7 @@ def create_experiment(body: CreateExperiment):
     실제 학습 파이프라인 연동 시 trialSpec의 컨테이너만 교체하면 된다.
     주의: Katib 메트릭 수집기가 command를 셸 문자열로 재조합하므로
     인라인 코드는 깨진다 → 스크립트를 ConfigMap 파일로 마운트(공식 예제 패턴)."""
+    _route_ns(body.namespace)            # 워크스페이스가 있는 클러스터에 만든다
     train_py = (
         "import math, sys, time\n"
         "lr = float(sys.argv[1]); bs = int(sys.argv[2])\n"
@@ -1646,9 +2232,10 @@ def create_experiment(body: CreateExperiment):
 
     # [로컬 전용] Suggestion Deployment 노드 고정 — DEV_PIN_NODE 설정 시에만
     if DEV_PIN_NODE:
-        def _pin_suggestion(ns: str, exp_name: str, algo: str):
+        def _pin_suggestion(ns: str, exp_name: str, algo: str, cid: str):
             import time
-            apps = client.AppsV1Api()
+            with _use_cluster(cid):      # 새 스레드에는 요청의 클러스터가 넘어가지 않는다
+                apps = _apps()
             sel = {"spec": {"template": {"spec": {"nodeSelector": _pin_selector()}}}}
             for _ in range(30):
                 try:
@@ -1659,23 +2246,32 @@ def create_experiment(body: CreateExperiment):
 
         import threading
         threading.Thread(target=_pin_suggestion,
-                         args=(body.namespace, body.name, body.algorithm),
+                         args=(body.namespace, body.name, body.algorithm, _cid()),
                          daemon=True).start()
     return {"name": body.name, "status": "Created"}
 
 
 @app.delete("/api/v1/experiments/{name}")
 def delete_experiment(name: str, namespace: str = DEFAULT_NS):
+    _route_ns(namespace)
     try:
         crd.delete_namespaced_custom_object(GROUP, KATIB_VERSION, namespace,
                                             E_PLURAL, name)
     except client.exceptions.ApiException as e:
         if e.status == 404:
-            for x in crd.list_cluster_custom_object(GROUP, KATIB_VERSION, E_PLURAL)["items"]:
-                if x["metadata"]["name"] == name:
-                    crd.delete_namespaced_custom_object(
-                        GROUP, KATIB_VERSION, x["metadata"]["namespace"], E_PLURAL, name)
-                    return {"status": "Deleting"}
+            for cid in _search_cids():   # PaaS 모드는 다른 클러스터도 본다
+                _set_cluster(cid)
+                try:
+                    items = crd.list_cluster_custom_object(GROUP, KATIB_VERSION, E_PLURAL)["items"]
+                except Exception:
+                    if not MULTI:
+                        raise
+                    continue
+                for x in items:
+                    if x["metadata"]["name"] == name:
+                        crd.delete_namespaced_custom_object(
+                            GROUP, KATIB_VERSION, x["metadata"]["namespace"], E_PLURAL, name)
+                        return {"status": "Deleting"}
             raise HTTPException(404, f"experiment {name} not found")
         raise
     return {"status": "Deleting"}
@@ -1722,13 +2318,38 @@ def _to_isvc(s: dict) -> dict:
     }
 
 
+def _find_isvc(name: str) -> Optional[dict]:
+    """InferenceService 를 이름으로 찾는다 — PaaS 모드는 클러스터를 차례로 보고,
+    찾은 클러스터를 이 요청의 이후 호출 대상으로 정한다."""
+    for cid in _search_cids():
+        _set_cluster(cid)
+        try:
+            items = crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION, I_PLURAL)["items"]
+        except Exception:
+            if not MULTI:
+                raise
+            continue
+        for s in items:
+            if s["metadata"]["name"] == name:
+                return s
+    return None
+
+
+def _svc_base(ns: str, svc: str, port: int = 80) -> str:
+    """서비스 주소 — 클러스터 안 IP 로 닿으면 ClusterIP, 아니면(다른 클러스터를 조작) port-forward."""
+    if _cur().direct_net:
+        return f"http://{core.read_namespaced_service(svc, ns).spec.cluster_ip}:{port}"
+    return f"http://127.0.0.1:{_ensure_svc_forward(ns, svc, port)}"
+
+
 _node_gpu_model_cache: dict[str, str] = {}
 
 
 def _node_gpu_model(node: str) -> str:
-    """노드에 달린 GPU 모델명 — 바뀌지 않는 값이라 한 번 조회 후 캐시."""
-    if node in _node_gpu_model_cache:
-        return _node_gpu_model_cache[node]
+    """노드에 달린 GPU 모델명 — 바뀌지 않는 값이라 한 번 조회 후 캐시(클러스터마다 따로)."""
+    key = f"{_cid()}/{node}"
+    if key in _node_gpu_model_cache:
+        return _node_gpu_model_cache[key]
     try:
         pods = core.list_namespaced_pod(
             "kube-system", label_selector="app=gpu-metrics",
@@ -1742,7 +2363,7 @@ def _node_gpu_model(node: str) -> str:
                              _request_timeout=8)
             gpu_name = str(raw).strip().splitlines()[0].strip()
             if gpu_name and "command" not in gpu_name.lower():
-                _node_gpu_model_cache[node] = gpu_name
+                _node_gpu_model_cache[key] = gpu_name
                 return gpu_name
     except Exception:
         pass
@@ -1826,13 +2447,10 @@ def _fill_serving_metrics(item: dict) -> dict:
             total = _prom_val(t, "vllm:e2e_request_latency_seconds_sum")
             buckets = _prom_hist(t, "vllm:e2e_request_latency_seconds")
         else:
-            pods = core.list_namespaced_pod(
-                ns, label_selector=f"app=isvc.{name}-predictor")
-            ip = next((p.status.pod_ip for p in pods.items
-                       if p.status.phase == "Running" and p.status.pod_ip), None)
-            if not ip:
+            base = _predictor_metrics_base(ns, name, spawn=False)
+            if not base:
                 return item
-            t = httpx.get(f"http://{ip}:8080/metrics", timeout=6).text
+            t = httpx.get(f"{base}/metrics", timeout=6).text
             n = _prom_val(t, "request_predict_seconds_count")
             total = _prom_val(t, "request_predict_seconds_sum")
             buckets = _prom_hist(t, "request_predict_seconds")
@@ -1848,10 +2466,31 @@ def _fill_serving_metrics(item: dict) -> dict:
     return item
 
 
+def _predictor_metrics_base(ns: str, name: str, spawn: bool = True) -> Optional[str]:
+    """KServe 모델 서버 지표 주소 — 클러스터 안 IP 로 닿으면 파드 IP:8080, 아니면 predictor 서비스 port-forward.
+    spawn=False 면 통로가 이미 열려 있을 때만(목록처럼 자주 부르는 경로)."""
+    if _cur().direct_net:
+        pods = core.list_namespaced_pod(ns, label_selector=f"app=isvc.{name}-predictor")
+        ip = next((p.status.pod_ip for p in pods.items
+                   if p.status.phase == "Running" and p.status.pod_ip), None)
+        return f"http://{ip}:8080" if ip else None
+    port = _ensure_svc_forward(ns, f"{name}-predictor", 80, spawn=spawn)
+    return f"http://127.0.0.1:{port}" if port else None
+
+
 @app.get("/api/v1/serving")
 def list_serving():
-    items = crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION, I_PLURAL)["items"]
-    return {"items": [_fill_serving_metrics(_to_isvc(s)) for s in items]}
+    out = []
+    for cid in _listing_cids():          # PaaS 모드는 클러스터마다 모아 합친다
+        with _use_cluster(cid):
+            try:
+                items = crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION, I_PLURAL)["items"]
+            except Exception:
+                if not MULTI:
+                    raise
+                continue
+            out += [_tag(_fill_serving_metrics(_to_isvc(s))) for s in items]
+    return {"items": out}
 
 
 # ── 모델 저장소 (MinIO / S3 호환) ──────────────────────────────────
@@ -1897,33 +2536,19 @@ def _ensure_model_store_sa(ns: str):
             metadata=client.V1ObjectMeta(name=MODEL_STORE_SA),
             secrets=[client.V1ObjectReference(name=MODEL_STORE_CRED_SECRET)]))
 
-_minio_forward: Optional[subprocess.Popen] = None
-MINIO_LOCAL_PORT = 19000
-
-
 def _minio_client():
-    """백엔드에서 MinIO에 접근 (클러스터 밖이면 port-forward 경유)."""
-    global _minio_forward
-    import time as _t
+    """백엔드에서 MinIO에 접근 — 같은 클러스터 안(파드)이면 서비스 주소로, 아니면 port-forward 경유(클러스터마다 따로)."""
     from minio import Minio
-    if IN_CLUSTER:
+    if _cur().in_cluster:
         return Minio(MODEL_STORE_ENDPOINT, access_key=MODEL_STORE_KEY,
                      secret_key=MODEL_STORE_SECRET, secure=False)
-    if not _port_open(MINIO_LOCAL_PORT):
-        if _minio_forward:
-            _minio_forward.terminate()
-        ns, svc = MODEL_STORE_ENDPOINT.split(":")[0].split(".")[::-1][0], "minio-service"
-        _minio_forward = subprocess.Popen(
-            ["kubectl", "-n", "kubeflow", "port-forward",
-             f"svc/{svc}", f"{MINIO_LOCAL_PORT}:9000"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for _ in range(10):
-            _t.sleep(1)
-            if _port_open(MINIO_LOCAL_PORT):
-                break
-        else:
-            raise HTTPException(503, "모델 저장소(MinIO) 연결 실패")
-    return Minio(f"127.0.0.1:{MINIO_LOCAL_PORT}", access_key=MODEL_STORE_KEY,
+    host, _, port = MODEL_STORE_ENDPOINT.partition(":")      # 예: minio-service.kubeflow:9000
+    svc, _, rest = host.partition(".")
+    try:
+        local = _ensure_svc_forward(rest.split(".")[0] or "kubeflow", svc, int(port or 9000))
+    except HTTPException:
+        raise HTTPException(503, "모델 저장소(MinIO) 연결 실패")
+    return Minio(f"127.0.0.1:{local}", access_key=MODEL_STORE_KEY,
                  secret_key=MODEL_STORE_SECRET, secure=False)
 
 
@@ -2021,7 +2646,7 @@ def import_model_from_notebook(body: ImportModel):
             p = subprocess.run(
                 ["kubectl", "-n", ns, "exec", f"{body.notebook}-0", "--",
                  "sh", "-c", f"cd {src} && tar cf - ."],
-                stdout=f, stderr=subprocess.DEVNULL, timeout=600)
+                stdout=f, stderr=subprocess.DEVNULL, timeout=600, env=_kenv())
         if p.returncode != 0 or _o.path.getsize(tar_path) == 0:
             raise HTTPException(400, f"경로를 찾을 수 없습니다: {body.path}")
 
@@ -2062,6 +2687,7 @@ class CreateServing(BaseModel):
 
 @app.post("/api/v1/serving", status_code=201)
 def create_serving(body: CreateServing):
+    _route_ns(body.namespace)            # 워크스페이스가 있는 클러스터에 배포한다
     limits: dict = {"cpu": body.cpu, "memory": f"{body.memoryGi}Gi"}
     requests: dict = {"cpu": "100m", "memory": "256Mi"}
     if body.gpu > 0:
@@ -2149,7 +2775,7 @@ def _strip_deploy_gpu(ns: str, deploy_name: str) -> None:
     파드가 재생성되면서 가속기를 실제로 반납한다.
     """
     import time as _t
-    apps = client.AppsV1Api()
+    apps = _apps()
     for _ in range(6):          # KServe가 Deployment를 만들 때까지 잠시 대기
         try:
             d = apps.read_namespaced_deployment(deploy_name, ns)
@@ -2188,12 +2814,7 @@ def update_serving(name: str, body: UpdateServing):
 
     KServe가 파드를 새로 띄우고 준비되면 교체하므로 잠시 뒤 반영된다.
     """
-    target = None
-    for s in crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION,
-                                            I_PLURAL)["items"]:
-        if s["metadata"]["name"] == name:
-            target = s
-            break
+    target = _find_isvc(name)
     if target is None:
         raise HTTPException(404, f"서비스 {name}을(를) 찾을 수 없습니다")
 
@@ -2253,25 +2874,22 @@ def update_serving(name: str, body: UpdateServing):
 
 @app.delete("/api/v1/serving/{name}")
 def delete_serving(name: str, namespace: str = "llm-serving"):
-    for s in crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION, I_PLURAL)["items"]:
-        if s["metadata"]["name"] == name:
-            crd.delete_namespaced_custom_object(
-                KSERVE_GROUP, KSERVE_VERSION, s["metadata"]["namespace"], I_PLURAL, name)
-            return {"status": "Deleting"}
-    raise HTTPException(404, f"inferenceservice {name} not found")
+    s = _find_isvc(name)
+    if s is None:
+        raise HTTPException(404, f"inferenceservice {name} not found")
+    crd.delete_namespaced_custom_object(
+        KSERVE_GROUP, KSERVE_VERSION, s["metadata"]["namespace"], I_PLURAL, name)
+    return {"status": "Deleting"}
 
 
 @app.post("/api/v1/serving/{name}/predict")
 async def predict(name: str, request: Request, namespace: str = "llm-serving"):
     """모델 API 호출 프록시 — KServe v1 protocol (:predict)."""
-    ns = namespace
-    for s in crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION, I_PLURAL)["items"]:
-        if s["metadata"]["name"] == name:
-            ns = s["metadata"]["namespace"]
-            break
-    svc = core.read_namespaced_service(f"{name}-predictor", ns)
-    model_name = await _resolve_model_name(name, svc.spec.cluster_ip)
-    url = f"http://{svc.spec.cluster_ip}:80/v1/models/{model_name}:predict"
+    s = _find_isvc(name)
+    ns = s["metadata"]["namespace"] if s else namespace
+    base = _svc_base(ns, f"{name}-predictor")
+    model_name = await _resolve_model_name(name, base)
+    url = f"{base}/v1/models/{model_name}:predict"
     body = await request.body()
     import time as _t
     t0 = _t.perf_counter()
@@ -2339,100 +2957,100 @@ async def serving_metrics():
     vLLM(LLM)과 달리 KServe 모델은 전처리·추론·후처리 구간이 따로 계측된다.
     """
     items = []
-    for s in crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION,
-                                            I_PLURAL)["items"]:
-        name, ns = s["metadata"]["name"], s["metadata"]["namespace"]
-        model = (s["spec"]["predictor"].get("model") or {})
-        # LLM은 vLLM 자체 지표(TTFT·TPOT)가 훨씬 유용해서 별도 카드에서 다룬다
-        if (model.get("modelFormat") or {}).get("name") == "vllm":
-            continue
-        ready = any(c.get("type") == "Ready" and c.get("status") == "True"
-                    for c in (s.get("status", {}).get("conditions") or []))
-        if not ready:
-            continue
-        # 지표 조회에 실패해도 서비스를 목록에서 빼지 않는다. 빼버리면 화면에서
-        # 카드가 나왔다 사라졌다 해서 사용자가 배포가 풀린 줄로 오해한다.
-        # 배포되어 있다는 사실과, 아직 측정값이 없다는 사실을 함께 보여준다.
-        t, measured = "", True
-        try:
-            pods = core.list_namespaced_pod(
-                ns, label_selector=f"app=isvc.{name}-predictor")
-            ip = next((p.status.pod_ip for p in pods.items
-                       if p.status.phase == "Running" and p.status.pod_ip), None)
-            if not ip:
-                measured = False
-            else:
-                async with httpx.AsyncClient(timeout=8) as cli:
-                    t = (await cli.get(f"http://{ip}:8080/metrics")).text
-        except Exception:
-            measured = False
+    for cid in _listing_cids():          # PaaS 모드는 클러스터마다 모아 합친다
+        with _use_cluster(cid):
+            try:
+                isvcs = crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION, I_PLURAL)["items"]
+            except Exception:
+                if not MULTI:
+                    raise
+                continue
+            for s in isvcs:
+                name, ns = s["metadata"]["name"], s["metadata"]["namespace"]
+                model = (s["spec"]["predictor"].get("model") or {})
+                # LLM은 vLLM 자체 지표(TTFT·TPOT)가 훨씬 유용해서 별도 카드에서 다룬다
+                if (model.get("modelFormat") or {}).get("name") == "vllm":
+                    continue
+                ready = any(c.get("type") == "Ready" and c.get("status") == "True"
+                            for c in (s.get("status", {}).get("conditions") or []))
+                if not ready:
+                    continue
+                # 지표 조회에 실패해도 서비스를 목록에서 빼지 않는다. 빼버리면 화면에서
+                # 카드가 나왔다 사라졌다 해서 사용자가 배포가 풀린 줄로 오해한다.
+                # 배포되어 있다는 사실과, 아직 측정값이 없다는 사실을 함께 보여준다.
+                t, measured = "", True
+                try:
+                    base = _predictor_metrics_base(ns, name)
+                    if not base:
+                        measured = False
+                    else:
+                        async with httpx.AsyncClient(timeout=8) as cli:
+                            t = (await cli.get(f"{base}/metrics")).text
+                except Exception:
+                    measured = False
 
-        def stage(metric: str) -> tuple[float, int]:
-            """(평균 ms, 호출 수)"""
-            n = _prom_val(t, f"{metric}_count")
-            total = _prom_val(t, f"{metric}_sum")
-            return (round(total / n * 1000, 2) if n else 0.0), int(n)
+                def stage(metric: str) -> tuple[float, int]:
+                    """(평균 ms, 호출 수)"""
+                    n = _prom_val(t, f"{metric}_count")
+                    total = _prom_val(t, f"{metric}_sum")
+                    return (round(total / n * 1000, 2) if n else 0.0), int(n)
 
-        pre_ms, n = stage("request_preprocess_seconds")
-        inf_ms, _ = stage("request_predict_seconds")
-        post_ms, _ = stage("request_postprocess_seconds")
-        buckets = _prom_hist(t, "request_predict_seconds")
-        p95 = _hist_quantile(buckets, 0.95) if buckets else None
+                pre_ms, n = stage("request_preprocess_seconds")
+                inf_ms, _ = stage("request_predict_seconds")
+                post_ms, _ = stage("request_postprocess_seconds")
+                buckets = _prom_hist(t, "request_predict_seconds")
+                p95 = _hist_quantile(buckets, 0.95) if buckets else None
 
-        res = model.get("resources") or {}
-        gpu = int((res.get("limits") or {}).get(ACCEL_RESOURCE, 0) or 0)
-        items.append({
-            "name": name,
-            "namespace": ns,
-            "format": (model.get("modelFormat") or {}).get("name", ""),
-            "accelerator": f"GPU {gpu}장" if gpu else "CPU",
-            "requests": n,
-            "measured": measured,
-            "breakdown": [
-                {"stage": "입력 전처리", "ms": pre_ms, "key": "pre"},
-                {"stage": "모델 추론", "ms": inf_ms, "key": "infer"},
-                {"stage": "결과 후처리", "ms": post_ms, "key": "post"},
-            ],
-            "totalMs": round(pre_ms + inf_ms + post_ms, 2),
-            "p95Ms": round(p95 * 1000, 1) if p95 else None,
-        })
+                res = model.get("resources") or {}
+                gpu = int((res.get("limits") or {}).get(ACCEL_RESOURCE, 0) or 0)
+                items.append(_tag({
+                    "name": name,
+                    "namespace": ns,
+                    "format": (model.get("modelFormat") or {}).get("name", ""),
+                    "accelerator": f"GPU {gpu}장" if gpu else "CPU",
+                    "requests": n,
+                    "measured": measured,
+                    "breakdown": [
+                        {"stage": "입력 전처리", "ms": pre_ms, "key": "pre"},
+                        {"stage": "모델 추론", "ms": inf_ms, "key": "infer"},
+                        {"stage": "결과 후처리", "ms": post_ms, "key": "post"},
+                    ],
+                    "totalMs": round(pre_ms + inf_ms + post_ms, 2),
+                    "p95Ms": round(p95 * 1000, 1) if p95 else None,
+                }))
     return {"items": items}
 
 
 _model_name_cache: dict[str, str] = {}
 
 
-async def _resolve_model_name(svc_name: str, cluster_ip: str) -> str:
-    """서버에 실제 등록된 모델 이름을 알아낸다.
+async def _resolve_model_name(svc_name: str, base: str) -> str:
+    """서버에 실제 등록된 모델 이름을 알아낸다. base = 서비스 주소(_svc_base).
 
     TorchServe는 .mar 파일에 적힌 이름으로 모델을 등록하는데, 그 이름이
     서비스 이름과 다르면 예측 경로가 어긋나 404가 난다. (이미 만들어진
     .mar를 다른 이름의 서비스로 배포하는 경우가 그렇다)
     """
-    if svc_name in _model_name_cache:
-        return _model_name_cache[svc_name]
+    key = f"{_cid()}/{svc_name}"         # 클러스터마다 같은 서비스 이름이 있을 수 있다
+    if key in _model_name_cache:
+        return _model_name_cache[key]
     try:
         async with httpx.AsyncClient(timeout=10) as cli:
-            r = await cli.get(f"http://{cluster_ip}:80/v1/models")
+            r = await cli.get(f"{base}/v1/models")
         models = r.json().get("models") or []
         # 서비스 이름과 같은 게 있으면 그것을, 없으면 등록된 첫 번째를 쓴다
         picked = svc_name if svc_name in models else (models[0] if models
                                                       else svc_name)
     except Exception:
         picked = svc_name
-    _model_name_cache[svc_name] = picked
+    _model_name_cache[key] = picked
     return picked
 
 
 @app.post("/api/v1/serving/{name}/test")
 async def test_serving(name: str):
     """서비스 호출 테스트 — 모델 형식에 맞는 샘플을 자동으로 넣어 호출한다."""
-    target = None
-    for s in crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION,
-                                            I_PLURAL)["items"]:
-        if s["metadata"]["name"] == name:
-            target = s
-            break
+    target = _find_isvc(name)
     if target is None:
         raise HTTPException(404, f"서비스 {name}을(를) 찾을 수 없습니다")
 
@@ -2445,9 +3063,9 @@ async def test_serving(name: str):
             400, f"'{fmt}' 형식은 자동 테스트 입력을 만들 수 없습니다. "
                  f"직접 호출해 확인하세요.")
 
-    svc = core.read_namespaced_service(f"{name}-predictor", ns)
-    model_name = await _resolve_model_name(name, svc.spec.cluster_ip)
-    url = f"http://{svc.spec.cluster_ip}:80/v1/models/{model_name}:predict"
+    base = _svc_base(ns, f"{name}-predictor")
+    model_name = await _resolve_model_name(name, base)
+    url = f"{base}/v1/models/{model_name}:predict"
     import time as _t
     t0 = _t.perf_counter()
     try:
@@ -2473,12 +3091,11 @@ class ModelBenchRequest(BaseModel):
 async def run_model_bench(name: str, body: ModelBenchRequest):
     import asyncio, time as _t
     ns, fmt = "llm-serving", "sklearn"
-    for s in crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION, I_PLURAL)["items"]:
-        if s["metadata"]["name"] == name:
-            ns = s["metadata"]["namespace"]
-            fmt = ((s["spec"]["predictor"].get("model") or {})
-                   .get("modelFormat") or {}).get("name", "sklearn")
-            break
+    s = _find_isvc(name)
+    if s is not None:
+        ns = s["metadata"]["namespace"]
+        fmt = ((s["spec"]["predictor"].get("model") or {})
+               .get("modelFormat") or {}).get("name", "sklearn")
     if fmt == "vllm":
         # LLM은 예측 API가 아니라 OpenAI 호환 대화 API를 쓴다.
         # 노드가 달라도 닿도록 통로(port-forward)를 경유한다.
@@ -2490,9 +3107,9 @@ async def run_model_bench(name: str, body: ModelBenchRequest):
             "max_tokens": 32,
         }
     else:
-        svc = core.read_namespaced_service(f"{name}-predictor", ns)
-        model_name = await _resolve_model_name(name, svc.spec.cluster_ip)
-        url = f"http://{svc.spec.cluster_ip}:80/v1/models/{model_name}:predict"
+        base = _svc_base(ns, f"{name}-predictor")
+        model_name = await _resolve_model_name(name, base)
+        url = f"{base}/v1/models/{model_name}:predict"
         payload = _sample_payload(fmt)
         if payload is None:
             raise HTTPException(
@@ -2655,6 +3272,7 @@ def _snapshot_store():
 
 @app.get("/api/v1/notebooks/{name}/snapshots")
 def list_snapshots(name: str, namespace: str = DEFAULT_NS):
+    _route_ns(namespace)                 # 스냅샷은 노트북이 있는 클러스터의 저장소에 있다
     cli = _snapshot_store()
     items = []
     for obj in cli.list_objects(SNAPSHOT_BUCKET, prefix=f"{name}/", recursive=True):
@@ -2685,7 +3303,7 @@ def create_snapshot(name: str, namespace: str = DEFAULT_NS):
         with open(tmp_path, "wb") as f:
             proc = subprocess.run(
                 ["kubectl", "-n", ns, "exec", f"{name}-0", "--", "sh", "-c", cmd],
-                stdout=f, stderr=subprocess.DEVNULL, timeout=900)
+                stdout=f, stderr=subprocess.DEVNULL, timeout=900, env=_kenv())
         size = _os.path.getsize(tmp_path)
         if proc.returncode != 0 and size == 0:
             raise HTTPException(503, "스냅샷 실패 — 노트북이 실행 중인지 확인하세요")
@@ -2718,7 +3336,7 @@ def restore_snapshot(name: str, snap_id: str, namespace: str = DEFAULT_NS):
                 ["kubectl", "-n", ns, "exec", "-i", f"{name}-0", "--", "sh", "-c",
                  "cd /home/jovyan && tar xzmf - --warning=none 2>/dev/null; echo DONE"],
                 stdin=f, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                timeout=900)
+                timeout=900, env=_kenv())
     finally:
         if _os.path.exists(tmp_path):
             _os.remove(tmp_path)
@@ -2728,7 +3346,8 @@ def restore_snapshot(name: str, snap_id: str, namespace: str = DEFAULT_NS):
 
 
 @app.delete("/api/v1/notebooks/{name}/snapshots/{snap_id:path}")
-def delete_snapshot(name: str, snap_id: str):
+def delete_snapshot(name: str, snap_id: str, namespace: Optional[str] = None):
+    _route_ns(namespace)                 # 화면이 namespace 를 넘기면 그 워크스페이스의 클러스터 저장소에서
     cli = _snapshot_store()
     try:
         cli.remove_object(SNAPSHOT_BUCKET, snap_id)
@@ -3131,7 +3750,7 @@ def _ensure_vllm_forward() -> int:
         _vllm_forward = subprocess.Popen(
             ["kubectl", "-n", llm_ns, "port-forward",
              f"svc/{llm_svc}", f"{VLLM_LOCAL_PORT}:{llm_port}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_kenv())
         _t.sleep(1.5)
     raise HTTPException(503, "vLLM 연결 준비 중")
 
@@ -3180,47 +3799,58 @@ def llm_metrics_all():
     LLM이 여러 개일 수 있으므로 설정된 하나만 보던 방식을 대체한다.
     """
     items = []
-    for s in crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION,
-                                            I_PLURAL)["items"]:
-        model = s["spec"]["predictor"].get("model") or {}
-        if (model.get("modelFormat") or {}).get("name") != "vllm":
-            continue
-        name, ns = s["metadata"]["name"], s["metadata"]["namespace"]
-        ready = any(c.get("type") == "Ready" and c.get("status") == "True"
-                    for c in (s.get("status", {}).get("conditions") or []))
-        # 어떤 모델을 서비스하는지는 실행 인자에 들어 있다
-        model_id = next((a.split("=", 1)[1] for a in (model.get("args") or [])
-                         if a.startswith("--model=")), "")
-        entry = {"name": name, "namespace": ns, "modelId": model_id,
-                 "ready": ready, "requests": 0, "ttftMs": None,
-                 "tpotMs": None, "e2eMs": None, "tokensPerSec": None,
-                 "kvCacheUsagePct": 0.0, "runningReqs": 0}
-        if ready:
+    for cid in _listing_cids():          # PaaS 모드는 클러스터마다 모아 합친다
+        with _use_cluster(cid):
             try:
-                port = _ensure_svc_forward(ns, f"{name}-predictor")
-                t = httpx.get(f"http://127.0.0.1:{port}/metrics",
-                              timeout=8).text
-                ttft_s = _prom_val(t, "vllm:time_to_first_token_seconds_sum")
-                ttft_n = _prom_val(t, "vllm:time_to_first_token_seconds_count")
-                tpot_s = _prom_val(t, "vllm:time_per_output_token_seconds_sum")
-                tpot_n = _prom_val(t, "vllm:time_per_output_token_seconds_count")
-                e2e_s = _prom_val(t, "vllm:e2e_request_latency_seconds_sum")
-                e2e_n = _prom_val(t, "vllm:e2e_request_latency_seconds_count")
-                entry.update(
-                    requests=int(e2e_n),
-                    ttftMs=round(ttft_s / ttft_n * 1000, 1) if ttft_n else None,
-                    tpotMs=round(tpot_s / tpot_n * 1000, 2) if tpot_n else None,
-                    e2eMs=round(e2e_s / e2e_n * 1000, 1) if e2e_n else None,
-                    tokensPerSec=(round(1 / (tpot_s / tpot_n), 1)
-                                  if tpot_s and tpot_n else None),
-                    kvCacheUsagePct=round(
-                        _prom_val(t, "vllm:gpu_cache_usage_perc") * 100, 2),
-                    runningReqs=int(_prom_val(t, "vllm:num_requests_running")),
-                )
+                isvcs = crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION, I_PLURAL)["items"]
             except Exception:
-                pass
-        items.append(entry)
+                if not MULTI:
+                    raise
+                continue
+            items += [_tag(e) for e in (_llm_entry(s) for s in isvcs) if e]
     return {"items": items}
+
+
+def _llm_entry(s: dict) -> Optional[dict]:
+    """vLLM InferenceService 하나의 추론 지표(지금 클러스터) — LLM 이 아니면 None."""
+    model = s["spec"]["predictor"].get("model") or {}
+    if (model.get("modelFormat") or {}).get("name") != "vllm":
+        return None
+    name, ns = s["metadata"]["name"], s["metadata"]["namespace"]
+    ready = any(c.get("type") == "Ready" and c.get("status") == "True"
+                for c in (s.get("status", {}).get("conditions") or []))
+    # 어떤 모델을 서비스하는지는 실행 인자에 들어 있다
+    model_id = next((a.split("=", 1)[1] for a in (model.get("args") or [])
+                     if a.startswith("--model=")), "")
+    entry = {"name": name, "namespace": ns, "modelId": model_id,
+             "ready": ready, "requests": 0, "ttftMs": None,
+             "tpotMs": None, "e2eMs": None, "tokensPerSec": None,
+             "kvCacheUsagePct": 0.0, "runningReqs": 0}
+    if ready:
+        try:
+            port = _ensure_svc_forward(ns, f"{name}-predictor")
+            t = httpx.get(f"http://127.0.0.1:{port}/metrics",
+                          timeout=8).text
+            ttft_s = _prom_val(t, "vllm:time_to_first_token_seconds_sum")
+            ttft_n = _prom_val(t, "vllm:time_to_first_token_seconds_count")
+            tpot_s = _prom_val(t, "vllm:time_per_output_token_seconds_sum")
+            tpot_n = _prom_val(t, "vllm:time_per_output_token_seconds_count")
+            e2e_s = _prom_val(t, "vllm:e2e_request_latency_seconds_sum")
+            e2e_n = _prom_val(t, "vllm:e2e_request_latency_seconds_count")
+            entry.update(
+                requests=int(e2e_n),
+                ttftMs=round(ttft_s / ttft_n * 1000, 1) if ttft_n else None,
+                tpotMs=round(tpot_s / tpot_n * 1000, 2) if tpot_n else None,
+                e2eMs=round(e2e_s / e2e_n * 1000, 1) if e2e_n else None,
+                tokensPerSec=(round(1 / (tpot_s / tpot_n), 1)
+                              if tpot_s and tpot_n else None),
+                kvCacheUsagePct=round(
+                    _prom_val(t, "vllm:gpu_cache_usage_perc") * 100, 2),
+                runningReqs=int(_prom_val(t, "vllm:num_requests_running")),
+            )
+        except Exception:
+            pass
+    return entry
 
 
 def _prom_hist(text: str, metric: str) -> list[tuple[float, float]]:
@@ -3481,18 +4111,17 @@ def _start_profile_sampler():
 
 def _vllm_pod(service: Optional[str] = None) -> tuple[str, str]:
     if service:
-        for s in crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION,
-                                                I_PLURAL)["items"]:
-            if s["metadata"]["name"] == service:
-                ns = s["metadata"]["namespace"]
-                out = subprocess.run(
-                    ["kubectl", "-n", ns, "get", "pods",
-                     "-l", f"app=isvc.{service}-predictor",
-                     "--field-selector=status.phase=Running",
-                     "-o", "jsonpath={.items[0].metadata.name}"],
-                    capture_output=True, text=True, timeout=20)
-                if out.stdout.strip():
-                    return ns, out.stdout.strip()
+        s = _find_isvc(service)
+        if s is not None:
+            ns = s["metadata"]["namespace"]
+            out = subprocess.run(
+                ["kubectl", "-n", ns, "get", "pods",
+                 "-l", f"app=isvc.{service}-predictor",
+                 "--field-selector=status.phase=Running",
+                 "-o", "jsonpath={.items[0].metadata.name}"],
+                capture_output=True, text=True, timeout=20, env=_kenv())
+            if out.stdout.strip():
+                return ns, out.stdout.strip()
         raise HTTPException(404, f"{service} 파드를 찾을 수 없습니다")
     ns, name = LLM_SERVICE.split("/", 1)
     name = name.split(":", 1)[0]  # "svc:80" 형태 허용
@@ -3502,7 +4131,7 @@ def _vllm_pod(service: Optional[str] = None) -> tuple[str, str]:
             ["kubectl", "-n", ns, "get", "pods", "-l", label,
              "--field-selector=status.phase=Running",
              "-o", "jsonpath={.items[0].metadata.name}"],
-            capture_output=True, text=True, timeout=20)
+            capture_output=True, text=True, timeout=20, env=_kenv())
         if out.stdout.strip():
             return ns, out.stdout.strip()
     raise HTTPException(503, "vLLM 파드를 찾을 수 없습니다")
@@ -3696,7 +4325,7 @@ def llm_profile_run(samples: int = 3, max_tokens: int = 48,
             out = subprocess.run(
                 ["kubectl", "-n", ns, "exec", "-i", pod, "--",
                  "python3", "-c", _PROFILE_PARSE],
-                capture_output=True, text=True, timeout=180)
+                capture_output=True, text=True, timeout=180, env=_kenv())
             last = (out.stdout or out.stderr).strip()
             line = next((ln for ln in last.splitlines()
                          if ln.startswith("{")), "")
@@ -3792,7 +4421,8 @@ def _ensure_svc_forward(ns: str, svc: str, target_port: int = 80,
     """
     global _next_llm_port
     import time as _t
-    key = f"{ns}/{svc}"
+    # PaaS 모드는 클러스터마다 같은 서비스 이름이 있을 수 있어 클러스터 ID 를 붙인다
+    key = f"{_cid()}/{ns}/{svc}:{target_port}" if MULTI else f"{ns}/{svc}:{target_port}"
     ent = _svc_forwards.get(key)
     if ent and ent[0].poll() is None and _port_open(ent[1]):
         return ent[1]
@@ -3808,7 +4438,7 @@ def _ensure_svc_forward(ns: str, svc: str, target_port: int = 80,
         proc = subprocess.Popen(
             ["kubectl", "-n", ns, "port-forward", f"svc/{svc}",
              f"{port}:{target_port}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_kenv())
         for _ in range(12):
             _t.sleep(0.5)
             if _port_open(port):
@@ -3822,11 +4452,10 @@ def _llm_endpoint(service: Optional[str]) -> int:
     """service를 지정하면 그 LLM으로, 없으면 기본 LLM으로 연결한다."""
     if not service:
         return _ensure_vllm_forward()
-    for s in crd.list_cluster_custom_object(KSERVE_GROUP, KSERVE_VERSION,
-                                            I_PLURAL)["items"]:
-        if s["metadata"]["name"] == service:
-            return _ensure_svc_forward(s["metadata"]["namespace"],
-                                       f"{service}-predictor")
+    s = _find_isvc(service)              # PaaS 모드는 서비스가 있는 클러스터를 찾아 그쪽으로 연다
+    if s is not None:
+        return _ensure_svc_forward(s["metadata"]["namespace"],
+                                   f"{service}-predictor")
     raise HTTPException(404, f"서비스 {service}을(를) 찾을 수 없습니다")
 
 
@@ -3999,7 +4628,7 @@ def _ensure_bench_cm():
 def run_benchmarks():
     """양쪽 GPU 노드에 벤치마크 Job 생성 (기존 Job은 교체)."""
     _ensure_bench_cm()
-    batch = client.BatchV1Api()
+    batch = client.BatchV1Api(_cur().api)
     nodes = [n.metadata.name for n in core.list_node().items]
     started = []
     for node in nodes:
@@ -4087,8 +4716,8 @@ _HOP_HEADERS = {"connection", "keep-alive", "transfer-encoding", "upgrade",
 
 
 def _upstream_for(ns: str, name: str, path: str) -> str:
+    nb = _get_nb(name, ns)               # 먼저 찾아야 노트북이 있는 클러스터로 통로를 연다(PaaS 모드)
     port = _ensure_forward(ns, name)
-    nb = _get_nb(name, ns)
     image = nb["spec"]["template"]["spec"]["containers"][0]["image"]
     if "codeserver" in image:
         return f"http://127.0.0.1:{port}/{path}"
@@ -4243,6 +4872,9 @@ def auth_login(request: Request):
                         f"  user={user['username'].lower()}\n")
     except Exception:
         pass
+    if MULTI:   # 이 사용자가 쓸 수 있는 서비스 클러스터의 접속 정보를 받아 둔다 — 사용자 없이 도는 작업(워크스페이스 생성·IDE 연결 유지)용
+        threading.Thread(target=_sync_quiet, args=(authz, user.get("role") == "admin"),
+                         daemon=True, name="cluster-sync").start()
     resp = Response(content=json.dumps({"username": user["username"], "role": user["role"]}),
                     media_type="application/json")
     resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_TTL,

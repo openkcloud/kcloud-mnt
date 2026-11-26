@@ -291,6 +291,18 @@ def _server_detail(server_id: str, accel_map: dict) -> dict:
     ]
     # Nova 는 NIC(포트)마다 같은 보안그룹을 중복으로 줄 수 있어 이름 기준 중복 제거(순서 유지)
     d["securityGroups"] = list(dict.fromkeys(g.get("name") for g in (s.get("security_groups") or []) if g.get("name")))
+    # 볼륨 부팅 VM 은 Nova 에 이미지 참조가 없다 — 부팅 볼륨(vda)의 원본 이미지(volume_image_metadata)로 보완
+    if not d["imageId"] and vols:
+        boot = next((v for v in vols if (v.get("device") or "").endswith("a")), vols[0])
+        try:
+            vol = _cinder_req("GET", f"/volumes/{boot.get('volumeId') or boot.get('id')}",
+                              project_id=s.get("tenant_id")).json()["volume"]
+            meta = vol.get("volume_image_metadata") or {}
+            d["imageId"] = meta.get("image_id")
+            d["imageName"] = meta.get("image_name")   # 화면이 "이름 (볼륨 부팅)" 으로 표시
+            d["bootVolumeId"] = vol.get("id")
+        except Exception:  # noqa: BLE001 — 보완 정보일 뿐 — 실패해도 상세는 그대로("(볼륨 부팅)" 표기 유지)
+            pass
     return d
 
 
@@ -451,6 +463,27 @@ def server_console(server_id: str, type: str = "novnc", protocol: str = "vnc"):
         orig = urlsplit(url)
         url = urlunsplit((base.scheme or orig.scheme, base.netloc or orig.netloc, orig.path, orig.query, orig.fragment))
     return {"url": url, "type": rc.get("type"), "protocol": rc.get("protocol")}
+
+
+class SnapshotBody(BaseModel):
+    name: str  # 만들 이미지(스냅샷) 이름
+
+
+@router.post("/servers/{server_id}/snapshot", status_code=202, dependencies=[Depends(server_access)])
+def create_snapshot(server_id: str, body: SnapshotBody):
+    """인스턴스 스냅샷 — Nova createImage. 현재 서버 상태를 이미지로 저장(그 이미지로 새 VM 생성 가능).
+    포털 VM 은 볼륨 부팅이라 Nova 가 부팅 볼륨의 Cinder 스냅샷을 뜨고, 이미지에는 그 매핑만 담긴다
+    (Horizon '인스턴스 스냅샷 생성'과 동일). 응답 Location 헤더로 만들어진 이미지 ID 를 돌려준다."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "스냅샷 이름을 입력하세요")
+    try:
+        r = _nova_req("POST", f"/servers/{server_id}/action", json={"createImage": {"name": name}})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"스냅샷 생성 실패: {e}")
+    # Nova 는 생성된 이미지 ID 를 Location 헤더(.../images/<id>)로 준다
+    image_id = (r.headers.get("Location") or "").rstrip("/").rsplit("/", 1)[-1] or None
+    return {"ok": True, "imageId": image_id, "name": name}
 
 
 @router.delete("/servers/{server_id}", status_code=204, dependencies=[Depends(require_admin)])

@@ -256,9 +256,16 @@ function ProjectDetailBody({ project, isAdmin, onClose }: { project: Tenant; isA
                   <QuotaRow label="디스크" used={t.usedDiskTb} max={t.quotaDiskTb} unit="TB" />
                   <QuotaRow label="AI 가속기" used={t.usedAcc} max={t.quotaAcc} unit="장" />
                 </Card>
-                <p className="text-[11px] text-muted-foreground">
-                  * 쿼터·사용량은 OpenStack(Nova·Cinder) 실시간 조회. AI 가속기는 Cyborg 연동 시 반영.
-                </p>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[11px] text-muted-foreground">
+                    * 쿼터·사용량은 OpenStack(Nova·Cinder) 실시간 조회. AI 가속기는 Cyborg 연동 시 반영.
+                  </p>
+                  {isAdmin && (
+                    <Button variant="outline" size="sm" className="shrink-0" onClick={() => setEditOpen(true)}>
+                      <Edit className="size-3.5" /> 쿼터 수정
+                    </Button>
+                  )}
+                </div>
               </>
             )}
           </TabsContent>
@@ -269,12 +276,15 @@ function ProjectDetailBody({ project, isAdmin, onClose }: { project: Tenant; isA
         </Tabs>
       </div>
 
-      {isAdmin && (
-        <DialogFooter className="border-t border-border pt-4">
-          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}><Edit className="size-3.5" /> 편집</Button>
-          <Button variant="destructive" size="sm" className="ml-auto" onClick={() => setConfirmOpen(true)}><Trash2 className="size-3.5" /> 삭제</Button>
-        </DialogFooter>
-      )}
+      <DialogFooter className="border-t border-border pt-4">
+        {isAdmin && (
+          <>
+            <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}><Edit className="size-3.5" /> 편집</Button>
+            <Button variant="destructive" size="sm" onClick={() => setConfirmOpen(true)}><Trash2 className="size-3.5" /> 삭제</Button>
+          </>
+        )}
+        <Button variant="outline" size="sm" className="ml-auto" onClick={onClose}>닫기</Button>
+      </DialogFooter>
 
       {isAdmin && (
         <>
@@ -456,14 +466,23 @@ function EditProjectDialog({ project, open, onClose }: { project: Tenant; open: 
               <div className="space-y-1.5">
                 <Label>vCPU</Label>
                 <Input type="number" value={vcpu} onChange={(e) => setVcpu(e.target.value)} />
+                {Number(vcpu) < project.usedVcpu && (
+                  <p className="text-[10px] text-amber-600">현재 사용량({project.usedVcpu} cores)보다 작습니다 — 기존 자원은 유지되나 신규 생성이 막힙니다</p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label>RAM (GB)</Label>
                 <Input type="number" value={ram} onChange={(e) => setRam(e.target.value)} />
+                {Number(ram) < project.usedRamGb && (
+                  <p className="text-[10px] text-amber-600">현재 사용량({project.usedRamGb}GB)보다 작습니다</p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label>디스크 (GB)</Label>
                 <Input type="number" value={disk} onChange={(e) => setDisk(e.target.value)} />
+                {Number(disk) < (project.usedDiskGb ?? Math.round(project.usedDiskTb * 1024)) && (
+                  <p className="text-[10px] text-amber-600">현재 사용량({project.usedDiskGb ?? Math.round(project.usedDiskTb * 1024)}GB)보다 작습니다</p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label className="text-muted-foreground">가속기</Label>

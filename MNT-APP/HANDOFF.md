@@ -9,7 +9,7 @@
 
 - **누구**: 오케스트로(주) 윤호영(hy.yun@okestro.com)이 개발
 - **뭐**: 정부 IITP R&D 과제 "AI반도체 클라우드 플랫폼" CMP UI 목업 (Next.js)
-- **어디**: https://github.com/YunHoYoung-okestro/openkcloud (`main`)
+- **어디**: https://github.com/openkcloud/kcloud-mnt (`main`)
 - **왜**: ETRI 260615 검토 의견 반영 후 시연·평가 자료로 사용
 - **지금 진행률**: **28/44건 반영 완료 (64%)**, 이노그리드 대기 6건 제외 실질 84%
 

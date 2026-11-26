@@ -22,11 +22,16 @@ CASES = [
     ("POST", "/servers/mine-s/interfaces", {"networkId": "other-net"}, D),
     ("POST", "/servers/other-s/interfaces", {"networkId": "mine-net"}, D),
     ("DELETE", "/servers/mine-s/interfaces/port1", None, A), ("DELETE", "/servers/other-s/interfaces/port1", None, D),
+    # 보안그룹 추가·제거 — 서버 접근 권한과 동일(server_access)
+    ("POST", "/servers/mine-s/security-groups", {"name": "sg"}, A), ("POST", "/servers/other-s/security-groups", {"name": "sg"}, D),
+    ("DELETE", "/servers/mine-s/security-groups/sg", None, A), ("DELETE", "/servers/other-s/security-groups/sg", None, D),
     ("POST", "/servers/mine-s/resize", {"flavorId": "f"}, D),
     ("POST", "/servers/mine-s/resize-confirm", None, D), ("POST", "/servers/mine-s/resize-revert", None, D),
     ("GET", "/servers/mine-s/diagnostics", None, A), ("GET", "/servers/other-s/diagnostics", None, D),
     ("POST", "/servers/mine-s/power", {"action": "stop"}, A), ("POST", "/servers/other-s/power", {"action": "stop"}, D),
     ("GET", "/servers/mine-s/console", None, A), ("GET", "/servers/other-s/console", None, D),
+    # 인스턴스 스냅샷 — 서버 접근 권한(server_access)
+    ("POST", "/servers/mine-s/snapshot", {"name": "snap"}, A), ("POST", "/servers/other-s/snapshot", {"name": "snap"}, D),
     ("DELETE", "/servers/mine-s", None, D),
     ("POST", "/servers/mine-s/volumes", {"volumeId": "mine-v"}, A),
     ("POST", "/servers/mine-s/volumes", {"volumeId": "other-v"}, D),

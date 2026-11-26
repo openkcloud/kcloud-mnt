@@ -308,8 +308,8 @@ def test_클러스터_프로비저닝_키페어_바꾸기(client, fake, started)
     ({"subnetId": "nope"}, None, 400, "서브넷이 고른 네트워크에 속하지 않습니다"),
     ({"networkId": "nope"}, None, 400, "이 프로젝트에서 사용할 수 없는 네트워크입니다"),
     # 외부망은 공유돼 있어도 안 된다 — API 로드밸런서(OVN) 주소에 밖에서 닿지 못함(2026-10-22 req-261022-007)
-    ({"networkId": "public"}, None, 400, "외부망에는 클러스터를 만들 수 없습니다 — 클러스터 API 주소(로드밸런서)에 밖에서 닿지 못합니다"),
-    ({"networkId": "pub-shared", "subnetId": "sub-pub"}, None, 400, "외부망에는 클러스터를 만들 수 없습니다 — 클러스터 API 주소(로드밸런서)에 밖에서 닿지 못합니다"),
+    ({"networkId": "public"}, None, 400, "외부망에는 클러스터를 만들 수 없습니다 — 노드를 외부망에 직접 연결하면 클러스터 외부에서 API 주소(OVN 로드밸런서)에 접근할 수 없습니다"),
+    ({"networkId": "pub-shared", "subnetId": "sub-pub"}, None, 400, "외부망에는 클러스터를 만들 수 없습니다 — 노드를 외부망에 직접 연결하면 클러스터 외부에서 API 주소(OVN 로드밸런서)에 접근할 수 없습니다"),
     ({}, ("fip", {"reachable": False, "reason": "게이트웨이 없음"}), 400,
      "클러스터 API 에 Floating IP 를 붙일 수 없는 네트워크입니다\n게이트웨이 없음"),
     ({}, ("quota", {**QUOTA, "instances": {"quota": 4, "used": 2}}), 409,
