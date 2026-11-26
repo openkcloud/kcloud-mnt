@@ -124,20 +124,6 @@ def test_플레이버는_이름으로_넘김(monkeypatch):
     assert (sent["body"]["master_flavor_id"], sent["body"]["flavor_id"]) == ("m1.large", "m1.large.atomp")
 
 
-def test_공유_외부망이면_API_Floating_IP_를_끔(monkeypatch):
-    sent = {}
-
-    class Owner:
-        def request(self, method, path, json=None):
-            sent["body"] = json
-            return {"uuid": "new-id"}
-
-    monkeypatch.setattr(activities, "for_project", lambda pid: Owner())
-    _nova_lookup(monkeypatch)
-    assert activities.create_cluster("p1", {**SPEC, "externalNetwork": True}) == "new-id"
-    assert sent["body"]["labels"]["master_lb_floating_ip_enabled"] == "False"
-
-
 def test_키페어는_이름으로_찾아_그대로_넘김(monkeypatch):
     sent = {}
 

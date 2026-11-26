@@ -160,7 +160,8 @@ export interface NetworkDetail {
   type: "tenant" | "external" | "shared";
   vlan: number | null;
   status: string;
-  subnets: { id: string; name: string; cidr: string; gateway: string; dhcp: boolean; dns: string[]; allocationPool: string }[];
+  subnets: { id: string; name: string; cidr: string; gateway: string; dhcp: boolean; dns: string[]; allocationPool: string;
+    internet?: boolean }[]; // internet: 게이트웨이 IP 를 가진 라우터에 외부 게이트웨이가 있음(인터넷망)
   ports: { id: string; name: string; status: string; mac: string; ip: string; deviceOwner: string; vm: string | null }[];
   securityGroups: { id: string; name: string; rules: number; desc: string }[];
   routers: { id: string; name: string; status: string; gatewayIp: string; routes: number; ha: boolean }[];
@@ -660,6 +661,40 @@ export function useDeleteImage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-images"] }),
   });
 }
+// 이미지 상세 — 편집 가능한 속성(메타데이터) 포함(os_distro 등)
+export type ImageDetail = ImageSummary & { properties: Record<string, string> };
+export function useImage(id: string | undefined) {
+  return useQuery({
+    queryKey: ["iaas-image", id],
+    enabled: !!id,
+    queryFn: () => fetchJson<ImageDetail>(`${IAAS_BASE}/api/iaas/images/${id}`),
+    staleTime: 10 * 1000, retry: 0,
+  });
+}
+/** 이미지 속성(메타데이터) 추가·수정·삭제 — os_distro 등. */
+export function useUpdateImageProperties() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, set, remove }: { id: string; set?: Record<string, string>; remove?: string[] }) =>
+      sendJson<ImageDetail>("PATCH", `${IAAS_BASE}/api/iaas/images/${id}/properties`, { set: set ?? {}, remove: remove ?? [] }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ["iaas-image", v.id] });
+      qc.invalidateQueries({ queryKey: ["iaas-images"] });
+    },
+  });
+}
+export interface RegisterImageInput {
+  name: string; url: string; diskFormat: string; containerFormat: string;
+  visibility: string; minDisk: number; minRam: number; properties: Record<string, string>;
+}
+/** URL 가져오기(web-download) 등록 — Glance 가 URL 에서 직접 내려받음. */
+export function useRegisterImage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RegisterImageInput) => postJson<ImageDetail>(`${IAAS_BASE}/api/iaas/images`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["iaas-images"] }),
+  });
+}
 
 // ────── 플레이버 (Nova) — 전역 자원(프로젝트 없음) ──────
 export interface FlavorSummary {
@@ -970,6 +1005,16 @@ export function useAttachInterface() {
 export function useDetachInterface() {
   return useServerMutation(({ serverId, portId }: { serverId: string; portId: string }) =>
     sendJson("DELETE", `${IAAS_BASE}/api/iaas/servers/${serverId}/interfaces/${portId}`));
+}
+/** 가상서버 보안그룹 추가 — Nova addSecurityGroup(이름 기준). Horizon '보안 그룹 편집'과 동일. */
+export function useAddServerSecurityGroup() {
+  return useServerMutation(({ serverId, name }: { serverId: string; name: string }) =>
+    postJson(`${IAAS_BASE}/api/iaas/servers/${serverId}/security-groups`, { name }));
+}
+/** 가상서버 보안그룹 제거 — Nova removeSecurityGroup. */
+export function useRemoveServerSecurityGroup() {
+  return useServerMutation(({ serverId, name }: { serverId: string; name: string }) =>
+    sendJson("DELETE", `${IAAS_BASE}/api/iaas/servers/${serverId}/security-groups/${encodeURIComponent(name)}`));
 }
 /** 스펙(플레이버) 변경 — resize 시작 → VERIFY_RESIZE 후 confirm/revert. */
 export function useResizeServer() {

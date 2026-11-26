@@ -570,9 +570,10 @@ export interface ProvNetwork {
   id: string;
   name: string;
   kind: "project" | "shared" | "external";
-  shared?: boolean;        // 이 프로젝트가 포트를 만들 수 있는 공유 망(공유된 외부망이면 클러스터 노드를 바로 붙일 수 있다)
+  shared?: boolean;        // 이 프로젝트가 포트를 만들 수 있는 공유 망
   projectId: string;
   cidr: string;
+  access?: ("internet" | "internal")[]; // IPv4 서브넷 유형 — 게이트웨이 IP 를 가진 라우터에 외부 게이트웨이가 있으면 인터넷망
 }
 
 // 신청 마법사 키페어 — iam_ssh_key (owner = iam_user.username)
@@ -585,11 +586,21 @@ export interface SshKey {
   createdAt: string;
 }
 
+export interface SecurityGroupRuleBrief {
+  direction: string;
+  protocol: string | null;
+  portMin: number | null;
+  portMax: number | null;
+  remoteCidr: string | null;
+  remoteGroup: string | null;
+}
 export interface SecurityGroup {
   id: string;
   name: string;
   projectId: string;
   description: string;
+  rules?: number;                        // 규칙 수
+  ruleList?: SecurityGroupRuleBrief[];   // 규칙 요약(가상서버 보안그룹 추가 시 정보 확인용)
 }
 
 export type ProvStepStatus = "waiting" | "running" | "done" | "failed" | "skipped";
@@ -624,10 +635,11 @@ export interface ResourceRequest {
   requestedByName: string;
   requesterOrgName?: string | null; // 신청자 본인 조직
   requestedAt: string;
-  orgId?: string;   // 프로젝트 조직
-  orgName?: string;
+  orgId?: string | null;   // 프로젝트 조직(없을 수 있음)
+  orgName?: string | null;
   projectId: string;
   projectName: string;
+  title?: string | null;   // 신청 제목(사용자 입력)
   // VM
   vmName?: string;
   networkType?: "internal" | "external"; // 사용자 희망 망
@@ -653,7 +665,7 @@ export interface ResourceRequest {
   acceleratorCount?: number;
   deviceProfile?: string;  // 플레이버의 Cyborg device-profile (실제 VM 티켓의 가속기 표시)
   accelerators?: { kind: string; count: number }[];  // device-profile 의 가속기 종류(GPU/NPU)·개수 — 신청 시 저장
-  // Cluster — Worker 플레이버는 위 flavorId·flavorName·vcpu·ramGb·deviceProfile·accelerators, 희망 망은 networkType
+  // Cluster — Worker 플레이버는 위 flavorId·flavorName·vcpu·ramGb·deviceProfile·accelerators(희망 망은 받지 않음 — 예전 신청에만 networkType)
   clusterName?: string;
   k8sVersion?: string;
   nodeCount?: number;      // Worker 노드 수

@@ -3,7 +3,7 @@ import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Server, Play, Square, RotateCw, Trash2, Loader2, Plus, HardDrive, ArrowLeft,
-  Cpu, MemoryStick, Network as NetIcon, Database, Gauge, SlidersHorizontal, MonitorPlay,
+  Cpu, MemoryStick, Network as NetIcon, Database, Gauge, SlidersHorizontal, MonitorPlay, ShieldCheck, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
@@ -23,8 +23,10 @@ import {
   useResizeServer, useResizeConfirm, useResizeRevert,
   useProjects, useVolumes, useImages, useNetworks, useFlavors,
   useDeviceProfiles, useAccelModels, accelLabelResolver,
+  useProjectSecurityGroups, useAddServerSecurityGroup, useRemoveServerSecurityGroup,
   getServerConsoleUrl,
 } from "@/lib/iaas-api";
+import type { SecurityGroupRuleBrief } from "@/lib/types";
 
 const SSH_USER = "ubuntu";
 const STATUS_VARIANT: Record<string, "success" | "secondary" | "warning" | "outline"> = {
@@ -133,7 +135,7 @@ function ServerDetailPage() {
         <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-brand-indigo-100 text-brand-indigo-700"><Server className="size-5" /></div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="truncate font-mono text-lg font-semibold">{s.name}</h1>
+            <h1 className="break-all font-mono text-lg font-semibold">{s.name}</h1>
             <Badge variant={stVariant(s.status)} className="shrink-0 text-[10px]">{s.status}</Badge>
           </div>
           <div className="truncate font-mono text-xs text-muted-foreground">{s.id} · 프로젝트 {projName(s.tenantId)}</div>
@@ -179,7 +181,6 @@ function ServerDetailPage() {
             <Field label="이미지" value={imageName} mono />
             <Field label="키페어" value={s.keyName || "—"} mono />
             <Field label="생성일" value={fmtDateTime(s.createdAt)} mono />
-            <Field label="보안그룹" value={s.securityGroups.join(", ") || "—"} />
           </div>
           {sshIp && (
             <div className="mt-4 space-y-1.5 border-t border-border pt-3">
@@ -255,6 +256,9 @@ function ServerDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* 보안그룹 — 서버에 직접 추가/제거(Nova). 클러스터 노드 접속 등에서 별도 SG 할당용 */}
+          <SecurityGroupsCard serverId={s.id} projectId={s.tenantId} current={s.securityGroups} busy={busy} />
         </div>
       </div>
 
@@ -265,6 +269,99 @@ function ServerDetailPage() {
       <AttachNetworkDialog serverId={s.id} projectId={s.tenantId} attached={new Set(s.interfaces.map((i) => i.netId))} open={attachNetOpen} onClose={() => setAttachNetOpen(false)} />
       {isAdmin && <ResizeDialog serverId={s.id} currentFlavor={s.flavorName} open={resizeOpen} onClose={() => setResizeOpen(false)} />}
     </div>
+  );
+}
+
+// 규칙 요약 한 줄 — 예: "인바운드 TCP 22 · 0.0.0.0/0"
+function fmtSgRule(r: SecurityGroupRuleBrief): string {
+  const dir = r.direction === "ingress" ? "인바운드" : "아웃바운드";
+  const proto = (r.protocol || "any").toUpperCase();
+  const port = r.portMin == null ? "전체" : r.portMin === r.portMax ? `${r.portMin}` : `${r.portMin}-${r.portMax}`;
+  const src = r.remoteCidr || (r.remoteGroup ? "보안그룹" : "모두");
+  return `${dir} ${proto} ${port} · ${src}`;
+}
+
+// 가상서버 보안그룹 편집 — 현재 할당된 SG 배지(제거) + '추가'로 목록 다이얼로그(정보 확인 후 선택).
+function SecurityGroupsCard({ serverId, projectId, current, busy }: { serverId: string; projectId: string; current: string[]; busy: boolean }) {
+  const remove = useRemoveServerSecurityGroup();
+  const confirm = useConfirm();
+  const [addOpen, setAddOpen] = React.useState(false);
+  const pending = remove.isPending || busy;
+
+  async function doRemove(name: string) {
+    if (!(await confirm({ title: "보안그룹 제거", destructive: true, confirmLabel: "제거", description: `${name} 을(를) 이 가상서버에서 제거할까요?` }))) return;
+    remove.mutate({ serverId, name }, {
+      onSuccess: () => toast.success(`보안그룹 ${name} 제거됨`),
+      onError: (e) => toast.error("보안그룹 제거 실패", { description: String((e as Error).message) }),
+    });
+  }
+
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="size-4 text-emerald-600" /> 보안그룹 ({current.length})</div>
+        <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}><Plus className="size-3.5" /> 추가</Button>
+      </div>
+      {current.length === 0 ? (
+        <div className="p-3 text-center text-xs text-muted-foreground">할당된 보안그룹이 없습니다.</div>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {current.map((name) => (
+            <Badge key={name} variant="outline" className="gap-1 font-mono text-[11px]">
+              {name}
+              <button type="button" title="제거" disabled={pending} onClick={() => doRemove(name)}
+                className="ml-0.5 rounded-sm text-muted-foreground hover:text-rose-600 disabled:opacity-50">
+                <X className="size-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+      <AttachSecurityGroupDialog serverId={serverId} projectId={projectId} attached={new Set(current)} open={addOpen} onClose={() => setAddOpen(false)} />
+    </Card>
+  );
+}
+
+// 보안그룹 추가 다이얼로그 — 프로젝트 보안그룹 목록(이름·설명·규칙 요약)에서 골라 추가. 네트워크/볼륨 연결과 동일 방식.
+function AttachSecurityGroupDialog({ serverId, projectId, attached, open, onClose }: { serverId: string; projectId: string; attached: Set<string>; open: boolean; onClose: () => void }) {
+  const { data: sgs, isLoading } = useProjectSecurityGroups(projectId);
+  const add = useAddServerSecurityGroup();
+  const candidates = (sgs ?? []).filter((g) => !attached.has(g.name));
+  function pick(name: string) {
+    add.mutate({ serverId, name }, { onSuccess: () => { toast.success(`보안그룹 ${name} 추가됨`); onClose(); }, onError: (e) => toast.error("보안그룹 추가 실패", { description: String((e as Error).message) }) });
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !add.isPending && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader><DialogTitle>보안그룹 추가</DialogTitle><DialogDescription>이 가상서버에 추가할 보안그룹을 선택하세요. 이미 할당된 것은 제외됩니다.</DialogDescription></DialogHeader>
+        <div className="max-h-[55vh] space-y-2 overflow-y-auto py-1">
+          {isLoading ? (<div className="flex items-center gap-2 p-4 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> 조회 중…</div>)
+            : candidates.length === 0 ? (<Card className="p-6 text-center text-sm text-muted-foreground">추가할 수 있는 보안그룹이 없습니다.</Card>)
+            : candidates.map((g) => (
+              <button key={g.id} type="button" disabled={add.isPending} onClick={() => pick(g.name)}
+                className="group flex w-full cursor-pointer items-start gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-emerald-300 hover:bg-emerald-50/40 disabled:opacity-50">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-emerald-100 text-emerald-700"><ShieldCheck className="size-4" /></div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate font-mono text-sm font-semibold">{g.name}</span>
+                    <Badge variant="secondary" className="shrink-0 text-[10px]">규칙 {g.rules ?? g.ruleList?.length ?? 0}</Badge>
+                  </div>
+                  {g.description && <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{g.description}</div>}
+                  {g.ruleList && g.ruleList.length > 0 && (
+                    <div className="mt-1 flex flex-col gap-0.5">
+                      {g.ruleList.slice(0, 4).map((r, i) => (
+                        <span key={i} className="font-mono text-[10px] text-muted-foreground">· {fmtSgRule(r)}</span>
+                      ))}
+                      {g.ruleList.length > 4 && <span className="text-[10px] text-muted-foreground">… 외 {g.ruleList.length - 4}개</span>}
+                    </div>
+                  )}
+                </div>
+                <Plus className="size-4 shrink-0 text-muted-foreground group-hover:text-emerald-600" />
+              </button>
+            ))}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -54,6 +54,24 @@ def _to_image(i: dict) -> dict:
     }
 
 
+# Glance 가 관리하는 읽기전용/구조 키 — 나머지는 편집 가능한 '속성(메타데이터)'(os_distro 등)
+_RESERVED_KEYS = {
+    "id", "name", "owner", "status", "visibility", "protected",
+    "disk_format", "container_format", "min_disk", "min_ram",
+    "size", "virtual_size", "checksum", "created_at", "updated_at",
+    "file", "self", "schema", "tags", "direct_url", "locations",
+    "os_hash_algo", "os_hash_value", "os_hidden",
+}
+
+
+def _properties(i: dict) -> dict:
+    """편집 가능한 스칼라 속성만(os_distro·os_version·architecture·hw_*·okc_* 등)."""
+    return {k: str(v) for k, v in i.items() if k not in _RESERVED_KEYS and not isinstance(v, (dict, list))}
+
+
+_VIS = ("public", "private", "shared", "community")
+
+
 _PUBLIC = ("public", "community")  # 모든 프로젝트가 쓰는 이미지
 
 
@@ -103,7 +121,14 @@ def get_image(image_id: str, c: Caller = Depends(caller)):
     d = _to_image(i)
     if d["visibility"] not in _PUBLIC:
         ensure_project(c, d["tenantId"])
+    d["properties"] = _properties(i)
     return d
+
+
+def _image_detail(image_id: str) -> dict:
+    """admin 변경 후 재조회(스코프 검사 없이) — 상세 + 속성."""
+    i = _glance_req("GET", f"/images/{image_id}").json()
+    return {**_to_image(i), "properties": _properties(i)}
 
 
 class VisibilityBody(BaseModel):
@@ -113,7 +138,7 @@ class VisibilityBody(BaseModel):
 @router.patch("/images/{image_id}", dependencies=[Depends(require_admin)])
 def set_visibility(image_id: str, body: VisibilityBody):
     """이미지 가시성 변경(Glance JSON-Patch)."""
-    if body.visibility not in ("public", "private", "shared", "community"):
+    if body.visibility not in _VIS:
         raise HTTPException(400, "가시성 값이 올바르지 않습니다")
     patch = [{"op": "replace", "path": "/visibility", "value": body.visibility}]
     try:
@@ -124,7 +149,86 @@ def set_visibility(image_id: str, body: VisibilityBody):
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"가시성 변경 실패: {e}")
-    return get_image(image_id)
+    return _image_detail(image_id)
+
+
+class PropertiesBody(BaseModel):
+    set: dict[str, str] = {}      # 추가·수정할 속성
+    remove: list[str] = []        # 삭제할 속성 키
+
+
+@router.patch("/images/{image_id}/properties", dependencies=[Depends(require_admin)])
+def update_properties(image_id: str, body: PropertiesBody):
+    """이미지 속성(메타데이터) 추가·수정·삭제 — os_distro 등(Glance JSON-Patch).
+
+    PaaS 클러스터 템플릿이 요구하는 os_distro 등을 CLI 없이 포털에서 설정하기 위함.
+    """
+    bad = [k for k in list(body.set) + body.remove if k in _RESERVED_KEYS or not k.strip()]
+    if bad:
+        raise HTTPException(400, f"속성으로 수정할 수 없는 키: {', '.join(bad)}")
+    if not body.set and not body.remove:
+        raise HTTPException(400, "변경할 속성이 없습니다")
+    # Glance JSON-Patch: 커스텀 속성은 add(기존 키면 덮어씀)·remove
+    patch = [{"op": "add", "path": f"/{k}", "value": str(v)} for k, v in body.set.items()]
+    patch += [{"op": "remove", "path": f"/{k}"} for k in body.remove]
+    try:
+        _glance_req(
+            "PATCH", f"/images/{image_id}",
+            data=_json.dumps(patch),
+            headers={"Content-Type": "application/openstack-images-v2.1-json-patch"},
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"속성 변경 실패: {e}")
+    return _image_detail(image_id)
+
+
+class RegisterBody(BaseModel):
+    name: str
+    url: str                          # web-download 로 Glance 가 직접 받아올 qcow2 등 URL
+    diskFormat: str = "qcow2"
+    containerFormat: str = "bare"
+    visibility: str = "private"
+    minDisk: int = 0
+    minRam: int = 0
+    properties: dict[str, str] = {}   # 등록 시 함께 지정할 속성(os_distro 등)
+
+
+@router.post("/images", dependencies=[Depends(require_admin)], status_code=201)
+def register_image(body: RegisterBody):
+    """URL 가져오기(web-download) 등록 — 메타데이터 생성 후 Glance 가 URL 에서 직접 내려받음.
+
+    대용량 바이너리가 포털을 경유하지 않아 안정적. Glance 가 web-download import 를
+    지원해야 하며(enabled_import_methods), 반환 직후 상태는 보통 importing(비동기).
+    """
+    if not body.name.strip() or not body.url.strip():
+        raise HTTPException(400, "이름과 URL 이 필요합니다")
+    vis = body.visibility if body.visibility in _VIS else "private"
+    payload: dict = {
+        "name": body.name.strip(),
+        "disk_format": body.diskFormat,
+        "container_format": body.containerFormat,
+        "visibility": vis,
+    }
+    if body.minDisk:
+        payload["min_disk"] = int(body.minDisk)
+    if body.minRam:
+        payload["min_ram"] = int(body.minRam)
+    for k, v in body.properties.items():
+        if k.strip() and k not in _RESERVED_KEYS:
+            payload[k] = str(v)
+    try:
+        created = _glance_req("POST", "/images", data=_json.dumps(payload),
+                              headers={"Content-Type": "application/json"}).json()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"이미지 생성 실패: {e}")
+    image_id = created["id"]
+    import_payload = {"method": {"name": "web-download", "uri": body.url.strip()}}
+    try:
+        _glance_req("POST", f"/images/{image_id}/import", data=_json.dumps(import_payload),
+                    headers={"Content-Type": "application/json"})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"이미지 가져오기 시작 실패(Glance 가 web-download 를 지원하지 않을 수 있음): {e}")
+    return _image_detail(image_id)
 
 
 @router.delete("/images/{image_id}", status_code=204, dependencies=[Depends(require_admin)])

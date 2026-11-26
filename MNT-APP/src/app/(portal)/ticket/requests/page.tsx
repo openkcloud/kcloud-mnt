@@ -66,6 +66,7 @@ import {
   WorkspaceLimitFields, limitsBody, limitsOf, limitsOk, limitsText, toLimitsInput, type WorkspaceLimitsInput,
 } from "@/components/workspace-requests";
 import { ClusterReviewContent, isClusterReview, type ClusterProvisionValue } from "@/components/cluster-ticket-review";
+import { AccelBadge, useAccelModel } from "@/components/cluster-node-fields";
 import { accKindClass, cn, formatDateTime } from "@/lib/utils";
 import type {
   ClusterProvisionSpec, ProvisionSpec, ProvisionStep, ProvisionStepsResp, ProvStepStatus, ResourceRequest, RequestStatus,
@@ -152,8 +153,8 @@ function toProvisionBody(spec: ProvisionSpec) {
   };
 }
 
-// 신청 ID · 자원 이름 — 누르면 복사(행 클릭의 상세 열기 대신)
-function CopyCell({ value, label, className }: { value: string; label: string; className?: string }) {
+// 신청 ID · 자원 이름 — 누르면 복사(행 클릭의 상세 열기 대신). after: 값 뒤에 붙는 부가 요소(유형 배지 등)
+function CopyCell({ value, label, className, after }: { value: string; label: string; className?: string; after?: React.ReactNode }) {
   return (
     <TableCell
       title={`클릭해서 ${label} 복사`}
@@ -165,9 +166,12 @@ function CopyCell({ value, label, className }: { value: string; label: string; c
       }}
     >
       {/* 칸 전체가 복사 영역 — 마우스를 올리면 값·아이콘에 배경(테마 색 border: 라이트 #e2e8f0) */}
-      <span className="-mx-1.5 rounded-md px-1.5 py-1 transition-colors group-hover:bg-border">
-        {value}
-        <Copy className="ml-1 inline-block size-3 align-[-2px] text-muted-foreground group-hover:text-primary" />
+      <span className="inline-flex items-center gap-1.5">
+        <span className="-mx-1.5 rounded-md px-1.5 py-1 transition-colors group-hover:bg-border">
+          {value}
+          <Copy className="ml-1 inline-block size-3 align-[-2px] text-muted-foreground group-hover:text-primary" />
+        </span>
+        {after}
       </span>
     </TableCell>
   );
@@ -194,6 +198,13 @@ function nameOf(r: ResourceRequest) {
   return (r.type === "vm" ? r.vmName : r.type === "cluster" ? r.clusterName : r.workspaceName) || "—";
 }
 
+// 목록 '신청 제목' 칸 — 한 줄 말줄임(…), 전체는 상세에서. 가장 넓게 쓰는 열
+function TitleCell({ r }: { r: ResourceRequest }) {
+  return r.title
+    ? <div className="truncate text-sm" title={r.title}>{r.title}</div>
+    : <span className="text-xs text-muted-foreground">—</span>;
+}
+
 // 목록 '프로젝트 · 신청자' 칸 — 두 줄: 프로젝트 / 신청자 (신청자 본인 조직)
 function ProjectRequesterCell({ r }: { r: ResourceRequest }) {
   return (
@@ -206,23 +217,18 @@ function ProjectRequesterCell({ r }: { r: ResourceRequest }) {
 
 // 목록 스펙 칸 — VM: 플레이버 + 가속기 배지 / 클러스터: 노드 수 + Worker 플레이버 + 가속기 배지 / AI 워크스페이스: 한도
 function SpecCell({ r }: { r: ResourceRequest }) {
+  const modelOf = useAccelModel();
   if (r.type === "ai-workspace") return <>{limitsText(limitsOf(r))}</>;
   const accels = r.accelerators?.length ? r.accelerators
     : r.acceleratorKind ? [{ kind: r.acceleratorKind, count: r.acceleratorCount ?? 1 }] // 목업 티켓
     : [];
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
-      {r.type === "cluster" && <span className="text-muted-foreground">CP×{r.masterCount ?? 0} · Worker×{r.nodeCount ?? 0}</span>}
+      {r.type === "cluster" && <span className="text-muted-foreground">CP×{r.masterCount ?? 0} / Worker×{r.nodeCount ?? 0}</span>}
       {r.flavorName ?? "—"}
-      {accels.map((a) => (
-        <Badge key={a.kind} variant="ghost" className={cn("h-5 gap-1 px-1.5 text-[10px]", accKindClass(a.kind))}>
-          <Cpu className="size-3" />{a.kind} × {a.count}
-        </Badge>
-      ))}
+      {accels.map((a) => <AccelBadge key={a.kind} kind={a.kind} model={modelOf(r.deviceProfile)} count={a.count} />)}
       {/* 가속기는 있으나 종류를 모를 때(종류 저장 전 티켓) */}
-      {!accels.length && r.deviceProfile && (
-        <Badge variant="ghost" className={cn("h-5 gap-1 px-1.5 text-[10px]", accKindClass())}><Cpu className="size-3" />가속기</Badge>
-      )}
+      {!accels.length && r.deviceProfile && <AccelBadge />}
     </span>
   );
 }
@@ -267,18 +273,15 @@ function NetworkWish({ r }: { r: ResourceRequest }) {
 
 // 가속기 배지 묶음 — VM·클러스터 Worker 스펙 공용
 function AccelBadges({ r }: { r: ResourceRequest }) {
+  const modelOf = useAccelModel();
   return r.accelerators?.length
     ? (
       <span className="inline-flex flex-wrap items-center justify-end gap-1">
-        {r.accelerators.map((a) => (
-          <Badge key={a.kind} variant="ghost" className={cn("gap-1 font-mono", accKindClass(a.kind))}>
-            <Cpu className="size-3" />{a.kind} × {a.count}
-          </Badge>
-        ))}
+        {r.accelerators.map((a) => <AccelBadge key={a.kind} kind={a.kind} model={modelOf(r.deviceProfile)} count={a.count} />)}
       </span>
     )
     : r.deviceProfile
-    ? <Badge variant="ghost" className={cn("gap-1 font-mono", accKindClass())}><Cpu className="size-3" />가속기</Badge>
+    ? <AccelBadge />
     : <span className="text-muted-foreground">없음</span>;
 }
 
@@ -305,9 +308,10 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
           {isVm ? <Server className="size-5" /> : isWs ? <BrainCircuit className="size-5" /> : <Boxes className="size-5" />}
         </div>
         <div className="min-w-0 flex-1">
-          <div className={cn("truncate text-base font-semibold", serverId && "underline-offset-2 group-hover:underline")}>
+          <div className={cn("break-words text-base font-semibold", serverId && "underline-offset-2 group-hover:underline")}>
             {isVm ? (r.vmName || "가상머신") : isWs ? (r.workspaceName || "AI 워크스페이스") : (r.clusterName || "서비스 클러스터")}
           </div>
+          {r.title && <div className="mt-0.5 break-words text-sm text-foreground">{r.title}</div>}
           <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
             {r.orgName && <><Building2 className="size-3" /><span>{r.orgName}</span><span className="text-muted-foreground/40">·</span></>}
             <FolderKanban className="size-3" />
@@ -328,25 +332,15 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
               <Cpu className="size-3.5 text-rose-600" /> 스펙
             </div>
             <Field label="스펙"><span className="font-mono">{r.flavorName ?? "—"}</span></Field>
-            <Field label="vCPU · 메모리"><span className="font-mono">{r.vcpu ?? "—"} vCPU · {r.ramGb ?? "—"} GB</span></Field>
+            <Field label="vCPU · 메모리"><span className="font-mono">{r.vcpu ?? "—"} vCPU / {r.ramGb ?? "—"} GB</span></Field>
             <Field label="디스크">
               <span className="font-mono">{r.diskGb ? `${r.diskGb} GB` : r.volumeGb ? `부팅 볼륨 ${r.volumeGb} GB` : "—"}</span>
             </Field>
             <Field label="가속기">
-              {r.accelerators?.length
-                ? (
-                  <span className="inline-flex flex-wrap items-center justify-end gap-1">
-                    {r.accelerators.map((a) => (
-                      <Badge key={a.kind} variant="ghost" className={cn("gap-1 font-mono", accKindClass(a.kind))}>
-                        <Cpu className="size-3" />{a.kind} × {a.count}
-                      </Badge>
-                    ))}
-                  </span>
-                )
-                : r.deviceProfile
-                ? <Badge variant="ghost" className={cn("gap-1 font-mono", accKindClass())}><Cpu className="size-3" />가속기</Badge>
+              {r.accelerators?.length || r.deviceProfile
+                ? <AccelBadges r={r} />
                 : r.acceleratorKind
-                ? <Badge variant="ghost" className={cn("gap-1 font-mono", accKindClass(r.acceleratorKind))}><Cpu className="size-3" />{r.acceleratorKind} × {r.acceleratorCount ?? 1}</Badge>
+                ? <AccelBadge kind={r.acceleratorKind} count={r.acceleratorCount ?? 1} />
                 : <span className="text-muted-foreground">없음</span>}
             </Field>
           </div>
@@ -392,7 +386,6 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
               <span className="font-mono">{(r.kubeVersion ?? r.k8sVersion) ? `v${r.kubeVersion ?? r.k8sVersion}` : "—"}</span>
             </Field>
             <Field label="네임스페이스"><span className="font-mono">{r.result?.namespace ?? r.namespace ?? "—"}</span></Field>
-            <Field label="희망 네트워크"><NetworkWish r={r} /></Field>
             <Field label="용도">{r.purpose || <span className="text-muted-foreground">—</span>}</Field>
           </div>
           <div className="space-y-2.5 rounded-xl border border-border p-3.5">
@@ -400,9 +393,9 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
               <Server className="size-3.5 text-rose-600" /> 노드 (신청)
             </div>
             <Field label="Control Plane">
-              <span className="font-mono">{r.masterCount ?? 0} 대 · {r.masterFlavorName ?? r.masterFlavorId ?? "—"}</span>
+              <span className="font-mono">{r.masterCount ?? 0} 대 / {r.masterFlavorName ?? r.masterFlavorId ?? "—"}</span>
             </Field>
-            <Field label="Worker"><span className="font-mono">{r.nodeCount ?? 0} 대 · {r.flavorName ?? "—"}</span></Field>
+            <Field label="Worker"><span className="font-mono">{r.nodeCount ?? 0} 대 / {r.flavorName ?? "—"}</span></Field>
             <Field label="Worker 가속기"><AccelBadges r={r} /></Field>
             <Field label="키페어">
               <span className="inline-flex items-center gap-1 font-mono">
@@ -420,8 +413,8 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
             <Network className="size-3.5 text-sky-600" /> 프로비저닝 설정
           </div>
           <Field label="네트워크 · 서브넷"><span className="font-mono">{cp.networkName} · {cp.subnetCidr}</span></Field>
-          <Field label="Control Plane"><span className="font-mono">{cp.masterCount} 대 · {cp.masterFlavorName}</span></Field>
-          <Field label="Worker"><span className="font-mono">{cp.nodeCount} 대 · {cp.flavorName}</span></Field>
+          <Field label="Control Plane"><span className="font-mono">{cp.masterCount} 대 / {cp.masterFlavorName}</span></Field>
+          <Field label="Worker"><span className="font-mono">{cp.nodeCount} 대 / {cp.flavorName}</span></Field>
           {r.result?.apiAddress && <Field label="API 주소"><span className="font-mono text-brand-mint-700">{r.result.apiAddress}</span></Field>}
           {r.result?.clusterId && <Field label="클러스터 ID"><span className="font-mono text-xs">{r.result.clusterId}</span></Field>}
         </div>
@@ -1448,14 +1441,14 @@ function AdminView() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>신청 ID</TableHead>
-                <TableHead>유형</TableHead>
-                <TableHead>프로젝트 · 신청자</TableHead>
-                <TableHead>자원 이름</TableHead>
-                <TableHead>스펙</TableHead>
-                <TableHead>신청 일시</TableHead>
-                <TableHead><StatusHelpHead /></TableHead>
-                <TableHead className="text-right">액션</TableHead>
+                <TableHead className="w-0 whitespace-nowrap">신청 ID</TableHead>
+                <TableHead className="w-0 whitespace-nowrap">프로젝트 · 신청자</TableHead>
+                <TableHead>신청 제목</TableHead>
+                <TableHead className="w-0 whitespace-nowrap">자원 이름</TableHead>
+                <TableHead className="w-0 whitespace-nowrap">스펙</TableHead>
+                <TableHead className="w-0 whitespace-nowrap">신청 일시</TableHead>
+                <TableHead className="w-0 whitespace-nowrap"><StatusHelpHead /></TableHead>
+                <TableHead className="w-0 whitespace-nowrap text-right">액션</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1466,13 +1459,13 @@ function AdminView() {
                 const inProvision = IN_PROVISION.includes(r.status);
                 return (
                   <TableRow key={r.id} className="cursor-pointer" onClick={() => openDetail(r)}>
-                    <CopyCell value={r.id} label="신청 ID" className="whitespace-nowrap font-semibold" />
-                    <TableCell><TypeBadge type={r.type} /></TableCell>
-                    <TableCell><ProjectRequesterCell r={r} /></TableCell>
-                    <CopyCell value={nameOf(r)} label="자원 이름" />
-                    <TableCell className="font-mono text-xs"><SpecCell r={r} /></TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
-                    <TableCell><StatusBadge status={r.status} /></TableCell>
+                    <CopyCell value={r.id} label="신청 ID" className="whitespace-nowrap font-semibold" after={<TypeBadge type={r.type} />} />
+                    <TableCell className="whitespace-nowrap"><ProjectRequesterCell r={r} /></TableCell>
+                    <TableCell className="max-w-0"><TitleCell r={r} /></TableCell>
+                    <CopyCell value={nameOf(r)} label="자원 이름" className="whitespace-nowrap" />
+                    <TableCell className="whitespace-nowrap font-mono text-xs"><SpecCell r={r} /></TableCell>
+                    <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
+                    <TableCell className="whitespace-nowrap"><StatusBadge status={r.status} /></TableCell>
                     <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                       {actionable ? (
                         <div className="flex justify-end gap-2">
@@ -1517,8 +1510,8 @@ function AdminView() {
                             : <Loader2 className="size-3.5 animate-spin" />}
                           진행 보기
                         </Button>
-                      ) : r.status === "rejected" && rejectReasonOf(r) ? (
-                        <span className="text-xs text-muted-foreground">{rejectReasonOf(r)}</span>
+                      ) : r.status === "rejected" ? (
+                        <span className="text-xs text-muted-foreground">반려됨</span>
                       ) : null}
                     </TableCell>
                   </TableRow>
@@ -1719,25 +1712,25 @@ function UserView({ username }: { username: string }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>신청 ID</TableHead>
-                <TableHead>유형</TableHead>
-                <TableHead>프로젝트 · 신청자</TableHead>
-                <TableHead>자원 이름</TableHead>
-                <TableHead>스펙</TableHead>
-                <TableHead>신청 일시</TableHead>
-                <TableHead><StatusHelpHead /></TableHead>
+                <TableHead className="w-0 whitespace-nowrap">신청 ID</TableHead>
+                <TableHead className="w-0 whitespace-nowrap">프로젝트 · 신청자</TableHead>
+                <TableHead>신청 제목</TableHead>
+                <TableHead className="w-0 whitespace-nowrap">자원 이름</TableHead>
+                <TableHead className="w-0 whitespace-nowrap">스펙</TableHead>
+                <TableHead className="w-0 whitespace-nowrap">신청 일시</TableHead>
+                <TableHead className="w-0 whitespace-nowrap"><StatusHelpHead /></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {items.map((r) => (
                 <TableRow key={r.id} className="cursor-pointer" onClick={() => { setDetail(r); setDetailOpen(true); }}>
-                  <CopyCell value={r.id} label="신청 ID" className="whitespace-nowrap font-semibold" />
-                  <TableCell><TypeBadge type={r.type} /></TableCell>
-                  <TableCell><ProjectRequesterCell r={r} /></TableCell>
-                  <CopyCell value={nameOf(r)} label="자원 이름" />
-                  <TableCell className="font-mono text-xs"><SpecCell r={r} /></TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
-                  <TableCell><StatusBadge status={r.status} /></TableCell>
+                  <CopyCell value={r.id} label="신청 ID" className="whitespace-nowrap font-semibold" after={<TypeBadge type={r.type} />} />
+                  <TableCell className="whitespace-nowrap"><ProjectRequesterCell r={r} /></TableCell>
+                  <TableCell className="max-w-0"><TitleCell r={r} /></TableCell>
+                  <CopyCell value={nameOf(r)} label="자원 이름" className="whitespace-nowrap" />
+                  <TableCell className="whitespace-nowrap font-mono text-xs"><SpecCell r={r} /></TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{fmtDt(r.requestedAt)}</TableCell>
+                  <TableCell className="whitespace-nowrap"><StatusBadge status={r.status} /></TableCell>
                 </TableRow>
               ))}
               {items.length === 0 && (

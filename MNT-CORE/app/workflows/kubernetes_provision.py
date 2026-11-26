@@ -31,37 +31,55 @@ RUN_MAX = WORKFLOW_MAX + CLEANUP_MAX + timedelta(minutes=5)  # 실행 제한(안
 # ── 조기 실패 판정(45분까지 기다리지 않게) — 2026-10-21 기준, 시험 근거는 judge() ─────────────
 NO_VM_MAX = timedelta(minutes=5)          # 노드 VM 이 안 생기면 실패(시험: 요청 31초 뒤 생김)
 NO_VM_WARN = timedelta(minutes=2)         # 노드 VM 이 이만큼 안 생기면 '주의' 표시
+INIT_MAX = timedelta(minutes=10)          # Control Plane VM 이 뜬 뒤 Worker VM 이 안 생기면 실패(시험: 초기화 2~2.5분)
+INIT_WARN = timedelta(minutes=5)          # 그만큼 '주의' 표시 — 성공 때 초기화 시간보다 길게
 PROBLEM_MAX = {                           # PAAS 가 본 문제가 이만큼 계속되면 실패
     "vm_error": timedelta(0),             # 노드 VM ERROR(용량·가속기 할당 등) — 바로
     "node_network": timedelta(0),         # 노드 콘솔에 IP·메타데이터 실패 문구 — 바로(문구 자체가 확정)
     "occm": timedelta(minutes=3),         # 클라우드 컨트롤러가 OpenStack API·DNS 에 닿지 못함(2번 이상 재시작)
 }
+WAITS = ("no_cp_vm", "init", "no_worker_vm")  # seen 의 대기 조건(문제 종류와 따로) — 풀리면 지우고, 다시 생기면 그때부터 센다
 
 
-def judge(s: dict, now: datetime, started: datetime, master_ready_at: datetime | None,
-          seen: dict[str, datetime]) -> tuple[str | None, str | None]:
-    """생성 중 조기 실패 판정 → (실패 사유, 주의 문구). 둘 다 없으면 정상. seen = 문제 종류별 처음 본 시각(갱신함).
+def judge(s: dict, now: datetime, seen: dict[str, datetime]) -> tuple[str | None, str | None]:
+    """생성 중 조기 실패 판정 → (실패 사유, 주의 문구). 둘 다 없으면 정상. seen = 문제 종류·대기 조건별 처음 본 시각(갱신함,
+    워크플로가 no_cp_vm 을 생성 요청 시각으로 넣어 둔다 — VM 이 있다가 사라지면 사라진 때부터).
     근거(시험): ① 노드 VM 이 안 생김 — 2026-10-21 req-261021-004 1회차(플레이버 ID, CAPO 'no flavors were found'),
     ② VM ERROR, ③ 노드가 IP·메타데이터를 못 받음 — 2026-10-19 1차(DHCP 꺼짐), ④ 클라우드 컨트롤러가 OpenStack API·DNS 에
-    못 닿음 — 2026-10-20 2~5차(compute2 게이트웨이). 성공 때는 Control Plane VM 이 요청 31초 뒤 생긴다."""
-    issues = []  # (실패 사유, 주의 문구, 시작 시각, 제한)
+    못 닿음 — 2026-10-20 2~5차(compute2 게이트웨이), ⑤ Control Plane 초기화 뒤 Worker 가 안 생김 — 2026-10-22
+    req-261022-007(외부망 LB 주소에 밖에서 못 닿아 Cluster API 가 초기화를 확인 못 함, 44분 뒤 CP VM 이 지워짐).
+    성공 때는 Control Plane VM 이 요청 31초 뒤 생기고, 뜬 뒤 2~2.5분이면 Worker VM 이 생긴다."""
+    issues = []  # (실패 사유, 주의 문구, 시작 시각, 제한, 주의 시작)
     p = s.get("problem")
     if p:
-        issues.append((p["message"], p["message"], seen.setdefault(p["code"], now), PROBLEM_MAX.get(p["code"], PROBLEM_MAX["occm"])))
-    for code in [c for c in seen if not p or c != p["code"]]:  # 사라진 문제는 다시 생기면 처음부터
+        issues.append((p["message"], p["message"], seen.setdefault(p["code"], now),
+                       PROBLEM_MAX.get(p["code"], PROBLEM_MAX["occm"]), timedelta(0)))
+    for code in [c for c in seen if c not in WAITS and (not p or c != p["code"])]:  # 사라진 문제는 다시 생기면 처음부터
         seen.pop(code)
-    minutes = int(NO_VM_MAX.total_seconds() // 60)
-    if s["cpVms"] == 0:
-        issues.append((f"Control Plane VM 이 {minutes}분 안에 만들어지지 않았습니다 — OpenStack 이 노드 VM 생성을 거절했을 수 "
-                       "있습니다(플레이버·이미지·키페어·쿼터 확인)", "Control Plane VM 이 아직 만들어지지 않았습니다", started, NO_VM_MAX))
-    elif master_ready_at and s["workerVms"] == 0:
-        issues.append((f"Worker VM 이 {minutes}분 안에 만들어지지 않았습니다 — OpenStack 이 노드 VM 생성을 거절했을 수 "
-                       "있습니다(플레이버·가속기·쿼터 확인)", "Worker VM 이 아직 만들어지지 않았습니다", master_ready_at, NO_VM_MAX))
-    for fail, _, since, limit in issues:
+    minutes, init_minutes = int(NO_VM_MAX.total_seconds() // 60), int(INIT_MAX.total_seconds() // 60)
+    waits = {  # 대기 조건 → (조건, 실패 사유, 주의 문구, 제한, 주의 시작)
+        "no_cp_vm": (s["cpVms"] == 0, f"Control Plane VM 이 {minutes}분 안에 만들어지지 않았습니다 — OpenStack 이 노드 VM 생성을 "
+                     "거절했을 수 있습니다(플레이버·이미지·키페어·쿼터 확인)", "Control Plane VM 이 아직 만들어지지 않았습니다",
+                     NO_VM_MAX, NO_VM_WARN),
+        # Cluster API 는 Control Plane 초기화를 확인한 뒤에 Worker VM 을 만든다
+        "init": (s["cpActive"] > 0 and s["workerVms"] == 0 and not s["masterReady"],
+                 f"Control Plane VM 이 뜬 뒤 {init_minutes}분 동안 Worker VM 이 만들어지지 않았습니다 — Control Plane 초기화가 "
+                 "멈췄거나(노드 초기화·클러스터 API 주소 접근) OpenStack 이 Worker VM 생성을 거절했을 수 있습니다",
+                 "Control Plane VM 이 뜬 뒤 Worker VM 이 아직 만들어지지 않았습니다", INIT_MAX, INIT_WARN),
+        "no_worker_vm": (s["masterReady"] and s["workerVms"] == 0, f"Worker VM 이 {minutes}분 안에 만들어지지 않았습니다 — "
+                         "OpenStack 이 노드 VM 생성을 거절했을 수 있습니다(플레이버·가속기·쿼터 확인)",
+                         "Worker VM 이 아직 만들어지지 않았습니다", NO_VM_MAX, NO_VM_WARN),
+    }
+    for key, (on, fail, warn, limit, warn_at) in waits.items():
+        if on:
+            issues.append((fail, warn, seen.setdefault(key, now), limit, warn_at))
+        else:
+            seen.pop(key, None)
+    for fail, _, since, limit, _ in issues:
         if now - since >= limit:
             return fail, None
-    for _, warn, since, limit in issues:
-        if limit != NO_VM_MAX or now - since >= NO_VM_WARN:
+    for _, warn, since, _, warn_at in issues:
+        if now - since >= warn_at:
             return None, f"주의: {warn} ({int((now - since).total_seconds() // 60)}분째)"
     return None, None
 
@@ -104,8 +122,7 @@ class KubernetesProvision(ProvisionSteps):
 
         # 생성 요청(1회) — 다시 보내면 중복 생성 위험. 응답이 끊기면 정리 때 이름으로 찾아 지운다
         self.requested = True
-        spec = {"name": inp["clusterName"], "keypair": inp.get("keypair"),
-                "externalNetwork": inp.get("externalNetwork", False), **{k: inp[k] for k in (
+        spec = {"name": inp["clusterName"], "keypair": inp.get("keypair"), **{k: inp[k] for k in (
             "templateId", "masterCount", "masterFlavorId", "nodeCount", "flavorId", "networkId", "subnetId")}}
         self.cluster_id = await self._paas("paas.create_cluster", inp["projectId"], spec, retry=NO_RETRY,
                                            timeout=timedelta(seconds=90))
@@ -124,8 +141,8 @@ class KubernetesProvision(ProvisionSteps):
             ("create_control_plane", lambda s: s["masterReady"], lambda s: None),  # 노드를 세지 않는다(Control Plane 노드그룹 완료)
             ("finish_cluster", lambda s: s["status"] == "CREATE_COMPLETE", lambda s: None),
         ]
-        done, note, seen, master_ready_at = 0, "", {}, None
         started, until, last = workflow.now(), workflow.now() + CREATE_MAX, ""
+        done, note, seen = 0, "", {"no_cp_vm": started}
         while True:
             left = until - workflow.now()
             if left <= timedelta(0):
@@ -140,8 +157,6 @@ class KubernetesProvision(ProvisionSteps):
                 continue
             if s["status"].endswith("FAILED"):
                 raise ApplicationError(f"클러스터 생성 실패({s['status']}): {s['reason'] or '사유 없음'}")
-            if s["masterReady"] and master_ready_at is None:
-                master_ready_at = workflow.now()
             moved = False
             while done < len(stages) and stages[done][1](s):
                 values[stages[done][0]] = stages[done][2](s)
@@ -151,7 +166,7 @@ class KubernetesProvision(ProvisionSteps):
                 note = ""
             if s["status"] == "CREATE_COMPLETE":
                 break
-            fail, warn = judge(s, workflow.now(), started, master_ready_at, seen)
+            fail, warn = judge(s, workflow.now(), seen)
             if fail:
                 raise ApplicationError(fail)
             if (warn or "") != note and 0 <= self.cur < len(self.plan):

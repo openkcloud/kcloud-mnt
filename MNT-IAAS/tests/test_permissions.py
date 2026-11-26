@@ -1,4 +1,4 @@
-"""역할별 권한 — API 65개 전부. 사용자(gy.yang)는 소속 프로젝트(p-mine) 자원의 조회와
+"""역할별 권한 — API 75개 전부. 사용자(gy.yang)는 소속 프로젝트(p-mine) 자원의 조회와
 가상서버 상세의 사용자 기능(콘솔·전원·네트워크/볼륨 연결·분리)만, 나머지 쓰기와 라우터는 관리자만."""
 import httpx
 import pytest
@@ -69,11 +69,18 @@ CASES = [
     ("GET", "/images", None, A),
     ("GET", f"/projects/{MINE}/images", None, A), ("GET", f"/projects/{OTHER}/images", None, D),
     ("PATCH", "/images/i1", {"visibility": "public"}, D), ("DELETE", "/images/i1", None, D),
+    ("POST", "/images", {"name": "i", "url": "http://x/i.qcow2"}, D),           # URL 가져오기 등록
+    ("PATCH", "/images/i1/properties", {"set": {"os_distro": "ubuntu"}}, D),     # 속성(메타데이터) 편집
     # 플레이버
     ("GET", "/flavors", None, A), ("GET", "/device-profiles", None, A),
     ("GET", f"/projects/{MINE}/flavors", None, A), ("GET", f"/projects/{OTHER}/flavors", None, D),
     ("GET", "/placement-preview?flavorId=f1&projectId=p1", None, D),
     ("POST", "/flavors", {"name": "f", "vcpus": 1, "ramMb": 512, "diskGb": 1}, D), ("DELETE", "/flavors/f1", None, D),
+    ("POST", "/device-profiles", {"name": "dp", "accelerators": []}, D), ("DELETE", "/device-profiles/dp1", None, D),
+    ("GET", "/accelerator-devices", None, D),             # 연결 VM 에 모든 프로젝트 VM 이 보여 관리자만
+    # 키페어 — 조회는 클러스터 신청에서 고르므로 사용자도, 등록·삭제는 관리자만
+    ("GET", "/keypairs", None, A),
+    ("POST", "/keypairs", {"name": "k", "publicKey": "ssh-ed25519 AAAA"}, D), ("DELETE", "/keypairs/k1", None, D),
 ]
 
 
@@ -133,7 +140,8 @@ def test_승인용_네트워크의_공유_여부(monkeypatch):
     nets = [{"id": "mine", "project_id": MINE}, {"id": "ext", "project_id": OTHER, "router:external": True},
             {"id": "pub", "project_id": OTHER, "router:external": True, "shared": True}, {"id": "rbac", "project_id": OTHER}]
     fake = {"/networks": {"networks": nets}, "/subnets": {"subnets": []},
-            "/rbac-policies": {"rbac_policies": [{"object_id": "rbac", "target_tenant": MINE}]}}
+            "/rbac-policies": {"rbac_policies": [{"object_id": "rbac", "target_tenant": MINE}]},
+            "/ports": {"ports": []}, "/routers": {"routers": []}}
     monkeypatch.setattr(networks, "_neutron_get", lambda path, params=None: fake[path])
     items = client_as(USER).get(P + f"/projects/{MINE}/networks").json()["items"]
     assert {n["id"]: (n["kind"], n["shared"]) for n in items} == {
@@ -165,7 +173,7 @@ def test_승인용_네트워크_보안그룹에서_Magnum_클러스터_자원_�
     fake = {
         "/networks": {"networks": [{"id": "n1", "name": "my-network", "project_id": MINE},
                                    {"id": "n2", "name": f"k8s-clusterapi-cluster-{mag}", "project_id": MINE}]},
-        "/subnets": {"subnets": []}, "/rbac-policies": {"rbac_policies": []},
+        "/subnets": {"subnets": []}, "/rbac-policies": {"rbac_policies": []}, "/ports": {"ports": []}, "/routers": {"routers": []},
         "/security-groups": {"security_groups": [{"id": "s1", "name": "default"},
                                                  {"id": "s2", "name": f"k8s-cluster-{mag}-secgroup-worker"},
                                                  {"id": "s3", "name": f"k8s-cluster-{mag}-secgroup-controlplane"}]},

@@ -128,7 +128,7 @@ def _ticket_name_taken(db: Session, project_id: str, name: str) -> bool:
 
 
 _SELECT = """
-    SELECT r.id, r.type, r.status, r.project_id, r.request_spec, r.provision_spec, r.result,
+    SELECT r.id, r.type, r.status, r.project_id, r.request_spec, r.provision_spec, r.result, r.title,
            r.approved_at, r.provisioning_at, r.approved_reject_at, r.approved_reject_reason,
            r.provisioning_reject_at, r.provisioning_reject_reason, r.error_message, r.created_at,
            u.username, u.name AS requester_name, ro.name AS requester_org_name, o.id AS org_id, o.name AS org_name,
@@ -140,7 +140,7 @@ _SELECT = """
       JOIN iam_user u ON u.id = r.requested_by
       LEFT JOIN iam_org ro ON ro.id = u.org_id  -- 신청자 본인 조직(관리자는 다른 조직 프로젝트에도 신청)
       JOIN iam_project p ON p.project_id = r.project_id
-      JOIN iam_org o ON o.id = p.org_id
+      LEFT JOIN iam_org o ON o.id = p.org_id  -- 프로젝트 조직은 선택(v0.4)
       LEFT JOIN iam_user ap ON ap.id = r.approved_by
       LEFT JOIN iam_user pv ON pv.id = r.provisioning_by
       LEFT JOIN iam_user ar ON ar.id = r.approved_reject_by
@@ -158,12 +158,13 @@ def _to_item(r) -> dict:
         **r["request_spec"],
         "id": r["id"],  # 신청 ID (req-YYMMDD-NNN)
         "type": r["type"],
+        "title": r["title"],  # 신청 제목(별도 컬럼) — request_spec 과 분리
         "status": r["status"],
         "requestedBy": r["username"],
         "requestedByName": r["requester_name"],
         "requesterOrgName": r["requester_org_name"],  # 신청자 조직 — orgId·orgName 은 프로젝트 조직
         "requestedAt": r["created_at"].isoformat(),
-        "orgId": str(r["org_id"]),
+        "orgId": str(r["org_id"]) if r["org_id"] is not None else None,
         "orgName": r["org_name"],
         "projectId": r["project_id"],
         "provisionSpec": r["provision_spec"],
@@ -269,6 +270,7 @@ def list_tickets(requestedBy: str | None = None, status: str | None = None, type
 class CreateTicketBody(BaseModel):
     requestedBy: str | None = None  # 옛 화면 호환용 — 쓰지 않음(신청자 = 토큰 사용자)
     projectId: str               # OpenStack 프로젝트 UUID
+    title: str | None = None     # 신청 제목(선택) — 별도 컬럼
     vmName: str
     networkType: str             # 희망 망: internal(내부망) | external(인터넷망)
     floatingIp: bool = False     # 공인 IP 희망 (인터넷망일 때만)
@@ -367,9 +369,10 @@ def create_ticket(body: CreateTicketBody, user: CurrentUser = Depends(current_us
         "novaKeypair": body.novaKeypair,
     }
     db.execute(
-        text("""INSERT INTO tkt_request (id, type, project_id, requested_by, request_spec)
-                VALUES (:id, 'vm', :p, :u, CAST(:s AS jsonb))"""),
+        text("""INSERT INTO tkt_request (id, type, project_id, requested_by, title, request_spec)
+                VALUES (:id, 'vm', :p, :u, :t, CAST(:s AS jsonb))"""),
         {"id": ticket_id, "p": body.projectId, "u": user_id,
+         "t": (body.title or "").strip() or None,
          "s": json.dumps({k: v for k, v in spec.items() if v is not None}, ensure_ascii=False)},
     )
     db.commit()
@@ -874,13 +877,13 @@ def cluster_name_check(name: str, user: CurrentUser = Depends(current_user), db:
 
 class CreateClusterBody(BaseModel):
     projectId: str
+    title: str | None = None     # 신청 제목(선택) — 별도 컬럼
     clusterName: str
     templateId: str
     masterCount: int = 1
     masterFlavorId: str
     nodeCount: int = 1
-    flavorId: str                # Worker 플레이버 — 가속기는 이 플레이버의 device-profile
-    networkType: str             # 희망 망: internal(내부망) | external(인터넷망) — 실제 망·서브넷은 관리자가 프로비저닝 때
+    flavorId: str                # Worker 플레이버 — 가속기는 이 플레이버의 device-profile (망·서브넷은 관리자가 프로비저닝 때)
     keypairId: int | None = None  # iam_ssh_key.id(본인 키) — 없으면 템플릿 키페어
     novaKeypair: str | None = None  # 관리자만 — OpenStack(Nova) 키페어 이름
     purpose: str = ""
@@ -895,8 +898,6 @@ def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(c
     _check_requestable(db, body.projectId, user)
     db.rollback()  # 확인용 조회 트랜잭션을 닫는다 — 아래 외부 호출 동안 커넥션을 잡지 않게
 
-    if body.networkType not in ("internal", "external"):
-        raise HTTPException(400, "희망 네트워크는 internal 또는 external 이어야 합니다")
     _check_node_counts(body.masterCount, body.nodeCount)
     project = next((p for p in _iaas("/projects", user.token)["items"]
                     if p["id"] == body.projectId and p.get("enabled", True)), None)
@@ -949,7 +950,6 @@ def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(c
         "ramGb": worker["ramMb"] / 1024,
         "deviceProfile": worker["accelerator"],
         "accelerators": worker.get("accelerators") or None,
-        "networkType": body.networkType,
         "keypairId": str(keypair["id"]) if keypair else None,
         "keypairName": keypair["name"] if keypair else body.novaKeypair,
         "novaKeypair": body.novaKeypair,
@@ -957,9 +957,10 @@ def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(c
         "purpose": body.purpose.strip()[:300],
     }
     db.execute(
-        text("""INSERT INTO tkt_request (id, type, project_id, requested_by, request_spec)
-                VALUES (:id, 'cluster', :p, :u, CAST(:s AS jsonb))"""),
+        text("""INSERT INTO tkt_request (id, type, project_id, requested_by, title, request_spec)
+                VALUES (:id, 'cluster', :p, :u, :t, CAST(:s AS jsonb))"""),
         {"id": ticket_id, "p": body.projectId, "u": user.id,
+         "t": (body.title or "").strip() or None,
          "s": json.dumps({k: v for k, v in spec.items() if v is not None}, ensure_ascii=False)},
     )
     db.commit()
@@ -1023,24 +1024,23 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
         raise HTTPException(400, "클러스터 템플릿에 외부 네트워크(API Floating IP 풀)가 없습니다")
     master, worker = _cluster_flavors(pid, ps.masterFlavorId or rs["masterFlavorId"], ps.flavorId or rs["flavorId"], token)
 
-    # 망·서브넷 — 프로젝트가 쓸 수 있는 망(외부망은 공유된 것만), DHCP 켜진 서브넷, 그 서브넷으로 API 에 Floating IP 를 붙일 수
-    # 있어야 — 외부망에 바로 붙이면 API 는 Floating IP 없이 그 망 주소로 열린다(PAAS 가 API 공인 IP 를 끈다)
-    net = next((n for n in _iaas(_project_path(pid) + "/networks", token)["items"]
-                if n["id"] == ps.networkId and (n["kind"] != "external" or n.get("shared"))), None)
-    external = net is not None and net["kind"] == "external"
+    # 망·서브넷 — 프로젝트가 쓸 수 있는 망(외부망 제외), DHCP 켜진 서브넷, 그 서브넷으로 API 에 Floating IP 를 붙일 수 있어야.
+    # 외부망에 노드를 바로 붙이면 API 로드밸런서(OVN) 주소에 밖에서 닿지 못한다(2026-10-22 req-261022-007 — No route to host)
+    net = next((n for n in _iaas(_project_path(pid) + "/networks", token)["items"] if n["id"] == ps.networkId), None)
     if not net:
         raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
+    if net["kind"] == "external":
+        raise HTTPException(400, "외부망에는 클러스터를 만들 수 없습니다 — 클러스터 API 주소(로드밸런서)에 밖에서 닿지 못합니다")
     subnet = next((s for s in _iaas(f"/networks/{quote(net['id'], safe='')}", token)["subnets"] if s["id"] == ps.subnetId),
                   None)
     if not subnet:
         raise HTTPException(400, "서브넷이 고른 네트워크에 속하지 않습니다")
     if not subnet["dhcp"]:
         raise HTTPException(400, "DHCP 가 꺼진 서브넷에는 노드가 주소를 받지 못합니다")
-    if not external:
-        chk = _iaas(f"/networks/{quote(net['id'], safe='')}/fip-reachable?floatingNetworkId={quote(floating, safe='')}"
-                    f"&subnetId={quote(subnet['id'], safe='')}", token)
-        if not chk["reachable"]:
-            raise HTTPException(400, f"클러스터 API 에 Floating IP 를 붙일 수 없는 네트워크입니다\n{chk['reason']}")
+    chk = _iaas(f"/networks/{quote(net['id'], safe='')}/fip-reachable?floatingNetworkId={quote(floating, safe='')}"
+                f"&subnetId={quote(subnet['id'], safe='')}", token)
+    if not chk["reachable"]:
+        raise HTTPException(400, f"클러스터 API 에 Floating IP 를 붙일 수 없는 네트워크입니다\n{chk['reason']}")
 
     # 쿼터 — 노드 VM 수·vCPU·RAM. 실행 때 워크플로가 다시 본다(그 사이 다른 VM 이 쓸 수 있다)
     need = {"instances": master_count + node_count,
@@ -1061,6 +1061,11 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
         if changed:
             raise HTTPException(400, "OpenStack 키페어를 찾을 수 없습니다")
         raise HTTPException(409, f"신청한 키페어({key_name})가 OpenStack 에 없어 노드에 넣을 수 없습니다"
+                                 " — 프로비저닝 설정에서 다른 키페어를 고르세요")
+    # 키페어를 넘기지 않으면 Magnum 이 템플릿 키페어를 넣는다 — 그것도 OpenStack 에 있어야 한다(없으면 생성 요청이 거절됨)
+    tpl_key = template.get("keypair_id")
+    if not key_name and tpl_key and not _nova_keypair(tpl_key, token):
+        raise HTTPException(409, f"템플릿 키페어({tpl_key})가 OpenStack 에 없어 노드에 넣을 수 없습니다"
                                  " — 프로비저닝 설정에서 다른 키페어를 고르세요")
 
     spec = {"networkId": net["id"], "networkName": net["name"], "subnetId": subnet["id"], "subnetCidr": subnet["cidr"],
@@ -1087,7 +1092,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     inp = {"ticketId": ticket_id, "attempt": attempt, "projectId": pid, "projectName": rs["projectName"],
            "clusterName": rs["clusterName"], "templateId": rs["templateId"], "masterCount": master_count,
            "masterFlavorId": master["id"], "nodeCount": node_count, "flavorId": worker["id"],
-           "networkId": net["id"], "subnetId": subnet["id"], "floatingNetworkId": floating, "externalNetwork": external,
+           "networkId": net["id"], "subnetId": subnet["id"], "floatingNetworkId": floating,
            "keypair": key_name or None, "namespace": rs["namespace"], "need": need}
     prev = {"status": t["status"], "provisionSpec": t["provision_spec"], "provisioningBy": t["provisioning_by"],
             "provisioningAt": _iso(t["provisioning_at"]), "workflowId": t["workflow_id"],
