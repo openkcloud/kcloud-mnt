@@ -6,7 +6,9 @@
  */
 import * as React from "react";
 import { Search, Loader2, Layers, Plus, Scale, RotateCw, Trash2, ScrollText, FileCode, Maximize2, Minimize2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -386,7 +388,7 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="max-h-[88vh] w-[90vw] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>워크로드 생성</DialogTitle>
           <DialogDescription>폼(Deployment/StatefulSet) 또는 YAML(Job·CronJob 등 모든 종류).</DialogDescription>
@@ -494,7 +496,7 @@ function CreateDialog({ clusterId, defaultNs, onClose }: { clusterId: string; de
                     </SelectContent>
                   </Select>
                 </div>
-                <textarea value={yaml} onChange={(e) => setYaml(e.target.value)} rows={16} className={TEXTAREA_CLS} spellCheck={false} />
+                <textarea value={yaml} onChange={(e) => setYaml(e.target.value)} rows={20} className={TEXTAREA_CLS} spellCheck={false} />
                 <DialogFooter>
                   <Button variant="outline" onClick={onClose}>취소</Button>
                   <Button disabled={pending || previewing || !yaml.trim()} onClick={requestPreview}>
@@ -516,7 +518,7 @@ function PodsDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
   const [logPod, setLogPod] = React.useState<PodRow | null>(null);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+      <DialogContent className="max-h-[85vh] w-[92vw] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Layers className="size-4 text-brand-indigo-600" /> {w.name} · 파드</DialogTitle>
           <DialogDescription className="font-mono text-xs">{w.kind} · {w.namespace}</DialogDescription>
@@ -527,7 +529,7 @@ function PodsDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
           <Card className="overflow-hidden">
             <Table>
               <TableHeader>
-                <TableRow>
+                <TableRow className="[&>th]:whitespace-nowrap">
                   <TableHead>파드</TableHead><TableHead>상태</TableHead><TableHead>Ready</TableHead>
                   <TableHead>재시작</TableHead><TableHead>노드</TableHead><TableHead className="w-16" />
                 </TableRow>
@@ -558,34 +560,42 @@ function PodsDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
 
 function LogsDialog({ clusterId, namespace, pod, onClose }: { clusterId: string; namespace: string; pod: PodRow; onClose: () => void }) {
   const [container, setContainer] = React.useState(pod.containers[0] ?? "");
-  const [logs, setLogs] = React.useState<string>("불러오는 중…");
-  const [big, setBig] = React.useState(false); // 확대 토글
-  React.useEffect(() => {
-    let alive = true;
-    fetchPodLogs(clusterId, namespace, pod.name, container || undefined)
-      .then((d) => { if (alive) setLogs(d.logs || "(로그 없음)"); })
-      .catch((e) => { if (alive) setLogs(`로그 조회 실패: ${e.message}`); });
-    return () => { alive = false; };
-  }, [clusterId, namespace, pod.name, container]);
+  const [big, setBig] = React.useState(false);   // 확대 토글
+  const [live, setLive] = React.useState(false); // 실시간(주기 재조회)
+  const logsQ = useQuery({
+    queryKey: ["paas-pod-logs", clusterId, namespace, pod.name, container],
+    queryFn: () => fetchPodLogs(clusterId, namespace, pod.name, container || undefined).then((d) => d.logs || "(로그 없음)"),
+    refetchInterval: live ? 3000 : false, // 켜면 3초마다 최근 500줄 다시 가져옴
+    retry: 0,
+  });
+  const logs = logsQ.isLoading ? "불러오는 중…"
+    : logsQ.isError ? `로그 조회 실패: ${(logsQ.error as Error).message}`
+    : (logsQ.data ?? "");
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className={cn("overflow-hidden", big ? "h-[94vh] w-[98vw] max-w-none" : "max-h-[88vh] w-[92vw] max-w-5xl")}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 font-mono text-sm">{pod.name}</DialogTitle>
-          <DialogDescription className="flex items-center gap-2">
-            {pod.containers.length > 1 && (
-              <Select value={container} onValueChange={setContainer}>
-                <SelectTrigger className="h-7 w-48"><SelectValue /></SelectTrigger>
-                <SelectContent>{pod.containers.map((c) => <SelectItem key={c} value={c} className="font-mono text-xs">{c}</SelectItem>)}</SelectContent>
-              </Select>
-            )}
-            <span className="text-[11px] text-muted-foreground">최근 500줄 · 긴 줄은 가로 스크롤 · 아래 모서리를 끌어 높이 조절</span>
-          </DialogDescription>
+          <DialogDescription className="text-[11px] text-muted-foreground">최근 500줄 · 긴 줄은 가로 스크롤 · 아래 모서리를 끌어 높이 조절</DialogDescription>
           {/* 확대/축소 토글 — 기본 닫기(X)는 우상단, 그 왼쪽에 둔다 */}
           <Button variant="ghost" size="icon-sm" className="absolute right-11 top-3.5" title={big ? "축소" : "확대"} onClick={() => setBig((v) => !v)}>
             {big ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
           </Button>
         </DialogHeader>
+        {/* 컨트롤 바 — 컨테이너 선택 + 실시간 토글 */}
+        <div className="flex items-center gap-2">
+          {pod.containers.length > 1 && (
+            <Select value={container} onValueChange={setContainer}>
+              <SelectTrigger className="h-7 w-48"><SelectValue /></SelectTrigger>
+              <SelectContent>{pod.containers.map((c) => <SelectItem key={c} value={c} className="font-mono text-xs">{c}</SelectItem>)}</SelectContent>
+            </Select>
+          )}
+          <label className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            {live && logsQ.isFetching && <Loader2 className="size-3 animate-spin" />}
+            <span>실시간</span>
+            <Switch checked={live} onCheckedChange={setLive} />
+          </label>
+        </div>
         {/* 줄바꿈 없이(whitespace-pre) 긴 줄은 가로 스크롤, 세로는 드래그로 크기 조절(resize-y) */}
         <pre className={cn(
           "resize-y overflow-auto rounded bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre",
@@ -627,7 +637,7 @@ function YamlDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
   );
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="max-h-[88vh] w-[90vw] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><FileCode className="size-4 text-brand-indigo-600" /> {w.name} · YAML</DialogTitle>
           <DialogDescription className="font-mono text-xs">{w.kind} · {w.namespace} — {preview ? "변경 미리보기 (실행 전)" : "수정 후 저장 시 server-side apply"}</DialogDescription>
@@ -645,7 +655,7 @@ function YamlDialog({ clusterId, w, onClose }: { clusterId: string; w: WorkloadR
         ) : (
           <>
             {loading ? <Skeleton className="h-80" /> : (
-              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={22} className={TEXTAREA_CLS} spellCheck={false} />
+              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={24} className={TEXTAREA_CLS} spellCheck={false} />
             )}
             <DialogFooter>
               <Button variant="outline" onClick={onClose}>닫기</Button>

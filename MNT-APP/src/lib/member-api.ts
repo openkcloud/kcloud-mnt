@@ -67,3 +67,55 @@ export function useRemoveProjectMember(projectId: string) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["core-members", projectId] }),
   });
 }
+
+// ── PaaS 서비스 클러스터 접근 권한(프로젝트↔클러스터 N:N) ──
+export interface ClusterAccess { projectId: string; namespace: string | null; createdAt: string | null }
+
+/** 내가 접근 가능한 클러스터 ID 집합 — 사용자 화면 가시성. 관리자는 undefined → 호출 안 함(전체 노출). */
+export function useMyClusterIds(username: string | undefined) {
+  return useQuery({
+    queryKey: ["core-my-clusters", username],
+    enabled: !!username,
+    queryFn: async (): Promise<Set<string>> =>
+      new Set((await coreFetch<{ clusterIds: string[] }>(`/my-cluster-ids`)).clusterIds),
+    staleTime: 60 * 1000, retry: 0,
+  });
+}
+
+/** 클러스터에 접근 가능한 프로젝트 목록(관리자 상세 모달). */
+export function useClusterAccess(clusterId: string | undefined) {
+  return useQuery({
+    queryKey: ["core-cluster-access", clusterId],
+    enabled: !!clusterId,
+    queryFn: async (): Promise<ClusterAccess[]> =>
+      (await coreFetch<{ items: ClusterAccess[] }>(`/clusters/${clusterId}/access`)).items,
+    staleTime: 30 * 1000, retry: 0,
+  });
+}
+
+export function useGrantClusterAccess(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { projectId: string; namespace?: string | null }) =>
+      coreFetch(`/clusters/${clusterId}/access`, { method: "POST", body: JSON.stringify(input) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["core-cluster-access", clusterId] });
+      qc.invalidateQueries({ queryKey: ["core-my-clusters"] });
+    },
+  });
+}
+
+export function useRevokeClusterAccess(clusterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ projectId, namespace }: { projectId: string; namespace?: string | null }) => {
+      const q = new URLSearchParams({ projectId });
+      if (namespace) q.set("namespace", namespace);
+      return coreFetch<void>(`/clusters/${clusterId}/access?${q.toString()}`, { method: "DELETE" });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["core-cluster-access", clusterId] });
+      qc.invalidateQueries({ queryKey: ["core-my-clusters"] });
+    },
+  });
+}

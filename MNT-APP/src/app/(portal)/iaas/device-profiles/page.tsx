@@ -31,6 +31,7 @@ export default function DeviceProfilesPage() {
   const confirm = useConfirm();
   const [q, setQ] = React.useState("");
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [detail, setDetail] = React.useState<DeviceProfile | null>(null);
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
   const items = data.filter((d) => !q || d.name.toLowerCase().includes(q.toLowerCase()));
@@ -81,7 +82,7 @@ export default function DeviceProfilesPage() {
           </TableHeader>
           <TableBody>
             {items.map((d) => (
-              <TableRow key={d.uuid ?? d.name}>
+              <TableRow key={d.uuid ?? d.name} className="cursor-pointer" onClick={() => setDetail(d)}>
                 <TableCell>
                   <div className="flex items-center gap-2">
                     <Cpu className="size-3.5 text-brand-indigo-600" />
@@ -98,7 +99,7 @@ export default function DeviceProfilesPage() {
                 <TableCell className="max-w-56 truncate text-sm text-muted-foreground">{d.description || "—"}</TableCell>
                 <TableCell className="text-center font-mono tabular-nums">{linkedCount(d.name)}</TableCell>
                 <TableCell className="font-mono text-[11px] text-muted-foreground">{d.uuid ?? "—"}</TableCell>
-                <TableCell>
+                <TableCell onClick={(e) => e.stopPropagation()}>
                   <Button variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending} onClick={() => remove(d)}>
                     <Trash2 className="size-3.5 text-rose-600" />
                   </Button>
@@ -113,6 +114,60 @@ export default function DeviceProfilesPage() {
       </Card>
 
       {createOpen && <CreateDialog onClose={() => setCreateOpen(false)} />}
+      {detail && <DetailDialog d={detail} onClose={() => setDetail(null)} />}
+    </div>
+  );
+}
+
+// ── 상세 보기(읽기전용) — Cyborg 는 수정 API 가 없어 조회만. 원본 groups(resources:*, trait:*) 그대로 노출 ──
+function DetailDialog({ d, onClose }: { d: DeviceProfile; onClose: () => void }) {
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Cpu className="size-4 text-brand-indigo-600" /> <span className="font-mono">{d.name}</span></DialogTitle>
+          <DialogDescription>디바이스 프로파일 상세 — Cyborg 는 수정 기능이 없어 조회만 가능합니다(변경 시 삭제 후 재생성).</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 text-xs">
+          <Field label="UUID" value={d.uuid ?? "—"} />
+          <Field label="설명" value={d.description || "—"} />
+          <div>
+            <div className="mb-1 text-[11px] font-medium text-muted-foreground">가속기(요약)</div>
+            {(d.accelerators ?? []).length
+              ? <div className="flex flex-wrap gap-1">{d.accelerators!.map((a) => (
+                  <Badge key={a.kind} variant="default" className="font-mono text-[10px]">{a.kind} ×{a.count}</Badge>
+                ))}</div>
+              : <span className="text-muted-foreground">—</span>}
+          </div>
+          <div>
+            <div className="mb-1 text-[11px] font-medium text-muted-foreground">그룹(원본) — 장치 1개당 그룹 1개</div>
+            <div className="space-y-2">
+              {(d.groups ?? []).map((g, i) => (
+                <div key={i} className="rounded-md border p-2">
+                  <div className="mb-1 text-[10px] text-muted-foreground">그룹 {i + 1}</div>
+                  <div className="flex flex-col gap-0.5 font-mono text-[11px]">
+                    {Object.entries(g).map(([k, v]) => (
+                      <div key={k} className="flex justify-between gap-2">
+                        <span className="text-slate-600">{k}</span><span className="text-slate-900">{String(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {!(d.groups ?? []).length && <span className="text-muted-foreground">그룹 정보 없음</span>}
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="break-all text-right font-mono">{value}</span>
     </div>
   );
 }

@@ -483,28 +483,27 @@ def review_ticket(ticket_id: str, body: ReviewBody, user: CurrentUser = Depends(
 class ProvisionSpecBody(BaseModel):
     networkId: str
     floatingNetworkId: str | None = None  # 내부·공유망 + Floating IP 일 때 FIP 풀(external 망)
-    fixedIp: str | None = None            # external 망 Static IP 직접 입력 (없으면 자동 할당)
+    fixedIp: str | None = None            # 고정 IP 직접 입력 — 모든 망 (없으면 DHCP 자동 할당)
     securityGroups: list[str] = []        # 보안그룹 이름 (프로젝트 라이브 조회 기준)
+    host: str | None = None               # 배치할 컴퓨트 노드(미리보기에서 고름) — 노드 지정 권한이 있을 때만, 없으면 스케줄러
 
 
-def _verified_provision_spec(project_id: str, spec: ProvisionSpecBody, token: str) -> dict:
+def _verified_provision_spec(project_id: str, flavor_id: str, spec: ProvisionSpecBody, token: str) -> dict:
     """승인 설정을 라이브 조회로 다시 확인하고, 네트워크 이름·종류 등은 서버 값으로 채운다."""
     nets = {n["id"]: n for n in _iaas(_project_path(project_id) + "/networks", token)["items"]}
     net = nets.get(spec.networkId)
     if not net:
         raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
     out = {"networkId": net["id"], "networkName": net["name"], "networkKind": net["kind"]}
+    if spec.fixedIp:  # 직접 입력(고정 IP) — 망 종류와 무관, 없으면 DHCP 자동 할당
+        chk = _iaas(f"/networks/{quote(net['id'], safe='')}/ip-check?ip={quote(spec.fixedIp, safe='')}", token)
+        if not chk["available"]:
+            raise HTTPException(409, f"Static IP {spec.fixedIp}: {chk['reason']}")
+        out["fixedIp"] = str(ipaddress.ip_address(spec.fixedIp))  # 정규화해서 저장
     if net["kind"] == "external":
         if spec.floatingNetworkId:
             raise HTTPException(400, "외부(external) 네트워크에는 Floating IP 를 함께 지정할 수 없습니다")
-        if spec.fixedIp:
-            chk = _iaas(f"/networks/{quote(net['id'], safe='')}/ip-check?ip={quote(spec.fixedIp, safe='')}", token)
-            if not chk["available"]:
-                raise HTTPException(409, f"Static IP {spec.fixedIp}: {chk['reason']}")
-            out["fixedIp"] = str(ipaddress.ip_address(spec.fixedIp))  # 정규화해서 저장
     else:
-        if spec.fixedIp:
-            raise HTTPException(400, "Static IP 는 외부(external) 네트워크에서만 지정할 수 있습니다")
         if spec.floatingNetworkId:
             fip = nets.get(spec.floatingNetworkId)
             if not fip or fip["kind"] != "external":
@@ -523,6 +522,13 @@ def _verified_provision_spec(project_id: str, spec: ProvisionSpecBody, token: st
         if sg_names.count(name) != 1:
             raise HTTPException(400, f"보안그룹 '{name}'을(를) 프로젝트에서 찾을 수 없거나 같은 이름이 여러 개입니다")
     out["securityGroups"] = list(dict.fromkeys(spec.securityGroups))  # 중복 제거, 순서 유지
+    if spec.host:  # 미리보기 뒤 권한·자원이 바뀌었을 수 있다 — 지금도 지정할 수 있고 후보인지
+        pv = _iaas(f"/placement-preview?flavorId={quote(flavor_id, safe='')}&projectId={quote(project_id, safe='')}", token)
+        if not pv["hostPinning"]:
+            raise HTTPException(409, "노드를 지정할 권한이 없습니다 — 화면을 새로 고쳐 다시 시도하세요")
+        if not any(n["host"] == spec.host and n["candidate"] for n in pv["nodes"]):
+            raise HTTPException(409, f"선택한 노드({spec.host})에는 지금 배치할 수 없습니다 — 미리보기를 새로 고쳐 다시 선택하세요")
+        out["host"] = spec.host
     return out
 
 
@@ -569,7 +575,7 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
     rs = t["request_spec"]
     db.rollback()  # MNT-IAAS 확인 동안 커넥션을 잡지 않게
 
-    spec = _verified_provision_spec(t["project_id"], body.provisionSpec, user.token)
+    spec = _verified_provision_spec(t["project_id"], rs["flavorId"], body.provisionSpec, user.token)
     if _server_name_taken(t["project_id"], rs["vmName"], user.token):  # 신청 뒤에 같은 이름 VM 이 생겼을 수 있다
         raise HTTPException(409, _SERVER_NAME_TAKEN)
 
@@ -608,6 +614,7 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         "networkLabel": spec["networkName"] + (" (external)" if spec["networkKind"] == "external" else ""),
         "fixedIp": spec.get("fixedIp"), "securityGroups": spec["securityGroups"],
         "floatingNetworkId": spec.get("floatingNetworkId"),
+        "host": spec.get("host"),
         "publicKey": public_key,
         "keypairLabel": rs.get("keypairName") or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
         "hasAccelerator": bool(rs.get("deviceProfile")),
@@ -710,8 +717,10 @@ def provision_ai_workspace_ticket(ticket_id: str, body: ProvisionAiWorkspaceBody
 def ticket_steps(ticket_id: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     """프로비저닝 진행(현재 회차) — 단계 5개와 상세 단계. 이름은 공통코드.
     현재 회차는 티켓의 workflow_id(vm-provision-{신청ID}-{회차})로 정한다 — 재시도 직후 새 회차 단계가 등록되기 전에는
-    빈 목록을 돌려준다(가장 큰 회차로 고르면 그 사이 이전 회차 기록이 보인다)."""
-    t = db.execute(text("SELECT status, result, error_message, workflow_id, requested_by FROM tkt_request WHERE id = :id"),
+    빈 목록을 돌려준다(가장 큰 회차로 고르면 그 사이 이전 회차 기록이 보인다).
+    now = 이 응답을 읽기 시작한 DB 시각 — 단계 시각(DB now())과 같은 시계라 화면이 진행 중 시간을 서버 기준으로 그린다."""
+    t = db.execute(text("""SELECT status, result, error_message, workflow_id, requested_by, clock_timestamp() AS now
+                             FROM tkt_request WHERE id = :id"""),
                    {"id": ticket_id}).mappings().first()
     if t is None or not (user.is_admin or t["requested_by"] == user.id):  # 남의 신청은 없는 것처럼
         raise HTTPException(404, "신청을 찾을 수 없습니다")
@@ -728,7 +737,7 @@ def ticket_steps(ticket_id: str, user: CurrentUser = Depends(current_user), db: 
         {"id": ticket_id, "a": attempt},
     ).mappings().all()
     subs = db.execute(
-        text("""SELECT ss.step_id, ss.substep_code, c.name, ss.value, ss.status
+        text("""SELECT ss.step_id, ss.substep_code, c.name, ss.value, ss.status, ss.started_at, ss.ended_at
                   FROM tkt_provision_substep ss
                   JOIN cmn_code c ON c.group_code = ss.substep_group_code AND c.code = ss.substep_code
                  WHERE ss.step_id = ANY(:ids)
@@ -737,13 +746,15 @@ def ticket_steps(ticket_id: str, user: CurrentUser = Depends(current_user), db: 
     ).mappings().all()
     return {
         "status": t["status"],
+        "now": _iso(t["now"]),
         "attempt": attempt,
         "errorMessage": t["error_message"],
         "result": t["result"],
         "items": [{
             "seq": s["seq"], "code": s["step_code"], "message": s["name"], "status": s["status"],
             "startedAt": _iso(s["started_at"]), "endedAt": _iso(s["ended_at"]), "error": s["error_message"],
-            "details": [{"code": d["substep_code"], "label": d["name"], "value": d["value"], "status": d["status"]}
+            "details": [{"code": d["substep_code"], "label": d["name"], "value": d["value"], "status": d["status"],
+                         "startedAt": _iso(d["started_at"]), "endedAt": _iso(d["ended_at"])}
                         for d in subs if d["step_id"] == s["id"]],
         } for s in steps],
     }

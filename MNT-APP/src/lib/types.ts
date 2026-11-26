@@ -497,6 +497,8 @@ export interface ProvisionSpec {
   // external 망 직접 연결(Static IP) — fixedIp 없으면 자동 할당
   fixedIp?: string;
   securityGroups: string[];
+  // 배치할 컴퓨트 노드 — 노드 지정 권한(hostPinning)이 있을 때만, 없으면 스케줄러가 후보 중에서 고름
+  host?: string;
 }
 
 // 프로비저닝 결과
@@ -509,6 +511,7 @@ export interface ProvisionResult {
 
 export interface ProvisionStepsResp {
   status: RequestStatus;
+  now: string;             // 응답을 읽기 시작한 DB 시각 — 단계 시각과 같은 시계(진행 중 시간을 서버 기준으로 그림)
   attempt: number;         // 표시 중인 실행 회차 (MAX(attempt))
   errorMessage?: string;
   result?: ProvisionResult;
@@ -575,6 +578,8 @@ export interface ProvisionSubStep {
   label: string;
   value?: string;
   status: ProvStepStatus;
+  startedAt?: string;
+  endedAt?: string;
 }
 
 // 단계 5개 고정 (tkt_provision_step): create_server · attach_network · attach_volume · bind_accelerator · wait_active

@@ -36,7 +36,8 @@ import { useAuth } from "@/lib/auth";
 import {
   useOrgs, useProvisionAiWorkspaceTicket, useProvisionTicket, useReviewTicket, useTickets, useTicketSteps,
 } from "@/lib/ticket-api";
-import { useIpCheck, useProjectNetworks, useProjectSecurityGroups } from "@/lib/iaas-api";
+import { useIpCheck, usePlacementPreview, useProjectNetworks, useProjectSecurityGroups } from "@/lib/iaas-api";
+import type { PlacementPreview } from "@/lib/iaas-api";
 import { PageHeader } from "@/components/page-header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +45,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -61,9 +63,8 @@ import {
   WorkspaceLimitFields, limitsBody, limitsOf, limitsOk, limitsText, toLimitsInput, type WorkspaceLimitsInput,
 } from "@/components/workspace-requests";
 import { accKindClass, cn, formatDateTime } from "@/lib/utils";
-import { nodes, vms, accelerators } from "@/mocks/fixtures";
 import type {
-  ProvisionSpec, ProvisionStep, ProvStepStatus, ResourceRequest, RequestStatus, RequestType,
+  ProvisionSpec, ProvisionStep, ProvisionStepsResp, ProvStepStatus, ResourceRequest, RequestStatus, RequestType,
 } from "@/lib/types";
 
 // ── 상태 표시 ──
@@ -127,7 +128,10 @@ function StatusHelpHead() {
 
 // 승인 설정 → 프로비저닝 API 요청 형식(네트워크 이름·종류 등은 서버가 라이브 조회로 다시 채운다)
 function toProvisionBody(spec: ProvisionSpec) {
-  return { networkId: spec.networkId, floatingNetworkId: spec.floatingNetworkId, fixedIp: spec.fixedIp, securityGroups: spec.securityGroups };
+  return {
+    networkId: spec.networkId, floatingNetworkId: spec.floatingNetworkId, fixedIp: spec.fixedIp, securityGroups: spec.securityGroups,
+    host: spec.host,
+  };
 }
 
 // 신청 ID — 누르면 복사(행 클릭의 상세 열기 대신)
@@ -220,23 +224,24 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-// 사용자 희망 망 배지
-function NetworkWish({ r }: { r: ResourceRequest }) {
-  const internet = r.networkType === "external";
+// 망 종류 배지 — 외부(external) 망만 인터넷망
+function NetKindBadge({ internet }: { internet: boolean }) {
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <Badge variant="ghost" className={cn("gap-1", internet ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
-        {internet ? <Globe className="size-3" /> : <Wifi className="size-3" />}
-        {internet ? "인터넷망" : "내부망"}
-      </Badge>
-      {r.floatingIp && <Badge variant="success">공인 IP 희망</Badge>}
-    </span>
+    <Badge variant="ghost" className={cn("gap-1", internet ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
+      {internet ? <Globe className="size-3" /> : <Wifi className="size-3" />}
+      {internet ? "인터넷망" : "내부망"}
+    </Badge>
   );
 }
 
-function ipModeLabel(p: ProvisionSpec) {
-  if (p.networkKind === "external") return p.fixedIp ? `Static IP (직접 입력 ${p.fixedIp})` : "Static IP (자동 할당)";
-  return p.floatingNetworkName ? `Floating IP (${p.floatingNetworkName})` : "사설 IP만";
+// 사용자 희망 망 배지
+function NetworkWish({ r }: { r: ResourceRequest }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <NetKindBadge internet={r.networkType === "external"} />
+      {r.floatingIp && <Badge variant="success">공인 IP 희망</Badge>}
+    </span>
+  );
 }
 
 function RequestDetailBody({ r }: { r: ResourceRequest }) {
@@ -357,10 +362,21 @@ function RequestDetailBody({ r }: { r: ResourceRequest }) {
           <div className="flex items-center gap-1.5 text-xs font-semibold">
             <Network className="size-3.5 text-sky-600" /> 할당 네트워크
           </div>
-          <Field label="네트워크"><span className="font-mono">{p.networkName}</span></Field>
-          <Field label="IP 방식">{ipModeLabel(p)}</Field>
+          <Field label="네트워크">
+            <span className="inline-flex items-center gap-1.5">
+              <NetKindBadge internet={p.networkKind === "external"} /><span className="font-mono">{p.networkName}</span>
+            </span>
+          </Field>
           <Field label="보안그룹"><span className="font-mono">{p.securityGroups.length ? p.securityGroups.join(", ") : "—"}</span></Field>
-          {r.result?.fixedIp && <Field label="고정 IP"><span className="font-mono">{r.result.fixedIp}</span></Field>}
+          {/* 받은 IP(완료 전이면 직접 입력한 IP) — 직접 입력이면 고정 IP, 아니면 DHCP 자동 할당 */}
+          {(r.result?.fixedIp ?? p.fixedIp) && (
+            <Field label="IP">
+              <span className="inline-flex items-center gap-1.5">
+                <Badge variant="secondary" className="text-[10px]">{p.fixedIp ? "고정 IP" : "DHCP"}</Badge>
+                <span className="font-mono">{r.result?.fixedIp ?? p.fixedIp}</span>
+              </span>
+            </Field>
+          )}
           {r.result?.floatingIp && <Field label="Floating IP"><span className="font-mono text-brand-mint-700">{r.result.floatingIp}</span></Field>}
         </div>
       )}
@@ -426,7 +442,7 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
 
   // 직접 입력 IP — '중복 확인' 버튼을 누른 IP 로 사용 여부 조회. 입력을 바꾸면 다시 확인해야 한다.
   const [checkedIp, setCheckedIp] = React.useState("");
-  const ipCheckReady = isExternal && ipManual && ipInRange && checkedIp === fixedIp;
+  const ipCheckReady = ipManual && ipInRange && checkedIp === fixedIp;
   const {
     data: ipCheck, isFetching: ipChecking, isError: ipCheckFailed, error: ipCheckError, refetch: recheckIp,
   } = useIpCheck(networkId, checkedIp, ipCheckReady);
@@ -439,9 +455,8 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
       networkId: net.id,
       networkName: net.name,
       networkKind: net.kind,
-      ...(isExternal
-        ? { fixedIp: ipManual ? fixedIp : undefined }
-        : fipOn && fipNet ? { floatingNetworkId: fipNet.id, floatingNetworkName: fipNet.name } : {}),
+      fixedIp: ipManual ? fixedIp : undefined, // 직접 입력 — 망 종류와 무관
+      ...(!isExternal && fipOn && fipNet ? { floatingNetworkId: fipNet.id, floatingNetworkName: fipNet.name } : {}),
       securityGroups: sgNames,
     });
   }, [net, isExternal, fipOn, fipNet, ipManual, fixedIp, ipValid, sgNames, onChange]);
@@ -493,8 +508,8 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
         {!netLoading && !netError && networks.length > 0 && !net && <p className="text-xs text-rose-500">네트워크를 선택하세요.</p>}
       </div>
 
-      {/* IP 방식 */}
-      {net && (isExternal ? (
+      {/* IP — 자동 할당(DHCP) 또는 직접 입력(고정 IP) */}
+      {net && (
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
             {[{ v: false, l: "자동 할당" }, { v: true, l: "직접 입력" }].map((o) => (
@@ -532,7 +547,9 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
               : <p className="text-xs text-rose-500">{ipCheck?.reason ?? "사용할 수 없는 IP입니다."}</p>
           )}
         </div>
-      ) : (
+      )}
+      {/* Floating IP — 내부·공유망만(외부망은 받은 IP 가 곧 공인 IP) */}
+      {net && !isExternal && (
         <div className="space-y-1.5">
           <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
             <input type="checkbox" checked={fipOn} onChange={(e) => setFipOn(e.target.checked)} className="size-3.5 accent-primary" />
@@ -547,7 +564,7 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
             </Select>
           )}
         </div>
-      ))}
+      )}
 
       {/* 보안그룹 */}
       <div className="space-y-1.5">
@@ -581,27 +598,18 @@ function ApprovalForm({ r, onChange }: { r: ResourceRequest; onChange: (spec: Pr
   );
 }
 
-// flavor명 → 특정 가속기 모델 키워드 (패스스루 노드 매칭용)
-function accelKeyword(flavorName?: string) {
-  const f = (flavorName ?? "").toLowerCase();
-  if (f.includes("a100")) return "A100";
-  if (f.includes("l40s")) return "L40S";
-  if (f.includes("rngd")) return "RNGD";
-  if (f.includes("atom")) return "ATOM";
-  return null;
-}
-
-function CapacityBar({ label, used, add, cap, unit }: { label: string; used: number; add: number; cap: number; unit: string }) {
+function CapacityBar({ label, used, add, cap, unit }: { label: React.ReactNode; used: number; add: number; cap: number; unit: string }) {
   const after = used + add;
-  const usedPct = Math.min(100, (used / cap) * 100);
-  const afterPct = Math.min(100, (after / cap) * 100);
+  const pct = (v: number) => (cap > 0 ? Math.min(100, (v / cap) * 100) : v > 0 ? 100 : 0); // 쿼터 0 대비
+  const usedPct = pct(used);
+  const afterPct = pct(after);
   const over = after > cap;
   const tight = !over && afterPct > 85;
   return (
     <div className="space-y-1">
-      <div className="flex items-center justify-between text-[11px]">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="font-mono">
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <span className="min-w-0 text-muted-foreground">{label}</span>
+        <span className="shrink-0 font-mono">
           {used.toLocaleString()} <span className="text-muted-foreground">→</span>{" "}
           <span className={cn("font-medium", over ? "text-rose-600" : tight ? "text-amber-600" : "text-emerald-700")}>{after.toLocaleString()}</span>
           {" "}/ {cap.toLocaleString()} {unit}
@@ -615,71 +623,152 @@ function CapacityBar({ label, used, add, cap, unit }: { label: string; used: num
   );
 }
 
-// 배치·가용량 what-if (관리자 승인 판단용) — 할당(allocation) 기준
-function PlacementCapacity({ r }: { r: ResourceRequest }) {
-  const OVC = 4; // vCPU 오버커밋 비율
-  const needAccel = !!r.acceleratorKind;
-  const needCount = r.acceleratorCount ?? 1;
-  const kw = accelKeyword(r.flavorName);
-
-  const usageOf = (nodeId: string) =>
-    vms.filter((v) => v.nodeId === nodeId).reduce(
-      (a, v) => ({ vcpu: a.vcpu + (v.vcpu ?? 0), ram: a.ram + (v.ramGb ?? 0) }),
-      { vcpu: 0, ram: 0 },
+// 프로젝트 쿼터 한 줄 — 무제한(-1)이면 막대 없이 사용량만
+function QuotaBar({ label, q, add, unit }: { label: string; q: { quota: number; used: number }; add: number; unit: string }) {
+  if (q.quota < 0) {
+    return (
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono">{q.used.toLocaleString()} → {(q.used + add).toLocaleString()} {unit} · 무제한</span>
+      </div>
     );
-  const freeAccelsOn = (nodeId: string) =>
-    accelerators.filter((a) => a.nodeId === nodeId && a.status === "Idle" && (kw ? a.model.includes(kw) : a.kind === r.acceleratorKind));
+  }
+  return <CapacityBar label={label} used={q.used} add={add} cap={q.quota} unit={unit} />;
+}
 
-  const candidates = needAccel
-    ? nodes.filter((n) => freeAccelsOn(n.id).length >= needCount)
-    : nodes.filter((n) => n.acceleratorIds.length === 0);
-  const fits = (n: (typeof nodes)[number]) => {
-    const u = usageOf(n.id);
-    return u.vcpu + (r.vcpu ?? 0) <= n.vcpu * OVC && u.ram + (r.ramGb ?? 0) <= n.ramGb;
+// 배치·가용량 미리보기(관리자 승인 판단용) — 후보 노드(Placement, Nova 스케줄러와 같은 질의) + 프로젝트 쿼터. MNT-IAAS 라이브 조회.
+// 실제 노드는 스케줄러가 후보 중에서 정하므로 노드마다 탭으로 보여준다(처음엔 여유가 가장 큰 후보). 후보가 아닌 노드는 '불가'와 이유.
+// onState 로 알린다 — ok: 프로비저닝해도 되는지(미리보기를 읽었고 프로젝트 쿼터를 넘지 않음),
+// pin: 노드 지정 권한이 있으면 고른 노드(프로비저닝 때 넘김, 권한이 없으면 null → 스케줄러가 고름).
+type PlacementState = { ok: boolean; pin: PlacementPreview["nodes"][number] | null };
+function PlacementCapacity({ r, onState }: { r: ResourceRequest; onState: (s: PlacementState) => void }) {
+  const { data, isLoading, error } = usePlacementPreview(r.flavorId, r.projectId);
+  const [host, setHost] = React.useState(r.provisionSpec?.host); // 재시도면 지난 회차에 고른 노드부터
+  const addVcpu = r.vcpu ?? 0;
+  const addRamGb = r.ramGb ?? 0;
+  const bootGb = r.volumeGb || r.diskGb || 0; // 부팅 볼륨 = 플레이버 디스크(0이면 신청 입력값)
+  const gb = (mb: number) => Math.round(mb / 1024);
+  const cur = data?.nodes.find((c) => c.host === host) ?? data?.nodes[0]; // 다시 조회해 빠진 노드면 첫 노드
+  const candidates = data?.nodes.filter((c) => c.candidate) ?? [];
+  const pinned = data?.hostPinning && cur ? cur : null;
+  // 프로젝트 쿼터 — 막대와 초과 판정이 같은 목록을 쓴다(무제한 -1 은 초과 없음)
+  const quotaRows = data?.quota ? [
+    { label: "vCPU", q: data.quota.vcpu, add: addVcpu, unit: "vCPU" },
+    { label: "메모리", q: data.quota.ramGb, add: addRamGb, unit: "GB" },
+    { label: "인스턴스", q: data.quota.instances, add: 1, unit: "개" },
+    { label: "볼륨 용량", q: data.quota.diskGb, add: bootGb, unit: "GB" },
+    { label: "볼륨 수", q: data.quota.volumes, add: 1, unit: "개" },
+  ] : [];
+  const quotaOver = quotaRows.filter((x) => x.q.quota >= 0 && x.q.used + x.add > x.q.quota).map((x) => x.label);
+  const ok = !!data && quotaOver.length === 0;
+  React.useEffect(() => onState({ ok, pin: pinned }), [ok, pinned, onState]);
+  const accelShort = data?.accelerators.find((a) => a.free < a.count);
+  const blocked = (c: PlacementPreview["nodes"][number]) => { // 후보가 아닌 이유 — 막대와 같은 기준
+    const why = [
+      c.disabled && "꺼 둔 노드",
+      c.vcpu.used + addVcpu > c.vcpu.capacity && "vCPU 부족",
+      c.ramMb.used + addRamGb * 1024 > c.ramMb.capacity && "메모리 부족",
+      ...(data?.accelerators ?? []).map((a, i) =>
+        c.accel[i].capacity - c.accel[i].used < a.count && (c.accel[i].capacity ? `${a.kind} 여유 부족` : `${a.kind} 장치 없음`)),
+    ].filter(Boolean);
+    return why.length ? why.join(", ") : "배치 조건 불충족";
   };
-  const target = candidates.find(fits) ?? candidates[0];
 
   return (
     <div className="space-y-2.5 rounded-xl border border-border p-3.5">
       <div className="flex items-center gap-1.5 text-xs font-semibold">
         <Server className="size-3.5 text-brand-indigo-600" /> 배치 · 가용량 미리보기
       </div>
-      {!target ? (
-        <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">
-          <AlertCircle className="mt-0.5 size-4 shrink-0" />
-          {needAccel
-            ? `요청한 가속기(${r.acceleratorKind}${kw ? ` ${kw}` : ""}) 여유가 있는 노드가 없습니다. 가속기 소진 — 반려하거나 회수 후 재시도가 필요합니다.`
-            : "배치 가능한 일반 노드가 없습니다."}
-        </div>
-      ) : (
+      {isLoading ? <Skeleton className="h-24" /> : error ? (
+        <p className="text-xs text-rose-500">가용량을 불러오지 못했습니다 ({error.message}). 확인할 수 없어 프로비저닝할 수 없습니다.</p>
+      ) : data && (
         <>
           <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">예상 배치 노드</span>
-            <span className="font-mono">{target.hostname}</span>
+            <span className="text-muted-foreground">후보 노드</span>
+            <span className="font-mono">{candidates.length}대 <span className="text-muted-foreground">/ 전체 {data.nodes.length}대</span></span>
           </div>
-          <CapacityBar label={`vCPU (오버커밋 ${OVC}:1)`} used={usageOf(target.id).vcpu} add={r.vcpu ?? 0} cap={target.vcpu * OVC} unit="vCPU" />
-          <CapacityBar label="메모리" used={usageOf(target.id).ram} add={r.ramGb ?? 0} cap={target.ramGb} unit="GB" />
-          {needAccel && (
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="text-muted-foreground">가속기 ({r.acceleratorKind}{kw ? ` ${kw}` : ""}, 패스스루)</span>
-              <span className="font-mono">
-                여유 {freeAccelsOn(target.id).length} <span className="text-muted-foreground">→</span>{" "}
-                <span className={cn("font-medium", freeAccelsOn(target.id).length - needCount <= 0 ? "text-amber-600" : "text-emerald-700")}>
-                  {freeAccelsOn(target.id).length - needCount}
-                </span>
-                {" "}({needCount}개 할당)
-              </span>
+          {!data.hostPinning && candidates.length > 0 && (
+            <p className="flex items-center gap-1 text-[11px] text-amber-700">
+              <AlertCircle className="size-3.5 shrink-0" />자원풀 권한이 부족하여 후보 노드중 하나에 스케줄링 됩니다.
+            </p>
+          )}
+          {candidates.length === 0 && (
+            <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">
+              <AlertCircle className="mt-0.5 size-4 shrink-0" />
+              {accelShort
+                ? `요청한 가속기(${accelShort.kind} ${accelShort.count}장${r.deviceProfile ? ` · ${r.deviceProfile}` : ""}) 여유가 있는 노드가 없습니다 — 전체 ${accelShort.total}장 중 여유 ${accelShort.free}장. 반려하거나 회수 후 다시 시도하세요.`
+                : "vCPU·메모리 여유가 있는 노드가 없습니다."}
             </div>
           )}
-          {(r.volumeGb ?? 0) > 0 && (
+          {cur && (
+            <Tabs value={cur.host} onValueChange={setHost}>
+              <TabsList className="h-auto max-w-full flex-wrap justify-start">
+                {data.nodes.map((c) => (
+                  <TabsTrigger
+                    key={c.host} value={c.host}
+                    className={cn(
+                      "group px-2.5 font-mono text-xs data-[state=active]:bg-primary data-[state=active]:font-semibold data-[state=active]:text-primary-foreground",
+                      !c.candidate && "text-muted-foreground/70",
+                    )}
+                  >
+                    {c.host}
+                    {!c.candidate && <span className="font-sans text-[10px] text-rose-500 group-data-[state=active]:text-primary-foreground/80">불가</span>}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              {data.nodes.map((c) => (
+                <TabsContent key={c.host} value={c.host} className="mt-2.5 space-y-2.5">
+                  {!c.candidate && (
+                    <p className="flex items-center gap-1 text-[11px] text-rose-600">
+                      <AlertCircle className="size-3.5 shrink-0" />배치 불가 — {blocked(c)}{data.hostPinning && " · 후보 노드를 골라야 프로비저닝할 수 있습니다"}
+                    </p>
+                  )}
+                  <CapacityBar label="vCPU" used={c.vcpu.used} add={addVcpu} cap={c.vcpu.capacity} unit="vCPU" />
+                  <CapacityBar label="메모리" used={gb(c.ramMb.used)} add={addRamGb} cap={gb(c.ramMb.capacity)} unit="GB" />
+                  {data.accelerators.map((a, i) => (
+                    <CapacityBar
+                      key={`${a.resourceClass}-${i}`}
+                      label={
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          가속기
+                          <Badge variant="ghost" className={cn("h-5 shrink-0 gap-1 px-1.5 text-[10px]", accKindClass(a.kind))}>
+                            <Cpu className="size-3" />{a.kind}
+                          </Badge>
+                          <span className="truncate font-mono">
+                            {r.deviceProfile}{a.traits.length > 0 && `(${a.traits.join(", ")})`}
+                          </span>
+                        </span>
+                      }
+                      used={c.accel[i].used} add={a.count} cap={c.accel[i].capacity} unit="장"
+                    />
+                  ))}
+                </TabsContent>
+              ))}
+            </Tabs>
+          )}
+          {bootGb > 0 && (
             <div className="flex items-center justify-between text-[11px]">
               <span className="text-muted-foreground">부팅 볼륨</span>
-              <span className="font-mono">{r.volumeGb} GB · Cinder 풀 할당</span>
+              <span className="font-mono">{bootGb} GB · Cinder 풀 할당</span>
             </div>
           )}
-          {candidates.length > 1 && (
-            <p className="text-[10px] text-muted-foreground">후보 노드 {candidates.length}곳 · 스케줄러 자동 배치 (오버라이드 가능)</p>
-          )}
+
+          <div className="space-y-2 border-t border-border pt-2.5">
+            <div className="text-[11px] font-semibold text-muted-foreground">프로젝트 쿼터</div>
+            {data.quotaError ? (
+              <p className="text-xs text-rose-500">쿼터를 불러오지 못했습니다 ({data.quotaError}).</p>
+            ) : (
+              <>
+                {quotaOver.length > 0 && (
+                  <p className="flex items-start gap-1 text-[11px] text-rose-600">
+                    <AlertCircle className="mt-px size-3.5 shrink-0" />
+                    프로젝트 쿼터({quotaOver.join(", ")})를 초과해 프로비저닝할 수 없습니다. 쿼터를 늘리거나 반려하세요.
+                  </p>
+                )}
+                {quotaRows.map((x) => <QuotaBar key={x.label} label={x.label} q={x.q} add={x.add} unit={x.unit} />)}
+              </>
+            )}
+          </div>
         </>
       )}
     </div>
@@ -691,10 +780,53 @@ function fmtSec(ms: number) {
   return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
 }
 
-function stepDurationMs(s: ProvisionStep) {
-  if (!s.startedAt) return undefined;
-  const end = s.endedAt ? Date.parse(s.endedAt) : Date.now();
-  return end - Date.parse(s.startedAt);
+/** 보이는 단계의 소요 시간 — 끝났으면 기록된 시각끼리, 진행 중이면 화면 시계(t)까지. */
+function stepDurationMs(s: ProvisionStep, t: number) {
+  if (!s.startedAt || s.status === "waiting") return undefined;
+  const end = s.status === "running" ? t : s.endedAt ? Date.parse(s.endedAt) : NaN;
+  return Number.isFinite(end) ? end - Date.parse(s.startedAt) : undefined;
+}
+
+// 진행 중엔 서버 시각보다 1.5초 늦게 그린다 — 조회(1초)가 먼저 와 있어, 끝난 단계를 모른 채 시간을 더 세다 되돌아가지 않게
+const LIVE_DELAY_MS = 1500;
+
+type StepsData = ProvisionStepsResp & { receivedAt: number };
+
+/** 화면 시계 t 에서 보이는 상태 — 기록된 시작·종료 시각으로 정한다(Infinity 면 기록 그대로). */
+function shownStatus(x: { status: ProvStepStatus; startedAt?: string; endedAt?: string }, t: number): ProvStepStatus {
+  if (t === Infinity || x.status === "waiting" || x.status === "skipped" || !x.startedAt) return x.status;
+  if (Date.parse(x.startedAt) > t) return "waiting";
+  return x.endedAt && Date.parse(x.endedAt) <= t ? x.status : "running";
+}
+
+/** 진행 창의 화면 시계(서버 시각, ms) — 진행 중에만 서버 시각보다 LIVE_DELAY_MS 늦게 따라간다.
+ *  서버가 확인해 준 시각(응답의 now)을 넘지 않고(응답이 늦으면 잠깐 멈춤), 뒤로 가지 않는다.
+ *  끝난 신청을 열었거나 끝난 뒤 다 따라잡으면 Infinity — 기록된 값을 그대로 보여 준다. */
+function useShownClock(data: StepsData | undefined) {
+  const [clock, setClock] = React.useState<{ attempt?: number; t: number }>({ t: Infinity });
+  const live = data?.status === "provisioning";
+  const following = live || Number.isFinite(clock.t);
+  React.useEffect(() => {
+    if (!data || !following) return;
+    const horizon = Date.parse(data.now);
+    const times = data.items.flatMap((s) => [s, ...s.details]).flatMap((x) => [x.startedAt, x.endedAt]);
+    const lastEvent = Math.max(-Infinity, ...times.filter((v): v is string => !!v).map(Date.parse));
+    const tick = () => setClock((c) => {
+      const target = Math.min(horizon + (performance.now() - data.receivedAt) - LIVE_DELAY_MS, horizon);
+      const fresh = c.attempt !== data.attempt || !Number.isFinite(c.t);  // 새로 진행 중 — 지금부터 따라간다
+      const t = fresh ? target : Math.max(c.t, target);
+      return { attempt: data.attempt, t: !live && t >= lastEvent ? Infinity : t };  // 끝났고 다 따라잡음
+    });
+    const id = window.setInterval(tick, 100);
+    const first = window.requestAnimationFrame(tick);
+    return () => {
+      window.clearInterval(id);
+      window.cancelAnimationFrame(first);
+    };
+  }, [data, following, live]);
+  // 진행 중인데 아직 따라가기 전(첫 응답 직후 한 번) — 응답 기준 시각으로 그려 앞선 상태가 비치지 않게
+  if (live && (clock.attempt !== data.attempt || !Number.isFinite(clock.t))) return Date.parse(data.now) - LIVE_DELAY_MS;
+  return clock.t;
 }
 
 function StepIcon({ status }: { status: ProvStepStatus }) {
@@ -722,9 +854,24 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
   const retryWs = useProvisionAiWorkspaceTicket();
   const user = useAuth((s) => s.user);
   const retrying = isWs ? retryWs : retry;
-  const steps = data?.items ?? [];
+  const t = useShownClock(data);
+  // 화면 시계 기준으로 보이는 단계 — 아직 오지 않은 시각의 값·오류는 감춘다
+  const steps = (data?.items ?? []).map((s) => {
+    const st = shownStatus(s, t);
+    return {
+      ...s,
+      status: st,
+      error: st === "failed" ? s.error : undefined,
+      details: s.details.map((d) => {
+        const ds = shownStatus(d, t);
+        return { ...d, status: ds, value: ds === d.status ? d.value : undefined };
+      }),
+    };
+  });
   // 재시도 직후 새 기록을 받기 전에는 '생성 중'으로 본다(진행 기록을 비웠으므로 이전 실패 화면을 보여 주지 않는다)
-  const status = data?.status ?? (retrying.isSuccess ? "provisioning" : req?.status);
+  const serverStatus = data?.status ?? (retrying.isSuccess ? "provisioning" : req?.status);
+  // 화면 시계가 따라가는 동안은 끝났어도 '생성 중' — 마지막 단계가 보이게 끝난 뒤 완료·실패로
+  const status = Number.isFinite(t) ? "provisioning" : serverStatus;
   const attempt = data?.attempt ?? 1;
   const done = status === "completed";
   const failed = status === "failed";
@@ -746,8 +893,8 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
 
   // 상태가 바뀌면 목록도 갱신
   React.useEffect(() => {
-    if (status) qc.invalidateQueries({ queryKey: ["tickets", "list"] });
-  }, [status, qc]);
+    if (serverStatus) qc.invalidateQueries({ queryKey: ["tickets", "list"] });
+  }, [serverStatus, qc]);
 
   // 재시도 — 이전 승인 설정 그대로 새 회차로 처음부터(실패한 회차의 자원은 이미 정리됨)
   function handleRetry() {
@@ -824,7 +971,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
           )}
           {steps.map((s) => {
             const expanded = isOpen(s);
-            const dur = stepDurationMs(s);
+            const dur = stepDurationMs(s, t);
             const muted = s.status === "waiting" || s.status === "skipped";
             return (
               <div key={s.seq} className={cn("rounded-lg px-2 py-2.5", s.status === "running" && "bg-secondary/40", s.status === "failed" && "bg-rose-50/60")}>
@@ -841,7 +988,8 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
                     <span className="block font-mono text-[11px] text-muted-foreground/70">{s.code}</span>
                   </span>
                   <span className="mt-0.5 flex shrink-0 items-center gap-2 font-mono text-xs text-muted-foreground tabular-nums">
-                    {s.status === "skipped" ? "건너뜀" : dur !== undefined && fmtSec(dur)}
+                    {/* 0.0s 로 보일 값 — 상태 확인(1초) 사이에 끝나 따로 잡히지 않았거나 아주 짧게 끝난 단계 */}
+                    {s.status === "skipped" ? "건너뜀" : dur !== undefined && (s.status !== "running" && dur < 50 ? "1초 미만" : fmtSec(dur))}
                     <ChevronDown className={cn("size-4 transition-transform", expanded && "rotate-180")} />
                   </span>
                 </button>
@@ -971,6 +1119,8 @@ function AdminView() {
   const [rejecting, setRejecting] = React.useState(false);
   const [rejectReason, setRejectReason] = React.useState("");
   const [spec, setSpec] = React.useState<ProvisionSpec | null>(null);
+  // 배치·가용량 미리보기 — 읽었는지, 고른 노드(노드 지정 권한이 있을 때만, null 이면 스케줄러가 고름)
+  const [placement, setPlacement] = React.useState<PlacementState>({ ok: false, pin: null });
   // AI 워크스페이스 생성 시작 — 신청(또는 지난 회차) 한도로 채워 두고 조정할 수 있게 한다
   const [wsLimits, setWsLimits] = React.useState<WorkspaceLimitsInput | null>(null);
   const [sheetReq, setSheetReq] = React.useState<ResourceRequest | null>(null);
@@ -982,6 +1132,7 @@ function AdminView() {
     setRejecting(mode === "reject");
     setRejectReason("");
     setSpec(null);
+    setPlacement({ ok: false, pin: null });
     setWsLimits(r.type === "ai-workspace" ? toLimitsInput(limitsOf(r)) : null);
     setDetailOpen(true);
   }
@@ -1036,7 +1187,7 @@ function AdminView() {
         : await provisionMutation.mutateAsync({
             id: r.id,
             expectedStatus: r.status,
-            provisionSpec: toProvisionBody(spec!),
+            provisionSpec: { ...toProvisionBody(spec!), host: placement.pin?.host },
           });
       setDetailOpen(false);
       toast.success(
@@ -1218,7 +1369,7 @@ function AdminView() {
             </DialogDescription>
           </DialogHeader>
           {detail && <RequestDetailBody r={detail} />}
-          {canProvisionVm && <PlacementCapacity r={detail} />}
+          {canProvisionVm && <PlacementCapacity key={`placement-${detail.id}`} r={detail} onState={setPlacement} />}
           {canProvisionVm && !rejecting && <ApprovalForm key={detail.id} r={detail} onChange={setSpec} />}
           {canProvisionWs && !rejecting && wsLimits && (
             <div className="space-y-2.5 rounded-xl border border-brand-indigo-200 bg-brand-indigo-50/30 p-3.5">
@@ -1273,7 +1424,7 @@ function AdminView() {
                       {provisionWsMutation.isPending ? "시작 중…" : detail.status === "failed" ? "재시도" : "생성 시작"}
                     </Button>
                   ) : (
-                    <Button onClick={provision} disabled={!spec || provisionMutation.isPending}>
+                    <Button onClick={provision} disabled={!spec || !placement.ok || placement.pin?.candidate === false || provisionMutation.isPending}>
                       {isFailedVm ? <RotateCcw className="size-3.5" /> : <Server className="size-3.5" />}
                       {provisionMutation.isPending ? "시작 중…" : isFailedVm ? "재시도" : "프로비저닝"}
                     </Button>

@@ -17,7 +17,7 @@ CORE_QUEUE = "okc-core"   # CORE 워커: 이 워크플로 + DB 기록 작업
 IAAS_QUEUE = "okc-iaas"   # IAAS 워커: OpenStack 작업
 
 # ── 시간·재시도 기준(임시값 — 논의 후 조정) ───────────────────────────
-POLL_SECONDS = 3                          # 상태 확인 간격
+POLL_SECONDS = 1                          # 상태 확인 간격 — 사이에 지나간 단계는 시작·완료가 같은 시각(화면 '1초 미만')
 WATCH_MAX = timedelta(seconds=60)         # 상태 확인 작업 1회 최대 점유시간(상태가 바뀌면 바로 돌아옴)
 VOLUME_READY_MAX = timedelta(minutes=5)   # 부팅 볼륨 준비 최대
 BUILD_MAX = timedelta(minutes=5)          # 스케줄링 ~ ACTIVE 최대
@@ -92,6 +92,8 @@ class VmProvision:
         self.res["serverName"] = inp["vmName"]
         spec = {k: inp[k] for k in ("flavorId", "imageId", "volumeGb", "networkId", "fixedIp", "securityGroups",
                                     "publicKey")}
+        if inp.get("host"):  # 관리자가 고른 노드(노드 지정 권한이 있을 때만) — 예전 입력에는 키가 없다
+            spec["host"] = inp["host"]
         server_id = await self._iaas("iaas.create_server", inp["projectId"], {"name": inp["vmName"], **spec}, volume_id,
                                      retry=NO_RETRY, timeout=timedelta(seconds=90))
         self.res["serverId"] = server_id
