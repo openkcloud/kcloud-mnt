@@ -21,7 +21,8 @@ from sqlalchemy.orm import Session
 from ..auth import CurrentUser, current_user
 from ..config import settings
 from ..db import get_db
-from ..workflows import runtime
+from ..workflows import provision_queue, runtime
+from ..workflows.vm_provision import QUEUE_WAIT_MAX
 
 router = APIRouter(tags=["tkt_request"])
 
@@ -572,6 +573,11 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         raise HTTPException(409, "다른 관리자가 먼저 처리했습니다. 목록을 새로 고쳐 확인하세요")
     if t["type"] != "vm" or t["status"] not in ("approved", "failed"):
         raise HTTPException(409, "승인되었거나 실패한 VM 신청만 프로비저닝(재시도)할 수 있습니다")
+    # 동시 진행 자리가 대기 제한 안에 나지 않을 것 같으면 예약하지 않는다(provision_queue) — 예상은 신청에 남겨 예약 모달에 고정 표시
+    expected = provision_queue.expected_wait(db)
+    if expected >= QUEUE_WAIT_MAX.total_seconds():
+        raise HTTPException(409, "워크플로가 모두 동작중 입니다. 다음에 다시 시도해주세요"
+                                 f"(예상 대기시간 {int(QUEUE_WAIT_MAX.total_seconds() // 60)}분 이상)")
     rs = t["request_spec"]
     db.rollback()  # MNT-IAAS 확인 동안 커넥션을 잡지 않게
 
@@ -595,10 +601,11 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
     res = db.execute(
         text("""UPDATE tkt_request
                    SET status = 'provisioning', provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
-                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL
+                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL,
+                       queue_expected_sec = :qexp
                  WHERE id = :id AND status = :cur"""),
         {"id": ticket_id, "spec": json.dumps(spec, ensure_ascii=False), "by": admin_id, "wf": workflow_id,
-         "cur": t["status"]},
+         "cur": t["status"], "qexp": expected},
     )
     if res.rowcount == 0:
         db.rollback()
@@ -619,22 +626,40 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         "keypairLabel": rs.get("keypairName") or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
         "hasAccelerator": bool(rs.get("deviceProfile")),
         "acceleratorLabel": accel or rs.get("deviceProfile"),
+        # 누르기 전 상태·값 — 시작 실패·시작 전 취소 때 되돌린다(provision_queue.restore)
+        "prev": {"status": t["status"], "provisionSpec": t["provision_spec"], "provisioningBy": t["provisioning_by"],
+                 "provisioningAt": _iso(t["provisioning_at"]), "workflowId": t["workflow_id"],
+                 "errorMessage": t["error_message"], "result": t["result"]},
     }
     try:
         from_thread.run(runtime.start_vm_provision, workflow_id, inp)  # 이벤트 루프의 Temporal 클라이언트로 시작
     except Exception as e:  # noqa: BLE001 — 시작 실패면 이전 상태(승인·실패)와 값으로 되돌린다
-        db.execute(text("""UPDATE tkt_request
-                              SET status = :st, provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
-                                  provisioning_at = :at, workflow_id = :wf, error_message = :err,
-                                  result = CAST(:res AS jsonb)
-                            WHERE id = :id AND status = 'provisioning'"""),
-                   {"id": ticket_id, "st": t["status"], "by": t["provisioning_by"], "at": t["provisioning_at"],
-                    "wf": t["workflow_id"], "err": t["error_message"],
-                    "spec": json.dumps(t["provision_spec"], ensure_ascii=False) if t["provision_spec"] else None,
-                    "res": json.dumps(t["result"]) if t["result"] else None})
-        db.commit()
+        provision_queue.restore(db, ticket_id, workflow_id, inp["prev"])
         raise HTTPException(503, f"프로비저닝 워크플로를 시작하지 못했습니다: {e}")
     return _to_item(db.execute(text(_SELECT + " WHERE r.id = :id"), {"id": ticket_id}).mappings().one())
+
+
+@router.post("/tickets/{ticket_id}/provision/cancel", status_code=202)
+def cancel_provision_queue(ticket_id: str, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    """VM 프로비저닝 시작 대기(예약) 취소(관리자) — 워크플로에 취소 신호를 보낸다. 시작 전이면 워크플로가 신청을
+    누르기 전 상태로 되돌리고 끝나고, 그사이 시작했으면 신호는 무시된다(결과는 진행 조회로 확인)."""
+    _admin_id(db, user.username, "예약 취소는 관리자만 할 수 있습니다")
+    t = db.execute(text("SELECT type, status, workflow_id FROM tkt_request WHERE id = :id"),
+                   {"id": ticket_id}).mappings().first()
+    if t is None:
+        raise HTTPException(404, "신청을 찾을 수 없습니다")
+    if t["type"] != "vm" or t["status"] != "provisioning":
+        raise HTTPException(409, "시작을 기다리는 VM 신청만 취소할 수 있습니다")
+    started = db.execute(text(f"SELECT 1 FROM tkt_request r JOIN tkt_provision_step s ON {provision_queue.CURRENT_STEP} "
+                              "WHERE r.id = :id LIMIT 1"), {"id": ticket_id}).first()
+    if started:
+        raise HTTPException(409, "이미 시작되어 취소할 수 없습니다")
+    db.rollback()
+    try:
+        from_thread.run(runtime.cancel_vm_queue, t["workflow_id"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, f"취소 요청을 보내지 못했습니다: {e}")
+    return {"accepted": True}
 
 
 class ProvisionAiWorkspaceBody(BaseModel):
@@ -718,8 +743,12 @@ def ticket_steps(ticket_id: str, user: CurrentUser = Depends(current_user), db: 
     """프로비저닝 진행(현재 회차) — 단계 5개와 상세 단계. 이름은 공통코드.
     현재 회차는 티켓의 workflow_id(vm-provision-{신청ID}-{회차})로 정한다 — 재시도 직후 새 회차 단계가 등록되기 전에는
     빈 목록을 돌려준다(가장 큰 회차로 고르면 그 사이 이전 회차 기록이 보인다).
-    now = 이 응답을 읽기 시작한 DB 시각 — 단계 시각(DB now())과 같은 시계라 화면이 진행 중 시간을 서버 기준으로 그린다."""
-    t = db.execute(text("""SELECT status, result, error_message, workflow_id, requested_by, clock_timestamp() AS now
+    now = 이 응답을 읽기 시작한 DB 시각 — 단계 시각(DB now())과 같은 시계라 화면이 진행 중 시간을 서버 기준으로 그린다.
+    queue = VM 시작 대기(예약) 중이면 {지금까지 기다린 초, 예상 대기 초}(provision_queue) — 자리가 있어 곧 시작하면 None.
+    예상 대기는 프로비저닝을 누른 시점에 남긴 값(queue_expected_sec) 그대로 — 그때 자리가 있었는데(0) 그사이 다른 신청이
+    먼저 들어갔으면 지금까지 기다린 시간 + 지금 본 예상."""
+    t = db.execute(text("""SELECT type, status, result, error_message, workflow_id, requested_by, provisioning_at,
+                                  queue_expected_sec, clock_timestamp() AS now
                              FROM tkt_request WHERE id = :id"""),
                    {"id": ticket_id}).mappings().first()
     if t is None or not (user.is_admin or t["requested_by"] == user.id):  # 남의 신청은 없는 것처럼
@@ -744,12 +773,19 @@ def ticket_steps(ticket_id: str, user: CurrentUser = Depends(current_user), db: 
                  ORDER BY ss.seq"""),
         {"ids": [s["id"] for s in steps]},
     ).mappings().all()
+    queue = None
+    if (t["type"] == "vm" and t["status"] == "provisioning" and not steps
+            and not provision_queue.has_room(db, ticket_id, provision_queue.PROVISION_MAX)):
+        waited = round((t["now"] - t["provisioning_at"]).total_seconds())
+        queue = {"waitedSec": waited,
+                 "expectedSec": t["queue_expected_sec"] or waited + provision_queue.expected_wait(db, ticket_id)}
     return {
         "status": t["status"],
         "now": _iso(t["now"]),
         "attempt": attempt,
         "errorMessage": t["error_message"],
         "result": t["result"],
+        "queue": queue,
         "items": [{
             "seq": s["seq"], "code": s["step_code"], "message": s["name"], "status": s["status"],
             "startedAt": _iso(s["started_at"]), "endedAt": _iso(s["ended_at"]), "error": s["error_message"],

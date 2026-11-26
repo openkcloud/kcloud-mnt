@@ -104,6 +104,15 @@ export function kubeconfigUrl(id: string): string {
   return `${PAAS_BASE}/api/paas/clusters/${id}/kubeconfig`;
 }
 
+/** 클러스터 삭제(관리자). Magnum DELETE 는 비동기 — 목록은 DELETE_IN_PROGRESS 로 바뀐 뒤 소멸. */
+export function useDeleteCluster() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => sendJson<void>("DELETE", `/api/paas/clusters/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["paas-clusters"] }),
+  });
+}
+
 // ── 전역 클러스터 선택 — 워크로드·서비스·스토리지·설정이 공유하는 스코프 ──
 interface PaasClusterState {
   clusterId: string; // "" = 미선택

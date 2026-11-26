@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from ..auth import require_admin
 from ..config import settings
-from ..openstack_client import get_conn
+from ..openstack_client import get_conn, os_request
 
 router = APIRouter(tags=["keypairs"])
 
@@ -16,15 +16,11 @@ router = APIRouter(tags=["keypairs"])
 def _nova(method: str, path: str, *, json=None):
     conn = get_conn()
     if settings.os_endpoint_mode == "catalog":
-        r = conn.session.request(
-            f"/v2.1{path}", method, json=json, raise_exc=False,
-            endpoint_filter={"service_type": "compute", "interface": settings.os_interface},
-            timeout=20, connect_retries=1 if method == "GET" else 0,
-        )
+        r = os_request(conn, f"/v2.1{path}", method, json=json, raise_exc=False,
+                       endpoint_filter={"service_type": "compute", "interface": settings.os_interface}, timeout=20)
     else:  # override
         base = settings.os_endpoint_template.format(service="nova") + "/v2.1"
-        r = conn.session.request(f"{base}{path}", method, json=json, raise_exc=False, timeout=20,
-                                 connect_retries=1 if method == "GET" else 0)
+        r = os_request(conn, f"{base}{path}", method, json=json, raise_exc=False, timeout=20)
     if not r.ok:
         raise RuntimeError((r.text or f"HTTP {r.status_code}")[:300])
     return r

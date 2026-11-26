@@ -29,12 +29,14 @@ import {
   Check,
   Circle,
   BrainCircuit,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import {
-  useOrgs, useProvisionAiWorkspaceTicket, useProvisionTicket, useReviewTicket, useTickets, useTicketSteps,
+  useCancelProvisionQueue, useOrgs, useProvisionAiWorkspaceTicket, useProvisionTicket, useReviewTicket, useTickets,
+  useTicketSteps,
 } from "@/lib/ticket-api";
 import { useIpCheck, usePlacementPreview, useProjectNetworks, useProjectSecurityGroups } from "@/lib/iaas-api";
 import type { PlacementPreview } from "@/lib/iaas-api";
@@ -844,6 +846,57 @@ function SubIcon({ status }: { status: ProvStepStatus }) {
     : <span className="mx-[5px] size-1 rounded-full bg-muted-foreground/40" />;
 }
 
+/** 시작·재시도 알림 — 시작 직후 받아 둔 진행 기록으로: 시작 대기(예약)면 '프로비저닝을 예약했습니다'(시작한 것으로
+ *  오해하지 않게), 바로 시작했으면 started. 설명은 신청 ID 와 몇 번째 시도인지(2회차부터). */
+function toastStarted(qc: QueryClient, id: string, started: string) {
+  const s = qc.getQueryData<ProvisionStepsResp>(["tickets", "steps", id]);
+  const attempt = s?.attempt ?? 1;
+  toast.success(s?.status === "provisioning" && s.queue ? "프로비저닝을 예약했습니다" : started, {
+    description: `신청 ID: ${id}${attempt > 1 ? ` · ${attempt}차 시도` : ""}`,
+  });
+}
+
+function fmtWait(sec: number) {
+  const m = Math.floor(sec / 60);
+  return m ? `${m}분 ${sec % 60}초` : `${sec}초`;
+}
+
+/** VM 시작 대기(예약) 모달 — 동시에 진행할 수 있는 프로비저닝이 모두 진행 중이라 자리를 기다리는 동안.
+ *  자리가 나면 진행 화면으로 바뀐다. 닫아도(바깥·ESC) 예약은 그대로 — 목록의 진행 버튼으로 다시 본다.
+ *  예상 대기 시간은 프로비저닝을 누른 시점의 값 그대로(서버가 신청에 남김) — 현재 대기 시간이 넘어가도 둔다. */
+function QueueDialog({ queue, open, onClose, onCancel, cancelling }: {
+  queue: { waitedSec: number; expectedSec: number }; open: boolean; onClose: () => void;
+  onCancel?: () => void; cancelling: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent hideClose className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>워크플로 예약 중…</DialogTitle>
+          <DialogDescription>동시에 진행할 수 있는 VM 프로비저닝이 모두 진행 중입니다. 자리가 나면 자동으로 시작합니다.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5 rounded-lg bg-secondary/50 px-3 py-2.5 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">예상 대기 시간</span>
+            <span className="font-mono tabular-nums">약 {fmtWait(queue.expectedSec)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">현재 대기 시간</span>
+            <span className="font-mono tabular-nums">{fmtWait(queue.waitedSec)}</span>
+          </div>
+        </div>
+        {onCancel && (
+          <DialogFooter>
+            <Button onClick={onCancel} disabled={cancelling}>
+              <X className="size-4" /> {cancelling ? "취소하는 중…" : "예약 취소"}
+            </Button>
+          </DialogFooter>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ProvisioningSheet({ req, open, onClose, canRetry }: {
   req: ResourceRequest | null; open: boolean; onClose: () => void; canRetry?: boolean;
 }) {
@@ -854,6 +907,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
   const retryWs = useProvisionAiWorkspaceTicket();
   const user = useAuth((s) => s.user);
   const retrying = isWs ? retryWs : retry;
+  const cancelQueue = useCancelProvisionQueue();
   const t = useShownClock(data);
   // 화면 시계 기준으로 보이는 단계 — 아직 오지 않은 시각의 값·오류는 감춘다
   const steps = (data?.items ?? []).map((s) => {
@@ -868,7 +922,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
       }),
     };
   });
-  // 재시도 직후 새 기록을 받기 전에는 '생성 중'으로 본다(진행 기록을 비웠으므로 이전 실패 화면을 보여 주지 않는다)
+  // 재시도는 새 진행 기록을 받을 때까지 요청 중(이전 화면 그대로) — 기록을 끝내 받지 못했으면 '생성 중'으로 본다
   const serverStatus = data?.status ?? (retrying.isSuccess ? "provisioning" : req?.status);
   // 화면 시계가 따라가는 동안은 끝났어도 '생성 중' — 마지막 단계가 보이게 끝난 뒤 완료·실패로
   const status = Number.isFinite(t) ? "provisioning" : serverStatus;
@@ -896,6 +950,21 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
     if (serverStatus) qc.invalidateQueries({ queryKey: ["tickets", "list"] });
   }, [serverStatus, qc]);
 
+  // 예약 취소 결과 — 되돌려졌으면(생성 중이 아님) 닫고, 그사이 시작했으면 알리고 진행 화면으로
+  const cancelSent = cancelQueue.isSuccess;
+  const resetCancel = cancelQueue.reset;
+  React.useEffect(() => {
+    if (!cancelSent || !data) return;
+    if (data.status !== "provisioning") {
+      toast.success("예약을 취소했습니다", { description: `신청 ID: ${req?.id}` });
+      resetCancel();
+      onClose();
+    } else if (data.items.length) {
+      toast.info("이미 시작되어 취소하지 못했습니다");
+      resetCancel();
+    }
+  }, [cancelSent, data, req?.id, resetCancel, onClose]);
+
   // 재시도 — 이전 승인 설정 그대로 새 회차로 처음부터(실패한 회차의 자원은 이미 정리됨)
   function handleRetry() {
     // AI 워크스페이스 — 지난 회차에 확정한 한도를 그대로 보낸다(빼면 서버가 신청 값으로 시작한다)
@@ -903,7 +972,7 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
       retryWs.mutate(
         { id: req.id, processedBy: user?.username ?? "", expectedStatus: "failed", ...limitsOf(req) },
         {
-          onSuccess: () => toast.success("재시도를 시작했습니다", { description: "새 회차로 처음부터 진행합니다" }),
+          onSuccess: () => toastStarted(qc, req.id, "재시도를 시작했습니다"),
           onError: (e) => toast.error("재시도하지 못했습니다", {
             description: <span className="whitespace-pre-line">{e.message}</span>,
           }),
@@ -915,11 +984,28 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
     retry.mutate(
       { id: req.id, expectedStatus: "failed", provisionSpec: toProvisionBody(req.provisionSpec) },
       {
-        onSuccess: () => toast.success("재시도를 시작했습니다", { description: "새 회차로 처음부터 진행합니다" }),
+        onSuccess: () => toastStarted(qc, req.id, "재시도를 시작했습니다"),
         onError: (e) => toast.error("재시도하지 못했습니다", {
           description: e instanceof Error ? <span className="whitespace-pre-line">{e.message}</span> : undefined,
         }),
       },
+    );
+  }
+
+  // 생성 중인데 첫 조회 전 — 예약 모달인지 진행 화면인지 아직 모른다(잘못 띄웠다가 바꾸지 않게)
+  if (open && req?.status === "provisioning" && !data) return null;
+  // 시작 대기(예약) 중 — 진행 화면 대신 예약 모달(취소는 관리자 화면에서만)
+  if (data?.status === "provisioning" && data.queue) {
+    return (
+      <QueueDialog
+        queue={data.queue}
+        open={open}
+        onClose={onClose}
+        cancelling={cancelQueue.isPending || cancelQueue.isSuccess}
+        onCancel={canRetry && req ? () => cancelQueue.mutate(req.id, {
+          onError: (e) => toast.error("예약을 취소하지 못했습니다", { description: e.message }),
+        }) : undefined}
+      />
     );
   }
 
@@ -988,8 +1074,8 @@ function ProvisioningSheet({ req, open, onClose, canRetry }: {
                     <span className="block font-mono text-[11px] text-muted-foreground/70">{s.code}</span>
                   </span>
                   <span className="mt-0.5 flex shrink-0 items-center gap-2 font-mono text-xs text-muted-foreground tabular-nums">
-                    {/* 0.0s 로 보일 값 — 상태 확인(1초) 사이에 끝나 따로 잡히지 않았거나 아주 짧게 끝난 단계 */}
-                    {s.status === "skipped" ? "건너뜀" : dur !== undefined && (s.status !== "running" && dur < 50 ? "1초 미만" : fmtSec(dur))}
+                    {/* 1초 안에 끝난 단계 — 상태 확인(1초) 사이에 끝나 0.0s 인 것도, 0.5s 처럼 기록된 것도 */}
+                    {s.status === "skipped" ? "건너뜀" : dur !== undefined && (s.status !== "running" && dur < 1000 ? "1초 미만" : fmtSec(dur))}
                     <ChevronDown className={cn("size-4 transition-transform", expanded && "rotate-180")} />
                   </span>
                 </button>
@@ -1112,6 +1198,7 @@ function AdminView() {
   const reviewMutation = useReviewTicket();
   const provisionMutation = useProvisionTicket();
   const provisionWsMutation = useProvisionAiWorkspaceTicket();
+  const qc = useQueryClient();
   const user = useAuth((s) => s.user);
 
   const [detail, setDetail] = React.useState<ResourceRequest | null>(null);
@@ -1190,10 +1277,8 @@ function AdminView() {
             provisionSpec: { ...toProvisionBody(spec!), host: placement.pin?.host },
           });
       setDetailOpen(false);
-      toast.success(
-        r.status === "failed" ? "재시도를 시작했습니다" : isWs ? "워크스페이스 생성을 시작했습니다" : "프로비저닝을 시작했습니다",
-        { description: `신청 ID: ${r.id}` },
-      );
+      toastStarted(qc, r.id,
+        r.status === "failed" ? "재시도를 시작했습니다" : isWs ? "워크스페이스 생성을 시작했습니다" : "프로비저닝을 시작했습니다");
       openSheet(started);
     } catch (e) {
       toast.error(r.status === "failed" ? "재시도하지 못했습니다" : "프로비저닝을 시작하지 못했습니다", {

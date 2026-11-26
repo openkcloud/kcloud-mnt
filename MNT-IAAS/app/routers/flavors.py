@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from ..auth import require_admin
 from ..config import settings
-from ..openstack_client import get_conn
+from ..openstack_client import get_conn, os_request
 from ..openstack_quota import get_project_quota
 
 router = APIRouter(tags=["flavors"])
@@ -19,15 +19,11 @@ router = APIRouter(tags=["flavors"])
 def _os_req(service: str, stype: str, ver: str, method: str, path: str, *, json=None, headers=None):
     conn = get_conn()
     if settings.os_endpoint_mode == "catalog":
-        r = conn.session.request(
-            f"{ver}{path}", method, json=json, headers=headers, raise_exc=False,
-            endpoint_filter={"service_type": stype, "interface": settings.os_interface}, timeout=20,
-            connect_retries=1 if method == "GET" else 0,  # 조회만 재시도(간헐 연결 끊김 대비)
-        )
+        r = os_request(conn, f"{ver}{path}", method, json=json, headers=headers, raise_exc=False,
+                       endpoint_filter={"service_type": stype, "interface": settings.os_interface}, timeout=20)
     else:  # override
         base = settings.os_endpoint_template.format(service=service) + ver
-        r = conn.session.request(f"{base}{path}", method, json=json, headers=headers, raise_exc=False, timeout=20,
-                                 connect_retries=1 if method == "GET" else 0)
+        r = os_request(conn, f"{base}{path}", method, json=json, headers=headers, raise_exc=False, timeout=20)
     if not r.ok:
         raise RuntimeError((r.text or f"HTTP {r.status_code}")[:300])
     return r

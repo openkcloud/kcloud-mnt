@@ -515,6 +515,7 @@ export interface ProvisionStepsResp {
   attempt: number;         // 표시 중인 실행 회차 (MAX(attempt))
   errorMessage?: string;
   result?: ProvisionResult;
+  queue?: { waitedSec: number; expectedSec: number } | null; // VM 시작 대기(예약) 중 — 지금까지 기다린 초·예상 대기 초
   items: ProvisionStep[];
 }
 
