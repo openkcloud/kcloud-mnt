@@ -137,3 +137,13 @@ export function useReconcileClusterAccess() {
     },
   });
 }
+
+/** 프로젝트별 포털 멤버 수(iam_project_member) — 프로젝트 목록 '멤버' 컬럼(OpenStack 기준 아님). */
+export function useProjectMemberCounts() {
+  return useQuery({
+    queryKey: ["core-project-member-counts"],
+    queryFn: async (): Promise<Record<string, number>> =>
+      (await coreFetch<{ counts: Record<string, number> }>(`/projects/member-counts`)).counts,
+    staleTime: 60 * 1000, retry: 0,
+  });
+}

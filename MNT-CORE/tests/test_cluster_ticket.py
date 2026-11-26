@@ -1,0 +1,261 @@
+"""서비스 클러스터 신청 — 신청·이름 확인·프로비저닝 API(가짜 MNT-IAAS·MNT-PAAS·Temporal 시작) + 단계 등록·접근 권한 작업."""
+import pytest
+from conftest import PROJECT, add_member, bearer, make_token, sql
+
+from app.config import settings
+from app.routers import tickets
+from app.workflows import activities, runtime
+
+ADMIN = bearer(make_token("admin"))
+FLAVORS = [
+    {"id": "m1.large", "name": "m1.large", "vcpus": 4, "ramMb": 8192, "accelerator": None, "accelerators": []},
+    {"id": "m1.rngd", "name": "m1.large.rngd", "vcpus": 4, "ramMb": 8192, "accelerator": "dp-rngd",
+     "accelerators": [{"kind": "NPU", "count": 1}]},
+    {"id": "m1.gone", "name": "m1.gone", "vcpus": 4, "ramMb": 8192, "accelerator": "dp-x", "deviceProfileMissing": True},
+]
+TEMPLATES = [
+    {"id": "t1", "name": "ct-k8s-1.36.2", "kubeVersion": "1.36.2", "public": True, "hidden": False,
+     "external_network_id": "pub"},
+    {"id": "t-hidden", "name": "hidden", "public": True, "hidden": True},
+]
+SUBNETS = [{"id": "sub-on", "cidr": "10.0.1.0/24", "dhcp": True}, {"id": "sub-off", "cidr": "10.0.0.0/24", "dhcp": False}]
+QUOTA = {"instances": {"quota": 10, "used": 2}, "vcpu": {"quota": 20, "used": 3}, "ramGb": {"quota": 50, "used": 6}}
+BODY = {"projectId": PROJECT, "clusterName": "test-cl", "templateId": "t1", "masterCount": 1, "masterFlavorId": "m1.large",
+        "nodeCount": 2, "flavorId": "m1.rngd", "networkType": "internal", "purpose": "시험"}
+
+
+@pytest.fixture(autouse=True)
+def _clean_cluster_tickets():
+    yield
+    sql("DELETE FROM tkt_request WHERE type = 'cluster' AND request_spec->>'clusterName' LIKE 'test-%'")
+
+
+@pytest.fixture
+def fake(monkeypatch):
+    """MNT-IAAS·MNT-PAAS 응답(바꿔 가며 시험) — 경로 앞부분으로 고른다."""
+    state = {"taken": set(), "fip": {"reachable": True, "reason": None}, "quota": QUOTA, "paas": [], "iaas": []}
+
+    def iaas(path, token):
+        state["iaas"].append(path)
+        if path == "/projects":
+            return {"items": [{"id": PROJECT, "name": "okc_test_prj"}]}
+        if path.endswith("/flavors"):
+            return {"items": FLAVORS}
+        if path.endswith("/networks"):
+            return {"items": [{"id": "net", "name": "my-network", "kind": "project"},
+                              {"id": "public", "name": "public", "kind": "external"}]}
+        if "/fip-reachable" in path:
+            return state["fip"]
+        if path.startswith("/placement-preview"):
+            return {"quota": state["quota"]}
+        if path == "/networks/net":
+            return {"subnets": SUBNETS}
+        raise AssertionError(path)
+
+    def paas(path, token):
+        state["paas"].append(path)
+        if path.startswith("/cluster-name-check"):
+            name = path.split("=", 1)[1]
+            return {"available": name not in state["taken"],
+                    "reason": "이미 사용 중인 클러스터 이름입니다." if name in state["taken"] else None}
+        if path == "/clustertemplates":
+            return {"items": TEMPLATES}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(tickets, "_iaas", iaas)
+    monkeypatch.setattr(tickets, "_paas", paas)
+    return state
+
+
+# ── 신청 ─────────────────────────────────────────────────────────
+
+def test_클러스터_신청(client, fake):
+    r = client.post("/api/core/tickets/cluster", json=BODY, headers=ADMIN)
+    assert r.status_code == 201, r.text
+    t = r.json()
+    assert (t["type"], t["status"], t["requestedBy"]) == ("cluster", "pending", "admin")
+    assert (t["clusterName"], t["templateName"], t["kubeVersion"]) == ("test-cl", "ct-k8s-1.36.2", "1.36.2")
+    assert (t["masterCount"], t["masterFlavorName"], t["nodeCount"], t["flavorName"]) == (1, "m1.large", 2, "m1.large.rngd")
+    assert t["accelerators"] == [{"kind": "NPU", "count": 1}] and t["networkType"] == "internal"
+    assert t["namespace"] == "okc-test-prj" and t["purpose"] == "시험"  # 프로젝트 이름 규칙(AI 워크스페이스와 같음)
+    # 진행 중 신청과 같은 이름은 쓸 수 없다(모든 프로젝트 기준)
+    chk = client.get("/api/core/tickets/cluster-name-check", params={"name": "test-cl"}, headers=ADMIN).json()
+    assert chk == {"available": False, "reason": "같은 이름으로 진행 중인 클러스터 신청이 있습니다."}
+    assert client.post("/api/core/tickets/cluster", json=BODY, headers=ADMIN).status_code == 409
+
+
+def test_클러스터_신청_권한(client, fake):
+    assert client.post("/api/core/tickets/cluster", json=BODY, headers=bearer(make_token())).status_code == 403
+    add_member("ek.lee", role="viewer")
+    assert client.post("/api/core/tickets/cluster", json=BODY, headers=bearer(make_token())).status_code == 403
+
+
+@pytest.mark.parametrize("change,status,detail", [
+    ({"masterCount": 2}, 400, "Control Plane 수는 1 또는 3 이어야 합니다"),
+    ({"nodeCount": 0}, 400, "Worker 수는 1 ~ 20 이어야 합니다"),
+    ({"clusterName": "Bad_Name"}, 400, tickets._CLUSTER_NAME_RULE),
+    ({"clusterName": "test-taken"}, 409, "이미 사용 중인 클러스터 이름입니다."),
+    ({"templateId": "t-hidden"}, 400, "신청할 수 없는 클러스터 템플릿입니다"),
+    ({"masterFlavorId": "m1.rngd"}, 400, "Control Plane 에는 가속기 스펙을 쓸 수 없습니다"),
+    ({"flavorId": "m1.gone"}, 400, "연결된 디바이스 프로파일이 존재하지 않습니다"),
+    ({"flavorId": "nope"}, 400, "선택한 스펙(플레이버)을 찾을 수 없습니다"),
+    ({"networkType": "bad"}, 400, "희망 네트워크는 internal 또는 external 이어야 합니다"),
+])
+def test_클러스터_신청_확인(client, fake, change, status, detail):
+    fake["taken"].add("test-taken")
+    r = client.post("/api/core/tickets/cluster", json={**BODY, **change}, headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (status, detail)
+
+
+def _ssh_key(owner: str, name: str = "k1") -> int:
+    return sql("""INSERT INTO iam_ssh_key (owner, name, public_key, fingerprint)
+                  VALUES (:o, :n, :k, 'SHA256:test') RETURNING id""", o=owner, n=name, k=f"ssh-ed25519 AAAA {owner}@h").scalar()
+
+
+def test_클러스터_신청_키페어는_본인_키만(client, fake):
+    mine, other = _ssh_key("admin"), _ssh_key("ek.lee")
+    r = client.post("/api/core/tickets/cluster", json={**BODY, "keypairId": other}, headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (400, "본인 키페어가 아닙니다")
+    t = client.post("/api/core/tickets/cluster", json={**BODY, "keypairId": mine}, headers=ADMIN).json()
+    assert (t["keypairId"], t["keypairName"]) == (str(mine), "k1")
+
+
+def test_네임스페이스_이름은_쿠버네티스_예약어를_피한다():
+    pid = "4ee114f1-b9f1-423a-91bf-40dec2fd05fb"
+    assert tickets._namespace_name("okc_test_prj", pid) == "okc-test-prj"
+    assert tickets._namespace_name("Default", pid) == "ws-4ee114f1"
+    assert tickets._namespace_name("kube-lab", pid) == "ws-4ee114f1"
+
+
+# ── 프로비저닝 ───────────────────────────────────────────────────
+
+def _cluster_ticket(tid="req-990101-301", status="approved"):
+    sql("""INSERT INTO tkt_request (id, type, status, project_id, requested_by, request_spec)
+           SELECT :id, 'cluster', :st, :p, id, CAST(:spec AS jsonb) FROM iam_user WHERE username = 'admin'""",
+        id=tid, st=status, p=PROJECT,
+        spec='{"projectName": "okc_test_prj", "clusterName": "test-cl", "templateId": "t1", "masterCount": 1, '
+             '"masterFlavorId": "m1.large", "nodeCount": 2, "flavorId": "m1.rngd", "namespace": "okc-test-prj"}')
+    return tid
+
+
+@pytest.fixture
+def started(monkeypatch):
+    calls: list[tuple] = []
+
+    async def start(workflow_id, inp):
+        calls.append((workflow_id, inp))
+
+    monkeypatch.setattr(settings, "temporal_api_base", "temporal.test:7233")
+    monkeypatch.setattr(runtime, "start_cluster_provision", start)
+    return calls
+
+
+PROVISION = {"expectedStatus": "approved", "provisionSpec": {"networkId": "net", "subnetId": "sub-on"}}
+
+
+def test_클러스터_프로비저닝(client, fake, started):
+    tid = _cluster_ticket()
+    r = client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "provisioning"
+    workflow_id, inp = started[0]
+    assert workflow_id == f"cluster-provision-{tid}-1"
+    assert inp | {"need": None} == {
+        "ticketId": tid, "attempt": 1, "projectId": PROJECT, "projectName": "okc_test_prj", "clusterName": "test-cl",
+        "templateId": "t1", "masterCount": 1, "masterFlavorId": "m1.large", "nodeCount": 2, "flavorId": "m1.rngd",
+        "networkId": "net", "subnetId": "sub-on", "floatingNetworkId": "pub", "publicKey": None,  # 템플릿 키페어
+        "namespace": "okc-test-prj", "need": None}
+    assert inp["need"] == {"instances": 3, "vcpu": 12, "ramGb": 24}
+    assert any("subnetId=sub-on" in p for p in fake["iaas"])  # Floating IP 는 고른 서브넷 기준으로 판정
+    spec = sql("SELECT provision_spec FROM tkt_request WHERE id = :id", id=tid).scalar()
+    assert (spec["networkName"], spec["subnetCidr"], spec["flavorName"]) == ("my-network", "10.0.1.0/24", "m1.large.rngd")
+
+
+def test_클러스터_프로비저닝_노드_조정(client, fake, started):
+    tid = _cluster_ticket()
+    body = {"provisionSpec": {"networkId": "net", "subnetId": "sub-on", "nodeCount": 3, "flavorId": "m1.large"}}
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=body, headers=ADMIN).status_code == 200
+    inp = started[0][1]
+    assert (inp["nodeCount"], inp["flavorId"], inp["need"]) == (3, "m1.large", {"instances": 4, "vcpu": 16, "ramGb": 32})
+
+
+def test_클러스터_프로비저닝_신청자_키(client, fake, started):
+    tid = _cluster_ticket()
+    key = _ssh_key("admin")
+    sql("""UPDATE tkt_request SET request_spec = request_spec || jsonb_build_object('keypairId', CAST(:k AS text),
+                                                                                    'keypairName', 'k1')
+            WHERE id = :id""", k=key, id=tid)
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=PROVISION, headers=ADMIN).status_code == 200
+    assert started[0][1]["publicKey"] == "ssh-ed25519 AAAA admin@h"
+    # 신청 뒤 키를 지웠으면 시작하지 않는다
+    sql("UPDATE tkt_request SET status = 'failed' WHERE id = :id", id=tid)
+    sql("DELETE FROM iam_ssh_key WHERE id = :k", k=key)
+    r = client.post(f"/api/core/tickets/{tid}/provision-cluster", json={"provisionSpec": PROVISION["provisionSpec"]},
+                    headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (409, "신청한 키페어(k1)가 삭제되어 노드에 넣을 수 없습니다")
+    assert len(started) == 1
+
+
+@pytest.mark.parametrize("spec,setup,status,detail", [
+    ({"subnetId": "sub-off"}, None, 400, "DHCP 가 꺼진 서브넷에는 노드가 주소를 받지 못합니다"),
+    ({"subnetId": "nope"}, None, 400, "서브넷이 고른 네트워크에 속하지 않습니다"),
+    ({"networkId": "public"}, None, 400, "이 프로젝트에서 사용할 수 없는 네트워크입니다"),
+    ({}, ("fip", {"reachable": False, "reason": "게이트웨이 없음"}), 400,
+     "클러스터 API 에 Floating IP 를 붙일 수 없는 네트워크입니다\n게이트웨이 없음"),
+    ({}, ("quota", {**QUOTA, "instances": {"quota": 4, "used": 2}}), 409,
+     "프로젝트 쿼터가 부족합니다 — VM 필요 3대 · 남음 2대"),
+    ({}, ("taken", {"test-cl"}), 409, "이미 사용 중인 클러스터 이름입니다."),
+])
+def test_클러스터_프로비저닝_확인(client, fake, started, spec, setup, status, detail):
+    tid = _cluster_ticket()
+    if setup:
+        fake[setup[0]] = setup[1]
+    body = {"provisionSpec": {**PROVISION["provisionSpec"], **spec}}
+    r = client.post(f"/api/core/tickets/{tid}/provision-cluster", json=body, headers=ADMIN)
+    assert (r.status_code, r.json()["detail"]) == (status, detail)
+    assert not started and sql("SELECT status FROM tkt_request WHERE id = :id", id=tid).scalar() == "approved"
+
+
+def test_클러스터_프로비저닝은_관리자만_토큰으로(client, fake, started):
+    tid = _cluster_ticket()
+    add_member("ek.lee", role="owner")
+    body = {**PROVISION, "processedBy": "admin"}  # 본문의 이름은 쓰지 않는다
+    assert client.post(f"/api/core/tickets/{tid}/provision-cluster", json=body, headers=bearer(make_token())).status_code == 403
+
+
+def test_클러스터_프로비저닝_시작_실패면_되돌림(client, fake, monkeypatch):
+    tid = _cluster_ticket(status="failed")
+    sql("UPDATE tkt_request SET error_message = '이전 실패', workflow_id = :wf WHERE id = :id",
+        id=tid, wf=f"cluster-provision-{tid}-1")
+
+    async def start(workflow_id, inp):
+        raise RuntimeError("Temporal 연결 실패(시험)")
+
+    monkeypatch.setattr(settings, "temporal_api_base", "temporal.test:7233")
+    monkeypatch.setattr(runtime, "start_cluster_provision", start)
+    body = {"provisionSpec": PROVISION["provisionSpec"]}
+    r = client.post(f"/api/core/tickets/{tid}/provision-cluster", json=body, headers=ADMIN)
+    assert r.status_code == 503
+    row = sql("SELECT status, error_message, workflow_id FROM tkt_request WHERE id = :id", id=tid).one()
+    assert tuple(row) == ("failed", "이전 실패", f"cluster-provision-{tid}-1")
+
+
+# ── 워크플로 DB 작업 ─────────────────────────────────────────────
+
+def test_단계_등록과_접근_권한(client):
+    tid = _cluster_ticket(status="provisioning")
+    plan = activities.init_steps_paas(tid, 1)
+    assert [p["sub"] for p in plan] == ["check_name", "check_quota", "check_network", "send_request",
+                                        "create_control_plane", "create_workers", "check_api", "create_namespace",
+                                        "grant_access"]
+    assert {p["step"] for p in plan[:3]} == {"check_creatable"} and plan[6]["step"] == "create_cluster"
+    assert activities.init_steps_paas(tid, 1) == plan  # 다시 불러도 같은 결과(재시도)
+    assert sql("SELECT count(*) FROM tkt_provision_step WHERE request_id = :id", id=tid).scalar() == 3
+    # 진행 조회 API 가 공통코드 이름으로 보여 준다
+    steps = client.get(f"/api/core/tickets/{tid}/steps", headers=ADMIN).json()
+    assert [s["message"] for s in steps["items"]] == ["클러스터 생성 가능 여부 확인중", "클러스터 생성", "네임스페이스 및 접근 권한"]
+    assert [d["label"] for d in steps["items"][1]["details"]][-1] == "K8s API 연결"
+
+    for _ in range(2):  # 멱등 — NULL namespace 도 한 줄만
+        activities.grant_cluster_access(PROJECT, "c-1")
+    assert sql("SELECT count(*) FROM paas_project_cluster WHERE cluster_id = 'c-1' AND namespace IS NULL").scalar() == 1

@@ -174,26 +174,35 @@ export interface NodeRow {
   power_watts: number | null;
   utilization_percent: number | null;
 }
-export function useNodes(cluster = "mgmt") {
+export function useNodes(cluster = "mgmt", enabled = true) {
   const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["obs-nodes", cluster],
+    enabled: enabled && !!cluster,
     queryFn: () => obsFetch<{ nodes: NodeRow[] }>(`/monitoring/nodes?cluster=${cluster}`),
     refetchInterval: pollMs || false,
   });
 }
 
-export interface UtilSeriesRow {
-  t: string;
-  gpu?: number;
-  furiosa?: number;
-  rebellions?: number;
+export function useNodesTimeseries(cluster = "mgmt") {
+  const pollMs = usePollingInterval((s) => s.intervalMs);
+  return useQuery({
+    queryKey: ["obs-nodes-timeseries", cluster],
+    queryFn: () => obsFetch<{ series: { i: number; v: number }[] }>(`/monitoring/nodes/timeseries?cluster=${cluster}`),
+    refetchInterval: pollMs || false,
+  });
+}
+
+// 가속기 사용률 히트맵 — 호스트 × 시각(cells 는 times 인덱스와 정렬)
+export interface UtilHeatmap {
+  times: string[];
+  hosts: { host: string; vendor: string; cells: (number | null)[] }[];
 }
 export function useUtilTimeseries() {
   const pollMs = usePollingInterval((s) => s.intervalMs);
   return useQuery({
     queryKey: ["obs-util-timeseries"],
-    queryFn: () => obsFetch<{ series: UtilSeriesRow[] }>(`/monitoring/util-timeseries`),
+    queryFn: () => obsFetch<UtilHeatmap>(`/monitoring/util-timeseries`),
     refetchInterval: pollMs || false,
   });
 }
@@ -207,6 +216,7 @@ export interface KpiTimeseries {
   storage: SparkPoint[];
   accel_util: SparkPoint[];
   server_power: SparkPoint[];
+  throttle: SparkPoint[];
 }
 export function useKpiTimeseries() {
   const pollMs = usePollingInterval((s) => s.intervalMs);
@@ -420,5 +430,79 @@ export function useDeletePolicy() {
   return useMutation({
     mutationFn: (id: string) => obsSend<void>("DELETE", `/monitoring/alerts/policies/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["obs-alert-policies"] }),
+  });
+}
+
+// ── 정책 생성 폼 ──
+export interface PolicyFieldError { field: string; message: string }
+/** 422 검증 실패 — detail.errors[] 를 담아 폼이 칸별로 표시 */
+export class PolicyApiError extends Error {
+  status: number;
+  errors: PolicyFieldError[];
+  constructor(status: number, errors: PolicyFieldError[], message: string) {
+    super(message);
+    this.name = "PolicyApiError";
+    this.status = status;
+    this.errors = errors;
+  }
+}
+export interface PolicyCondition { metric: string; op: string; threshold: number | null; window_min?: number }
+export interface AlertPolicyInput {
+  name: string;
+  description: string;
+  conditions: PolicyCondition[];
+  selector: string;
+  duration: string;
+  severity: AlertSeverity;
+  channels: string[];
+  enabled: boolean;
+}
+export function useCreatePolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: AlertPolicyInput) => {
+      const res = await authFetch(`${OBS_BASE}/api/obs/monitoring/alerts/policies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        let detail: unknown = null;
+        try { detail = (await res.json()).detail; } catch { /* 비 JSON 응답 */ }
+        const errors =
+          detail && typeof detail === "object" && Array.isArray((detail as { errors?: unknown }).errors)
+            ? ((detail as { errors: PolicyFieldError[] }).errors)
+            : [];
+        throw new PolicyApiError(res.status, errors, typeof detail === "string" ? detail : `정책 생성 실패 (${res.status})`);
+      }
+      return res.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["obs-alert-policies"] }),
+  });
+}
+export function usePreviewPolicy() {
+  return useMutation({
+    mutationFn: (id: string) => obsSend<Record<string, unknown>>("POST", `/monitoring/alerts/policies/${id}/preview`, {}),
+  });
+}
+
+// ── 정책 생성 폼: 감시 대상(selector) 옵션 로드 ──
+export interface NodeAccelerator { acc_id: string; vendor?: string; model?: string }
+export function useNodeAccelerators(cluster: string, node: string) {
+  return useQuery({
+    queryKey: ["obs-node-accelerators", cluster, node],
+    enabled: !!cluster && !!node,
+    queryFn: () => obsFetch<{ accelerators: NodeAccelerator[] }>(`/monitoring/clusters/${cluster}/nodes/${node}/accelerators`),
+    staleTime: 60_000,
+  });
+}
+export interface SloService { model: string }
+export function useSloServices(cluster: string) {
+  return useQuery({
+    queryKey: ["obs-slo-services", cluster],
+    enabled: !!cluster,
+    queryFn: () => obsFetch<{ items: SloService[]; warnings: string[] }>(`/monitoring/slo/services?cluster=${encodeURIComponent(cluster)}`),
+    staleTime: 30_000,
+    retry: 0,
   });
 }

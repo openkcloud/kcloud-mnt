@@ -1,4 +1,4 @@
-"""IAAS 워커가 실행하는 OpenStack 작업 — MNT-CORE 의 VM 프로비저닝 워크플로가 이름(iaas.*)으로 부른다.
+"""IAAS 워커가 실행하는 OpenStack 작업 — MNT-CORE 의 VM·클러스터 프로비저닝 워크플로가 이름(iaas.*)으로 부른다.
 
 기존 API 함수를 그대로 재활용한다. 실패 구분:
   - 다시 해도 소용없는 실패(없는 플레이버, 생성 거절, 볼륨 error 등) → ApplicationError(non_retryable)
@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from ..openstack_quota import get_project_quota
 from ..routers import networks, servers, volumes
 from ..routers.images import _glance_req
 
@@ -191,5 +192,47 @@ def cleanup(project_id: str, res: dict, deadline: float) -> list[str]:
     return list(dict.fromkeys(done))
 
 
+@activity.defn(name="iaas.check_quota")
+def check_quota(project_id: str, need: dict) -> str:
+    """클러스터 노드 VM 을 만들 프로젝트 쿼터 여유(인스턴스·vCPU·RAM) 확인 → 표시 값. 모자라면 무엇이 얼마나 모자란지 실패.
+    need: {"instances", "vcpu", "ramGb"}. 쿼터 -1 은 무제한."""
+    try:
+        q = get_project_quota(project_id)
+    except HTTPException as e:  # 조회 실패는 일시 오류일 수 있어 재시도하게 둔다
+        raise RuntimeError(e.detail)
+    short = []
+    for key, label, unit in (("instances", "VM", "대"), ("vcpu", "vCPU", ""), ("ramGb", "RAM", "GB")):
+        quota, used = q[key]["quota"], q[key]["used"]
+        if quota >= 0 and used + need[key] > quota:
+            short.append(f"{label} 필요 {need[key]}{unit} · 남음 {max(quota - used, 0)}{unit}")
+    if short:
+        raise _fail("프로젝트 쿼터가 부족합니다 — " + ", ".join(short))
+    return f"VM {need['instances']}대 · vCPU {need['vcpu']} · RAM {need['ramGb']}GB"
+
+
+@activity.defn(name="iaas.check_network")
+def check_network(network_id: str, subnet_id: str, floating_network_id: str) -> str:
+    """클러스터 노드 망 확인 — 서브넷이 그 망 소속·DHCP 켜짐 + API 에 Floating IP 를 붙일 수 있음 → '망 이름 / CIDR'.
+    DHCP 가 꺼진 서브넷에서는 노드가 주소를 받지 못해 설치가 시작되지 않는다(2026-10-19 시험)."""
+    try:
+        net = networks._neutron_get(f"/networks/{network_id}")["network"]
+        sn = networks._neutron_get(f"/subnets/{subnet_id}")["subnet"]
+    except RuntimeError as e:
+        if _gone(e):
+            raise _fail(f"네트워크 확인 실패: {e}")
+        raise
+    if sn.get("network_id") != network_id:
+        raise _fail("서브넷이 고른 네트워크에 속하지 않습니다.")
+    if not sn.get("enable_dhcp"):
+        raise _fail("DHCP 가 꺼진 서브넷에는 노드가 주소를 받지 못합니다.")
+    try:
+        r = networks.fip_reachable(network_id, floating_network_id, subnet_id)
+    except HTTPException as e:
+        raise RuntimeError(e.detail)
+    if not r["reachable"]:
+        raise _fail(f"클러스터 API 에 Floating IP 를 붙일 수 없는 네트워크입니다 — {r['reason']}")
+    return f"{net.get('name') or network_id} / {sn.get('cidr', '')}"
+
+
 ALL = [check_flavor, check_image, create_boot_volume, wait_volume, create_server, watch_server, server_detail,
-       arq_states, attach_fip, cleanup]
+       arq_states, attach_fip, cleanup, check_quota, check_network]

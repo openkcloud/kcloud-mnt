@@ -11,6 +11,7 @@ data:
   API_PREFIX: "/api/paas"
   CORS_ORIGINS: ""
   CORE_API_BASE: "http://mnt-core.openkcloud-mnt.svc.cluster.local"
+  TEMPORAL_API_BASE: "mnt-workflow.openkcloud-mnt.svc.cluster.local:7233"   # 클러스터 프로비저닝 작업 워커
   OS_AUTH_URL: "https://keystone-api.kcloud.cluster.local/v3"
   OS_PROJECT_NAME: "admin"
   KUBECONFIG_PATH: "/etc/mnt/kubeconfig"   # Secret 볼륨 마운트 경로

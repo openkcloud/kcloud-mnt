@@ -25,6 +25,11 @@ class Settings(BaseSettings):
 
     core_api_base: str = ""
 
+    # 클러스터 프로비저닝 작업(Temporal 워커, 큐 okc-paas) — 비우면 워커를 띄우지 않는다(로컬: MNT-WORKFLOW/run-local.sh)
+    temporal_api_base: str = ""
+    # 새 클러스터 노드의 가용 영역(라벨 availability_zone) — 기존 클러스터와 같은 값
+    cluster_availability_zone: str = "az1"
+
     class Config:
         env_file = "config.env"
         env_file_encoding = "utf-8"
