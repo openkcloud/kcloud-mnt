@@ -34,12 +34,12 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { accKindClass, cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
-import { useProjectFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
+import { useNovaKeypairs, useProjectFlavors, useProjectImages, type FlavorSummary, type ProjectImage } from "@/lib/iaas-api";
 import { useClusterTemplates } from "@/lib/paas-api";
 import {
-  useClusterNameCheck, useCreateClusterTicket, useCreateTicket, useTicketProjects, useVmNameCheck,
+  projectsLoadingText, useClusterNameCheck, useCreateClusterTicket, useCreateTicket, useTicketProjects, useVmNameCheck,
 } from "@/lib/ticket-api";
-import { useSshKeys } from "@/lib/sshkey-api";
+import { useSshKeys, type SshKey } from "@/lib/sshkey-api";
 import { WorkspaceRequestForm } from "@/components/workspace-requests";
 import {
   ClusterNodeConfigPanel, EMPTY_NODE_CONFIG, effectiveNodes, nodeConfigMissing, nodeTotals, nodesValid,
@@ -149,8 +149,7 @@ export function ResourceRequestWizard({ open, onClose }: ResourceRequestWizardPr
 const CLUSTER_STEPS = [
   { key: "basic", title: "기본", icon: FolderKanban, desc: "프로젝트 · 이름 · 용도" },
   { key: "template", title: "템플릿", icon: Boxes, desc: "클러스터 템플릿 · K8s 버전" },
-  { key: "nodes", title: "노드", icon: Server, desc: "Control Plane · 가속기 · Worker · 키페어" },
-  { key: "network", title: "네트워크", icon: Network, desc: "희망 망" },
+  { key: "nodes", title: "노드", icon: Server, desc: "희망 망 · Control Plane · Worker · 키페어" },
   { key: "review", title: "확인", icon: CheckCircle2, desc: "신청 검토 및 제출" },
 ] as const;
 
@@ -160,14 +159,28 @@ type ClusterStepKey = typeof CLUSTER_STEPS[number]["key"];
 const CLUSTER_NAME_RE = /^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$/;
 const PURPOSE_MAX = 300;
 
+// 신청 키페어 목록 — 사용자 = 본인 SSH 키(포털 DB), 관리자 = OpenStack(Nova) 키페어(식별자가 이름이라 id 에 이름).
+// 제출 때 사용자는 keypairId, 관리자는 novaKeypair 로 보낸다.
+function useRequestKeypairs() {
+  const user = useAuth((s) => s.user);
+  const isAdmin = user?.role === "admin";
+  const mine = useSshKeys(isAdmin ? undefined : user?.username);
+  const nova = useNovaKeypairs(isAdmin);
+  if (!isAdmin) return { isAdmin, data: mine.data, isLoading: mine.isLoading, error: mine.error };
+  const data = nova.data?.map((k): SshKey => ({
+    id: k.name, name: k.name, publicKey: k.publicKey, fingerprint: k.fingerprint, createdAt: "", vmCount: 0,
+  }));
+  return { isAdmin, data, isLoading: nova.isLoading, error: nova.error };
+}
+
 // ── 가상머신 신청 탭 ──────────────────────────────────────────
 // 탭이 바뀌거나 모달이 닫히면 언마운트되므로 입력값은 자동으로 초기화된다.
-// 프로젝트 = 포털 DB(멤버십) + OpenStack 이름, 스펙·템플릿 = OpenStack 라이브, 키페어 = 포털 DB(본인 키)
+// 프로젝트 = 포털 DB(멤버십) + OpenStack 이름, 스펙·템플릿 = OpenStack 라이브, 키페어 = 포털 DB(본인 키) · 관리자는 OpenStack
 // 티켓 관련 조회·제출은 목업으로 폴백하지 않는다 — 실패하면 오류를 보여준다.
 function VmRequestForm({ onDone }: { onDone: () => void }) {
   const user = useAuth((s) => s.user);
   const createTicket = useCreateTicket();
-  const { data: projects = [], isLoading: projLoading, error: projError } = useTicketProjects(user?.username);
+  const { data: projects = [], isLoading: projLoading, error: projError, failureCount: projFails } = useTicketProjects(user?.username);
 
   const [step, setStep] = React.useState<StepKey>("project");
   const [vmName, setVmName] = React.useState("");
@@ -205,8 +218,8 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
   const needVolume = !!selectedFlavor && selectedFlavor.diskGb === 0;
   const minVolume = Math.max(1, selectedImage?.minVolumeGb ?? 1);
 
-  // 키페어 — 신청자 본인 키만 (iam_ssh_key.owner = username)
-  const { data: myKeypairs = [] } = useSshKeys(user?.username);
+  // 키페어 — 사용자는 본인 키만(iam_ssh_key.owner = username), 관리자는 OpenStack(Nova) 키페어
+  const { isAdmin, data: myKeypairs = [] } = useRequestKeypairs();
 
   function handleNetworkSelect(id: string) {
     setNetwork(id);
@@ -272,7 +285,8 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
         flavorId: flv.id, // Nova 생성 시 flavorRef
         imageId: img.id,
         volumeGb: needVolume ? volumeGb : undefined,
-        keypairId: myKeypairs.find((k) => k.name === keypair)?.id,
+        keypairId: isAdmin ? undefined : myKeypairs.find((k) => k.name === keypair)?.id,
+        novaKeypair: isAdmin && keypair ? keypair : undefined, // 관리자는 OpenStack 키페어 이름
       },
       {
         onSuccess: () => {
@@ -300,7 +314,7 @@ function VmRequestForm({ onDone }: { onDone: () => void }) {
           <p className="text-xs text-muted-foreground">할당된 프로젝트 목록입니다. 가상머신을 생성할 프로젝트를 선택하세요.</p>
           <div className="grid gap-2">
             {projLoading ? (
-              <p className="text-xs text-muted-foreground">프로젝트를 불러오는 중…</p>
+              <p className="text-xs text-muted-foreground">{projectsLoadingText(projFails)}</p>
             ) : projError ? (
               <LoadError what="프로젝트" message={projError.message} />
             ) : projects.length === 0 && (
@@ -741,7 +755,7 @@ function ReviewRow({ label, value, mono, accent }: {
 function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const user = useAuth((s) => s.user);
   const createTicket = useCreateClusterTicket();
-  const { data: projects = [], isLoading: projLoading, error: projError } = useTicketProjects(user?.username);
+  const { data: projects = [], isLoading: projLoading, error: projError, failureCount: projFails } = useTicketProjects(user?.username);
   const { data: allTemplates = [], isLoading: tplLoading, error: tplError } = useClusterTemplates();
 
   const [step, setStep] = React.useState<ClusterStepKey>("basic");
@@ -753,7 +767,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const [network, setNetwork] = React.useState("");
 
   const { data: flavors = [], isLoading: flavorLoading, error: flavorError } = useProjectFlavors(project || undefined);
-  const { data: myKeypairs = [], isLoading: keyLoading, error: keyError } = useSshKeys(user?.username);
+  const { isAdmin, data: myKeypairs = [], isLoading: keyLoading, error: keyError } = useRequestKeypairs();
   const templates = allTemplates.filter((t) => t.public && !t.hidden);
 
   // 이름 형식 검사 후 입력이 멈추면(0.4초) 중복 확인 — 모든 프로젝트의 클러스터 + 진행 중 신청
@@ -775,10 +789,10 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const selectedNetworkObj = USER_NETWORKS.find((n) => n.id === network);
   // 실제로 신청할 노드 — 항목별로 템플릿 값 또는 직접 고른 값
   const nodes = effectiveNodes(flavors, nodeCfg, selectedTemplate ?? { master_flavor_id: null, flavor_id: null });
-  const nodesMissing = nodeConfigMissing(nodes, nodeCfg);
-  const keypairLabel = nodeCfg.source.key === "tpl"
-    ? `${selectedTemplate?.keypair_id || "없음"} (템플릿)`
-    : myKeypairs.find((k) => k.id === nodeCfg.keypairId)?.name;
+  const nodesMissing = [!network && "네트워크", ...nodeConfigMissing(nodes)].filter((x): x is string => !!x);
+  // 직접 고른 키 — 템플릿 값이거나 고르지 않았으면 템플릿 키페어
+  const chosenKey = nodeCfg.source.key === "custom" ? nodeCfg.keypairId || undefined : undefined;
+  const keypairLabel = chosenKey ? myKeypairs.find((k) => k.id === chosenKey)?.name : `${selectedTemplate?.keypair_id || "없음"} (템플릿)`;
   const masterFlavor = flavors.find((f) => f.id === nodes.masterFlavorId);
   const workerFlavor = flavors.find((f) => f.id === nodes.flavorId);
   const totals = nodeTotals(flavors, nodes);
@@ -793,8 +807,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
   const canProceed: Record<ClusterStepKey, boolean> = {
     basic: !!project && nameOk && purpose.length <= PURPOSE_MAX,
     template: !!templateId,
-    nodes: nodesValid(nodes) && nodesMissing.length === 0,
-    network: !!network,
+    nodes: nodesValid(nodes) && nodesMissing.length === 0, // 희망 망 포함
     review: true,
   };
 
@@ -810,7 +823,9 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
         masterFlavorId: nodes.masterFlavorId,
         nodeCount: nodes.nodeCount,
         flavorId: nodes.flavorId,
-        keypairId: nodeCfg.source.key === "custom" ? nodeCfg.keypairId : undefined, // 없으면 템플릿 키페어
+        // 직접 선택 — 사용자는 본인 키(id), 관리자는 OpenStack 키페어(이름). 없으면 템플릿 키페어
+        keypairId: isAdmin ? undefined : chosenKey,
+        novaKeypair: isAdmin ? chosenKey : undefined,
         networkType: network,
         purpose: purpose.trim(),
       },
@@ -839,7 +854,7 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
             <Label>프로젝트</Label>
             <div className="grid gap-2">
               {projLoading ? (
-                <p className="text-xs text-muted-foreground">프로젝트를 불러오는 중…</p>
+                <p className="text-xs text-muted-foreground">{projectsLoadingText(projFails)}</p>
               ) : projError ? (
                 <LoadError what="프로젝트" message={projError.message} />
               ) : projects.length === 0 && (
@@ -951,52 +966,20 @@ function ClusterRequestForm({ onDone }: { onDone: () => void }) {
         </div>
       )}
 
-      {/* ── 3. 노드 — Control Plane · Worker(가속기) · 키페어, 항목별로 직접 선택 또는 템플릿 값 ── */}
+      {/* ── 3. 노드 — 희망 망 · Control Plane · Worker(가속기) · 키페어, 항목별로 직접 선택 또는 템플릿 값 ── */}
       {step === "nodes" && selectedTemplate && (
         <div className="space-y-2">
           {(flavorLoading || keyLoading) && <p className="text-xs text-muted-foreground">스펙·키페어를 불러오는 중…</p>}
           {flavorError && <LoadError what="스펙" message={flavorError.message} />}
           {keyError && <LoadError what="키페어" message={keyError.message} />}
           {!flavorLoading && !keyLoading && !flavorError && !keyError && (
-            <ClusterNodeConfigPanel flavors={flavors} keypairs={myKeypairs} template={selectedTemplate} value={nodeCfg} onChange={setNodeCfg} />
+            <ClusterNodeConfigPanel flavors={flavors} keypairs={myKeypairs} template={selectedTemplate} value={nodeCfg} onChange={setNodeCfg}
+              wish={{ value: network, onChange: setNetwork, options: USER_NETWORKS }} />
           )}
         </div>
       )}
 
-      {/* ── 4. 네트워크 — 희망 망만, 실제 망·서브넷은 관리자가 ── */}
-      {step === "network" && (
-        <div className="space-y-3">
-          <div className="text-sm font-semibold">희망 네트워크 선택</div>
-          <p className="text-xs text-muted-foreground">
-            노드 VM 이 연결될 망의 용도를 선택하세요. 실제 네트워크·서브넷은 관리자가 프로비저닝 때 지정하고,
-            클러스터 API 에는 외부 접속용 공인 IP 가 자동으로 붙습니다.
-          </p>
-          <div className="grid gap-2">
-            {USER_NETWORKS.map((n) => (
-              <button
-                key={n.id}
-                type="button"
-                onClick={() => setNetwork(n.id)}
-                className={cn(
-                  "flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 text-left transition-colors",
-                  network === n.id ? "border-primary bg-brand-indigo-50/40" : "hover:bg-secondary/40",
-                )}
-              >
-                <Wifi className="mt-0.5 size-4 shrink-0 text-sky-600" />
-                <div className="flex-1">
-                  <div className="text-sm font-semibold">
-                    {n.label} <span className="text-[11px] font-normal text-muted-foreground">{n.sublabel}</span>
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">{n.description}</div>
-                </div>
-                {network === n.id && <CheckCircle2 className="size-4 shrink-0 text-brand-mint-600" />}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── 5. 확인 ── */}
+      {/* ── 4. 확인 ── */}
       {step === "review" && (
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground">아래 내용을 확인하고 신청하세요.</p>

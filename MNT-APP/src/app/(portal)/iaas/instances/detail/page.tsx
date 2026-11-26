@@ -22,6 +22,7 @@ import {
   useAttachVolume, useDetachVolume, useAttachInterface, useDetachInterface,
   useResizeServer, useResizeConfirm, useResizeRevert,
   useProjects, useVolumes, useImages, useNetworks, useFlavors,
+  useDeviceProfiles, useAccelModels, accelLabelResolver,
   getServerConsoleUrl,
 } from "@/lib/iaas-api";
 
@@ -51,6 +52,9 @@ function ServerDetailPage() {
   const id = useSearchParams().get("id") ?? undefined;
   const { data: s, isLoading, isError } = useServer(id);
   const { data: projData } = useProjects();
+  const dps = useDeviceProfiles();
+  const accelModels = useAccelModels();
+  const accelLabel = accelLabelResolver(dps.data, accelModels.data);
   const { data: images } = useImages();
   const { data: nets } = useNetworks();
   const { data: vols } = useVolumes();
@@ -161,7 +165,7 @@ function ServerDetailPage() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatTile icon={Cpu} label="사양" value={`vCPU ${s.vcpus}`} sub={`RAM ${Math.round(s.ramMb / 1024)}GB`} />
         <StatTile icon={Gauge} label="플레이버" value={s.flavorName} mono />
-        <StatTile icon={Server} label="가속기" value={s.accelerator ?? "없음"} mono />
+        <StatTile icon={Server} label="가속기" value={s.accelerator ? (accelLabel(s.accelerator) ?? s.accelerator) : "없음"} mono />
         <StatTile icon={Database} label="호스트" value={s.host || "—"} mono />
       </div>
 
@@ -417,6 +421,9 @@ function AttachNetworkDialog({ serverId, projectId, attached, open, onClose }: {
 
 function ResizeDialog({ serverId, currentFlavor, open, onClose }: { serverId: string; currentFlavor: string; open: boolean; onClose: () => void }) {
   const { data: flavors } = useFlavors();
+  const dps = useDeviceProfiles();
+  const accelModels = useAccelModels();
+  const accelLabel = accelLabelResolver(dps.data, accelModels.data);
   const resize = useResizeServer();
   const [flavorId, setFlavorId] = React.useState("");
   React.useEffect(() => { if (open) setFlavorId(""); }, [open]);
@@ -442,7 +449,7 @@ function ResizeDialog({ serverId, currentFlavor, open, onClose }: { serverId: st
             <SelectTrigger><SelectValue placeholder="플레이버 선택" /></SelectTrigger>
             <SelectContent>
               {(flavors ?? []).filter((f) => f.name !== currentFlavor).map((f) => (
-                <SelectItem key={f.id} value={f.id}>{f.name} · vCPU {f.vcpus} / {Math.round(f.ramMb / 1024)}GB{f.accelerator ? ` · ${f.accelerator}` : ""}</SelectItem>
+                <SelectItem key={f.id} value={f.id}>{f.name} · vCPU {f.vcpus} / {Math.round(f.ramMb / 1024)}GB{f.accelerator ? ` · ${accelLabel(f.accelerator) ?? f.accelerator}` : ""}</SelectItem>
               ))}
             </SelectContent>
           </Select>

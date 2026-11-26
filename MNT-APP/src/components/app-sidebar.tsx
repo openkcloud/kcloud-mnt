@@ -20,6 +20,10 @@ export function AppSidebar() {
     () => coreSections ?? (user ? getNavByRole(user.role) : []),
     [coreSections, user],
   );
+  const activeHref = React.useMemo(
+    () => bestMatch(normalizePath(pathname), collectTargets(sections.flatMap((s) => s.items))),
+    [pathname, sections],
+  );
 
   return (
     <aside className="hidden h-screen w-[260px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
@@ -47,7 +51,7 @@ export function AppSidebar() {
               </div>
               <div className="flex flex-col gap-0.5">
                 {section.items.map((item) => (
-                  <SidebarItem key={item.href} item={item} pathname={pathname} />
+                  <SidebarItem key={item.href} item={item} activeHref={activeHref} />
                 ))}
               </div>
             </div>
@@ -63,20 +67,42 @@ function normalizePath(p: string) {
   return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
 }
 
+// 모든 nav 경로(항목·자식·match) 수집
+function collectTargets(items: NavItem[], out: string[] = []): string[] {
+  for (const it of items) {
+    out.push(normalizePath(it.href));
+    if (it.match) for (const m of it.match) out.push(normalizePath(m));
+    if (it.children) collectTargets(it.children, out);
+  }
+  return out;
+}
+
+// 현재 경로에 매칭되는 nav 경로 중 가장 구체적인(긴) 것 하나만 활성 — 상위가 하위 접두사라 중복 active 되는 문제 방지
+function bestMatch(here: string, targets: string[]): string | null {
+  let best: string | null = null;
+  for (const t of targets) {
+    if ((here === t || (t !== "/" && here.startsWith(t + "/"))) && (best === null || t.length > best.length)) {
+      best = t;
+    }
+  }
+  return best;
+}
+
 function SidebarItem({
   item,
-  pathname,
+  activeHref,
   depth = 0,
 }: {
   item: NavItem;
-  pathname: string;
+  activeHref: string | null;
   depth?: number;
 }) {
-  const here = normalizePath(pathname);
-  const target = normalizePath(item.href);
-  const isActive =
-    here === target || (target !== "/" && here.startsWith(target + "/"));
+  const matchesActive = (it: { href: string; match?: string[] }) =>
+    normalizePath(it.href) === activeHref ||
+    !!it.match?.some((m) => normalizePath(m) === activeHref);
   const hasChildren = !!item.children?.length;
+  // 리프는 자신이 활성, 부모는 자식 중 활성이 있을 때(섹션 강조·자동 펼침)
+  const isActive = hasChildren ? !!item.children?.some(matchesActive) : matchesActive(item);
   const [open, setOpen] = React.useState(isActive);
   React.useEffect(() => {
     if (isActive) setOpen(true);
@@ -123,10 +149,7 @@ function SidebarItem({
                 className={cn(
                   "relative flex items-center gap-2.5 rounded-md py-1.5 pl-10 pr-3 text-[12.5px] transition-colors",
                   "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-white",
-                  (normalizePath(pathname) === normalizePath(child.href) ||
-                    child.match?.some((m) =>
-                      normalizePath(pathname).startsWith(normalizePath(m)),
-                    )) &&
+                  matchesActive(child) &&
                     "bg-sidebar-accent font-semibold text-white before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-r-full before:bg-sidebar-primary",
                 )}
               >

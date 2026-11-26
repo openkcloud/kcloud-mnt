@@ -1,8 +1,10 @@
-"""서비스 클러스터 프로비저닝 워크플로 — 정상 완료·생성 실패 정리·생성 요청 실패·사전 확인 실패·정리 실패.
+"""서비스 클러스터 프로비저닝 워크플로 — 정상 완료·생성 실패 정리·생성 요청 실패·사전 확인 실패·정리 실패·조기 실패(노드 VM
+ERROR)·K8s API 접근 실패 + 조기 실패 판정(judge).
 로컬 Temporal 개발 서버 + 가짜 작업. 운영과 같은 샌드박스 러너로 띄워 공통 파일 포함 import 위반도 확인한다."""
 import asyncio
 import shutil
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
 import pytest
 from temporalio import activity
@@ -16,20 +18,29 @@ from app.workflows import vm_provision
 from app.workflows.provision_base import CORE_QUEUE
 
 PLAN = ([{"step": "check_creatable", "sub": s} for s in ("check_name", "check_quota", "check_network")]
-        + [{"step": "create_cluster", "sub": s} for s in ("send_request", "create_control_plane", "create_workers", "check_api")]
-        + [{"step": "setup_cluster", "sub": s} for s in ("create_namespace", "grant_access")])
+        + [{"step": "create_cluster", "sub": s} for s in ("send_request", "prepare_api", "create_cp_vm", "init_control_plane",
+                                                          "create_workers", "create_control_plane", "finish_cluster")]
+        + [{"step": "setup_cluster", "sub": s} for s in ("check_api", "create_namespace", "grant_access")])
+API = "https://192.0.2.1:6443"
 
 
-def _snap(status, master=False, workers=0, api=""):
+def _snap(status, master=False, cp=0, workers=0, api="", wvms=None, problem=None):
     return {"status": status, "reason": "Stack 실패(시험)" if status.endswith("FAILED") else "", "masterReady": master,
-            "workersActive": workers, "apiAddress": api, "key": f"{status}/{master}/{workers}/{api}"}
+            "cpVms": cp, "cpActive": cp, "workerVms": workers if wvms is None else wvms, "workersActive": workers,
+            "apiAddress": api, "problem": problem, "key": f"{status}/{master}/{cp}/{workers}/{api}/{problem}"}
 
 
 WATCH = {
-    "wf-ok": [_snap(""), _snap("CREATE_IN_PROGRESS"), _snap("CREATE_IN_PROGRESS", True, 1),
-              _snap("CREATE_COMPLETE", True, 2, "https://192.0.2.1:6443")],
+    # 실제 순서(2026-10-21 시험) — API 주소 → CP VM → Worker VM 생성 시작(초기화 끝) → Worker VM ACTIVE → 노드 준비 → 완료
+    "wf-ok": [_snap(""), _snap("CREATE_IN_PROGRESS"), _snap("CREATE_IN_PROGRESS", api=API),
+              _snap("CREATE_IN_PROGRESS", cp=1, api=API), _snap("CREATE_IN_PROGRESS", cp=1, api=API, wvms=2),
+              _snap("CREATE_IN_PROGRESS", cp=1, workers=2, api=API), _snap("CREATE_IN_PROGRESS", True, 1, 2, API),
+              _snap("CREATE_COMPLETE", True, 1, 2, API)],
     "wf-failed": [_snap("CREATE_IN_PROGRESS"), _snap("CREATE_FAILED")],
     "wf-cleanup-fail": [_snap("CREATE_FAILED")],
+    "wf-vm-error": [_snap("CREATE_IN_PROGRESS", cp=1, api=API, wvms=1, problem={
+        "code": "vm_error", "message": "노드 VM 생성 실패(default-worker-a): No valid host was found."})],
+    "wf-api-fail": [_snap("CREATE_COMPLETE", True, 1, 2, API)],
 }
 
 
@@ -87,7 +98,9 @@ async def _scenarios():
 
     @activity.defn(name="paas.check_api")
     def check_api(cluster_id):
-        return "https://192.0.2.1:6443"
+        if wid() == "wf-api-fail":
+            raise ApplicationError("timed out", non_retryable=True)
+        return API
 
     @activity.defn(name="paas.create_namespace")
     def create_namespace(cluster_id, name, project_id, project_name):
@@ -106,7 +119,7 @@ async def _scenarios():
         return {"ticketId": tid, "attempt": 1, "projectId": "p-1", "projectName": "okc_test_prj",
                 "clusterName": f"cl-{tid}", "templateId": "t-1", "masterCount": 1, "masterFlavorId": "m1.large",
                 "nodeCount": 2, "flavorId": "m1.large", "networkId": "net-1", "subnetId": "sub-1",
-                "floatingNetworkId": "pub", "publicKey": "ssh-ed25519 AAAA u@h", "namespace": "okc-test-prj",
+                "floatingNetworkId": "pub", "keypair": "gy-yang-pub", "namespace": "okc-test-prj",
                 "need": {"instances": 3, "vcpu": 12, "ramGb": 24}}
 
     async with await WorkflowEnvironment.start_local(dev_server_existing_path=shutil.which("temporal")) as env:
@@ -123,7 +136,7 @@ async def _scenarios():
                                           delete_cluster]):
                 ok = await env.client.execute_workflow(kp.KubernetesProvision.run, inp("wf-ok"), id="wf-ok",
                                                        task_queue=CORE_QUEUE)
-                for tid in ("wf-failed", "wf-request-lost", "wf-quota", "wf-cleanup-fail"):
+                for tid in ("wf-failed", "wf-request-lost", "wf-quota", "wf-cleanup-fail", "wf-vm-error", "wf-api-fail"):
                     with pytest.raises(WorkflowFailureError):
                         await env.client.execute_workflow(kp.KubernetesProvision.run, inp(tid), id=tid,
                                                           task_queue=CORE_QUEUE)
@@ -143,10 +156,11 @@ async def _scenarios():
     assert ("namespace", "wf-ok", "c-wf-ok", "okc-test-prj", "p-1", "okc_test_prj") in calls
     create = next(c for c in calls if c[:2] == ("create", "wf-ok"))
     assert create[2] == "p-1" and create[3]["name"] == "cl-wf-ok" and create[3]["subnetId"] == "sub-1"
-    assert create[3]["publicKey"] == "ssh-ed25519 AAAA u@h"  # 신청자 키 — PAAS 가 클러스터 키페어로 등록
+    assert create[3]["keypair"] == "gy-yang-pub"  # OpenStack 키페어 이름 그대로 — PAAS 가 찾아서 Magnum 에 넘긴다
+    assert create[3]["externalNetwork"] is False  # 입력에 없으면 프로젝트 망(라우터 + API Floating IP)
     assert sub_values("wf-ok") == {"check_name": "cl-wf-ok", "check_quota": "VM 3대 · vCPU 12 · RAM 24GB",
                                    "check_network": "my-network / 10.0.1.0/24", "send_request": "c-wf-ok",
-                                   "create_control_plane": "1/1", "create_workers": "2/2",
+                                   "prepare_api": API, "create_cp_vm": "1/1", "create_workers": "2/2",
                                    "check_api": "https://192.0.2.1:6443", "create_namespace": "okc-test-prj",
                                    "grant_access": "okc_test_prj"}
 
@@ -168,3 +182,46 @@ async def _scenarios():
     status, result, error = fin("wf-cleanup-fail")
     assert status == "failed" and result == {"clusterId": "c-wf-cleanup-fail", "clusterName": "cl-wf-cleanup-fail"}
     assert "생성한 클러스터 정리 실패, 확인 필요(clusterId=c-wf-cleanup-fail)" in error
+
+    # 조기 실패 — 노드 VM ERROR 는 바로 실패(45분 기다리지 않음), 만든 클러스터는 정리
+    assert fin("wf-vm-error")[2] == "노드 VM 생성 실패(default-worker-a): No valid host was found. — 생성한 클러스터는 삭제함"
+    # K8s API 에 닿지 않음 — 정해 둔 문구로(원래 오류 'timed out' 대신)
+    assert fin("wf-api-fail")[2] == "포털이 클러스터 K8s API 에 접근하지 못했습니다. — 생성한 클러스터는 삭제함"
+
+
+# ── 조기 실패 판정(judge) ─────────────────────────────────────────
+
+T0 = datetime(2026, 10, 21, 18, 0)
+
+
+def _s(cp=1, workers=1, problem=None):
+    return {"cpVms": cp, "workerVms": workers, "problem": problem}
+
+
+def test_노드_VM_이_안_생기면_2분부터_주의_5분에_실패():
+    seen: dict = {}
+    assert kp.judge(_s(cp=0), T0 + timedelta(minutes=1), T0, None, seen) == (None, None)  # 성공 때는 31초
+    assert kp.judge(_s(cp=0), T0 + timedelta(minutes=2), T0, None, seen) == (
+        None, "주의: Control Plane VM 이 아직 만들어지지 않았습니다 (2분째)")
+    fail, _ = kp.judge(_s(cp=0), T0 + timedelta(minutes=5), T0, None, seen)
+    assert fail.startswith("Control Plane VM 이 5분 안에 만들어지지 않았습니다")
+    # Worker VM — 노드 준비(Control Plane 완료) 뒤부터 센다
+    fail, _ = kp.judge(_s(workers=0), T0 + timedelta(minutes=9), T0, T0 + timedelta(minutes=4), seen)
+    assert fail.startswith("Worker VM 이 5분 안에 만들어지지 않았습니다")
+
+
+def test_클라우드_컨트롤러_문제는_3분_계속되면_실패():
+    occm = {"code": "occm", "message": "클라우드 컨트롤러(OCCM)가 OpenStack API·DNS 에 닿지 못합니다 (i/o timeout)"}
+    seen: dict = {}
+    assert kp.judge(_s(problem=occm), T0, T0, None, seen) == (None, f"주의: {occm['message']} (0분째)")
+    assert kp.judge(_s(problem=occm), T0 + timedelta(minutes=2), T0, None, seen)[0] is None
+    # 사라졌다 다시 생기면 처음부터 센다
+    assert kp.judge(_s(), T0 + timedelta(minutes=2, seconds=30), T0, None, seen) == (None, None)
+    assert kp.judge(_s(problem=occm), T0 + timedelta(minutes=3), T0, None, seen)[0] is None
+    assert kp.judge(_s(problem=occm), T0 + timedelta(minutes=6), T0, None, seen) == (occm["message"], None)
+
+
+@pytest.mark.parametrize("code", ["vm_error", "node_network"])
+def test_확정된_문제는_바로_실패(code):
+    p = {"code": code, "message": "노드 문제(시험)"}
+    assert kp.judge(_s(problem=p), T0, T0, None, {}) == ("노드 문제(시험)", None)

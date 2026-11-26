@@ -1,6 +1,7 @@
 "use client";
 import * as React from "react";
-import { Cpu, Search, Server, Monitor } from "lucide-react";
+import { Cpu, Search, Server, Monitor, Tag } from "lucide-react";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,11 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RefreshControls } from "@/components/iaas/refresh-controls";
-import { useAcceleratorDevices, type AcceleratorDevice } from "@/lib/iaas-api";
+import { useAuth } from "@/lib/auth";
+import {
+  useAcceleratorDevices, useAccelModels, useUpsertAccelModel, useDeleteAccelModel,
+  accelModelByProductId, type AcceleratorDevice,
+} from "@/lib/iaas-api";
 
 // 가속기 장치 현황(Cyborg 5-2) — 물리 노드별 가속기 인벤토리·Resource Class·Trait·연결 VM·사용 상태(조회 전용).
 const USAGE: Record<AcceleratorDevice["usage"], { label: string; variant: "warning" | "success" | "secondary" }> = {
@@ -38,18 +43,24 @@ function vendorLabel(v: string | null): string {
 }
 
 export default function AcceleratorDevicesPage() {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
   const { data, isLoading } = useAcceleratorDevices();
+  const accelModels = useAccelModels();
+  const byPid = accelModelByProductId(accelModels.data); // product_id → 모델명
   const [q, setQ] = React.useState("");
   const [type, setType] = React.useState("all");
   const [vendor, setVendor] = React.useState("all");
   const [vmView, setVmView] = React.useState<AcceleratorDevice | null>(null); // 연결 VM 목록 보기
 
   if (isLoading || !data) return <Skeleton className="h-96" />;
+  // 모델명 = 매핑(product_id) 우선, 미매핑 시 product_id 원본, 그마저 없으면 Cyborg model
+  const modelOf = (d: AcceleratorDevice) =>
+    (d.productId && byPid[d.productId]) || d.productId || d.model || "—";
 
   const types = Array.from(new Set(data.map((d) => d.type).filter(Boolean))) as string[];
   const vendors = Array.from(new Set(data.map((d) => d.vendor).filter(Boolean))) as string[];
   const items = data.filter((d) =>
-    (!q || [d.hostname, d.model, d.uuid].some((v) => (v || "").toLowerCase().includes(q.toLowerCase())))
+    (!q || [d.hostname, d.model, d.productId, d.uuid].some((v) => (v || "").toLowerCase().includes(q.toLowerCase())))
     && (type === "all" || d.type === type)
     && (vendor === "all" || d.vendor === vendor),
   );
@@ -88,6 +99,8 @@ export default function AcceleratorDevicesPage() {
         </div>
       </Card>
 
+      {isAdmin && <ModelMappingCard devices={data} byPid={byPid} />}
+
       {hosts.length === 0 ? (
         <Card><div className="py-10 text-center text-sm text-muted-foreground">가속기 장치가 없습니다.</div></Card>
       ) : hosts.map((host) => (
@@ -118,7 +131,10 @@ export default function AcceleratorDevicesPage() {
                       <span className="font-mono text-xs font-semibold">{d.type || "—"}</span>
                     </div>
                   </TableCell>
-                  <TableCell className="text-sm">{d.model || "—"}</TableCell>
+                  <TableCell className="text-sm" title={[d.productId && `product_id=${d.productId}`, d.model && `cyborg=${d.model}`].filter(Boolean).join(" · ") || undefined}>
+                    {modelOf(d)}
+                    {d.productId && !byPid[d.productId] && <span className="ml-1.5 text-[10px] text-amber-700">미매핑</span>}
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{vendorLabel(d.vendor)}</TableCell>
                   <TableCell>
                     {d.resourceClasses.length
@@ -174,5 +190,76 @@ export default function AcceleratorDevicesPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// 모델명 매핑(관리자) — 장치에서 추출한 고유 product_id 에 모델명을 지정. Cyborg 가 모델명을 주지 않아 포털에서 관리(ETRI 협의).
+function ModelMappingCard({ devices, byPid }: { devices: AcceleratorDevice[]; byPid: Record<string, string> }) {
+  const upsert = useUpsertAccelModel();
+  const del = useDeleteAccelModel();
+  const [edits, setEdits] = React.useState<Record<string, string>>({});
+
+  // 고유 (product_id, vendor) — product_id 가 있는 장치만
+  const rows = React.useMemo(() => {
+    const m = new Map<string, { productId: string; vendor: string | null }>();
+    for (const d of devices) if (d.productId) m.set(d.productId, { productId: d.productId, vendor: d.vendor ?? null });
+    return Array.from(m.values()).sort((a, b) => a.productId.localeCompare(b.productId));
+  }, [devices]);
+
+  const valueOf = (pid: string) => edits[pid] ?? byPid[pid] ?? "";
+  function save(pid: string, vendor: string | null) {
+    const model = valueOf(pid).trim();
+    if (!model) return toast.error("모델명을 입력하세요");
+    upsert.mutate({ productId: pid, vendor, model }, {
+      onSuccess: () => toast.success(`${pid} → ${model} 저장됨`),
+      onError: (e) => toast.error("저장 실패", { description: String((e as Error).message) }),
+    });
+  }
+  function remove(pid: string) {
+    del.mutate(pid, {
+      onSuccess: () => { toast.success("매핑 해제됨"); setEdits((s) => { const n = { ...s }; delete n[pid]; return n; }); },
+      onError: (e) => toast.error("매핑 해제 실패", { description: String((e as Error).message) }),
+    });
+  }
+
+  return (
+    <Card>
+      <div className="flex items-center gap-2 border-b px-4 py-2.5">
+        <Tag className="size-4 text-brand-indigo-600" />
+        <span className="text-sm font-semibold">모델명 매핑</span>
+        <span className="text-xs text-muted-foreground">product_id → 모델명. 여기서 지정한 모델명이 플레이버·가상서버·클러스터 배지에 표기됩니다.</span>
+      </div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>벤더 (PCI ID)</TableHead>
+            <TableHead>product_id</TableHead>
+            <TableHead>모델명</TableHead>
+            <TableHead className="w-44" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map(({ productId, vendor }) => (
+            <TableRow key={productId}>
+              <TableCell className="text-sm text-muted-foreground">{vendorLabel(vendor)}</TableCell>
+              <TableCell className="font-mono text-xs">{productId}</TableCell>
+              <TableCell>
+                <Input value={valueOf(productId)} onChange={(e) => setEdits((s) => ({ ...s, [productId]: e.target.value }))}
+                  placeholder="예: L40S" className="h-8 w-40" />
+              </TableCell>
+              <TableCell>
+                <div className="flex gap-1">
+                  <Button size="sm" className="h-8" disabled={upsert.isPending} onClick={() => save(productId, vendor)}>저장</Button>
+                  {byPid[productId] && <Button size="sm" variant="outline" className="h-8" disabled={del.isPending} onClick={() => remove(productId)}>매핑 해제</Button>}
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+          {rows.length === 0 && (
+            <TableRow><TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">product_id 를 가진 가속기 장치가 없습니다.</TableCell></TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </Card>
   );
 }

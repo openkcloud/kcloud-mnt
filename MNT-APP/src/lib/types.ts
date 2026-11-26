@@ -514,6 +514,8 @@ export interface ClusterProvisionSpec {
   nodeCount: number;
   flavorId: string;
   flavorName: string;
+  // 넣은 OpenStack 키페어 이름 — null 이면 템플릿 키페어. 키페어를 바꿀 수 있게 되기 전(2026-10-21) 기록에는 없다
+  keypairName?: string | null;
 }
 
 // 프로비저닝 결과
@@ -568,6 +570,7 @@ export interface ProvNetwork {
   id: string;
   name: string;
   kind: "project" | "shared" | "external";
+  shared?: boolean;        // 이 프로젝트가 포트를 만들 수 있는 공유 망(공유된 외부망이면 클러스터 노드를 바로 붙일 수 있다)
   projectId: string;
   cidr: string;
 }
@@ -644,6 +647,7 @@ export interface ResourceRequest {
   networkName?: string;
   keypairId?: string;      // iam_ssh_key.id
   keypairName?: string;
+  novaKeypair?: string;    // 관리자 신청 — OpenStack(Nova) 키페어 이름
   floatingIp?: boolean;    // 사용자 공인 IP 희망
   acceleratorKind?: string;
   acceleratorCount?: number;

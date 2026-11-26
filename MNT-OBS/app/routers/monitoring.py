@@ -45,6 +45,13 @@ def _avg(xs: list) -> float:
     return round(sum(vals) / len(vals), 2) if vals else 0.0
 
 
+def _avg_or_none(xs: list) -> float | None:
+    """수치가 하나도 없으면 None(미수집), 있으면 평균(0 포함).
+    메모리처럼 '값이 0' 과 '미수집'을 구분해야 하는 지표용(프론트: None→'—', 0→'0.0 GB')."""
+    vals = [x for x in xs if isinstance(x, (int, float))]
+    return round(sum(vals) / len(vals), 2) if vals else None
+
+
 def _series_points(values) -> list[dict]:
     """[[ts, "val"], ...] → [{i, v}] (스파크라인용, 문자열 수치화)."""
     out = []
@@ -80,7 +87,7 @@ def accelerator_summary(cluster: str = Query("mgmt")):
             "temperature_celsius": _avg([x.get("temperature_celsius") for x in items]),
             "power_watts": _avg([x.get("power_watts") for x in items]),
             "utilization_percent": _avg([x.get("utilization_percent") for x in items]),
-            "memory_used_bytes": _avg([x.get("memory_used_bytes") for x in items]),
+            "memory_used_bytes": _avg_or_none([x.get("memory_used_bytes") for x in items]),
             "memory_total_bytes": items[0].get("memory_total_bytes"),
             "healthy_count": sum(1 for x in items if x.get("healthy")),
             # 파생 교체(2026-10): 전력모드/캡상태 · Throttling

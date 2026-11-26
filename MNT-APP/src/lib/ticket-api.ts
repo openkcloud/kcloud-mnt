@@ -4,6 +4,7 @@
  * 티켓 관련 호출은 MSW 목업으로 폴백하지 않는다 — 실패하면 오류를 보여준다(실제 티켓과 목업 데이터가 섞이지 않게).
  */
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { LOOKUP, lookupRetry, withTimeout } from "@/lib/http";
 import { coreFetch } from "@/lib/menu-api";
 import type { ClusterProvisionSpec, Org, ProvisionSpec, ProvisionStepsResp, ResourceRequest } from "@/lib/types";
 
@@ -13,10 +14,15 @@ export function useTicketProjects(username: string | undefined) {
   return useQuery({
     queryKey: ["tickets", "projects", username],
     enabled: !!username,
-    queryFn: async (): Promise<TicketProject[]> =>
-      (await coreFetch<{ items: TicketProject[] }>(`/tickets/projects`)).items,
-    retry: 0,
+    queryFn: ({ signal }) => withTimeout(LOOKUP.timeoutMs, signal, async (s): Promise<TicketProject[]> =>
+      (await coreFetch<{ items: TicketProject[] }>(`/tickets/projects`, { signal: s })).items),
+    ...lookupRetry, // 한 번에 5초, 최대 3번 — 화면은 failureCount 로 "(n/3)" 표시
   });
+}
+
+/** 프로젝트 목록 조회 중 문구 — 몇 번째 시도인지(n/3). */
+export function projectsLoadingText(failureCount: number) {
+  return `프로젝트 목록 가져오는 중…(${Math.min(failureCount + 1, LOOKUP.attempts)}/${LOOKUP.attempts})`;
 }
 
 /** VM 이름 사용 가능 여부(같은 프로젝트의 기존 VM + 진행 중 티켓 — 완료·반려 제외). */
@@ -82,6 +88,7 @@ export interface CreateTicketInput {
   imageId: string;
   volumeGb?: number;
   keypairId?: string;
+  novaKeypair?: string;    // 관리자만 — OpenStack(Nova) 키페어 이름
 }
 
 /** VM 자원신청 — 서버가 멤버·이름·스펙·이미지·볼륨·키페어를 다시 확인한 뒤 저장. */
@@ -181,6 +188,7 @@ export interface CreateClusterTicketInput {
   flavorId: string;        // Worker 플레이버 — 가속기는 이 플레이버의 device-profile
   networkType: string;     // 희망 망 internal | external — 실제 망·서브넷은 관리자가 프로비저닝 때
   keypairId?: string;      // 본인 SSH 키(iam_ssh_key.id) — 없으면 템플릿 키페어
+  novaKeypair?: string;    // 관리자만 — OpenStack(Nova) 키페어 이름
   purpose: string;
 }
 
@@ -197,9 +205,9 @@ export function useCreateClusterTicket() {
 export interface ProvisionClusterInput {
   id: string;
   expectedStatus: string;  // 화면이 보고 있던 상태 — 그사이 바뀌었으면 서버가 409
-  // 망·서브넷은 필수, 노드 구성은 빼면 신청 값 그대로
+  // 망·서브넷은 필수, 노드 구성·키페어는 빼면 신청 값 그대로. 키페어는 OpenStack 키페어 이름(null = 템플릿 키페어)
   provisionSpec: Pick<ClusterProvisionSpec, "networkId" | "subnetId">
-    & Partial<Pick<ClusterProvisionSpec, "masterCount" | "masterFlavorId" | "nodeCount" | "flavorId">>;
+    & Partial<Pick<ClusterProvisionSpec, "masterCount" | "masterFlavorId" | "nodeCount" | "flavorId">> & { novaKeypair?: string | null };
 }
 
 /** 클러스터 프로비저닝 시작(승인 → 생성 중) · 재시도(실패 → 생성 중, 새 회차) — 서버가 망·서브넷(DHCP·Floating IP)·

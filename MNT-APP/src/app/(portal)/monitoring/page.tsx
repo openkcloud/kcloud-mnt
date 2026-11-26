@@ -47,7 +47,7 @@ import {
 const COMMON_METRICS = [
   { name: "온도", unit: "℃", rngd: "54", atom: "47", l40s: "63", note: "임계 85" },
   { name: "전력", unit: "W", rngd: "118.6", atom: "61.2", l40s: "242.8", note: "실시간" },
-  { name: "사용률", unit: "%", rngd: "48", atom: "39", l40s: "71", note: "코어 사용률" },
+  { name: "사용률", unit: "%", rngd: "48", atom: "39", l40s: "71", note: "카드 사용률" },
   { name: "메모리 사용량", unit: "", rngd: "22.6 GB", atom: "7.8 GB", l40s: "28.4 GiB", note: "총량 대비" },
   { name: "메모리 총량", unit: "", rngd: "51.0 GB", atom: "16.9 GB", l40s: "46.1 GiB", note: "장치 탑재 용량" },
   { name: "health", unit: "", rngd: "1 정상", atom: "1 정상", l40s: "1 정상", note: "1 = 정상" },
@@ -68,8 +68,17 @@ const ACCEL_FIELD: Record<string, string> = {
   "Throttling": "throttled · throttle_reasons",
 };
 
+// 비고 칸 추가 설명(툴팁) — 벤더별 동작 차이
+const NOTE_HINT: Record<string, string> = {
+  "전력 모드 / 캡":
+    "NVIDIA: P0~P15 성능 단계(P-state) — 부하에 따라 GPU 가 자동 변경(P0=최고 성능).\n" +
+    "Furiosa: governor 모드명(현재 performance = 항상 최고 클럭, 사람이 수동 설정).\n" +
+    "Rebellions: 전력 모드 미제공(— 처리).",
+};
+
 function fmtGB(bytes: number | null | undefined) {
-  return bytes ? `${(bytes / 1e9).toFixed(1)} GB` : "—";
+  // 피드백: 0 은 "0.0 GB" 로 명확히, null/미수집만 "—"
+  return bytes == null ? "—" : `${(bytes / 1e9).toFixed(1)} GB`;
 }
 function fmtN(x: number | null | undefined, digits: number) {
   return x == null ? "—" : x.toFixed(digits);
@@ -83,7 +92,7 @@ function buildAccelRows(v?: Record<string, VendorMetrics>) {
   const defs: { name: string; unit: string; note: string; get: (m: VendorMetrics) => string }[] = [
     { name: "온도", unit: "℃", note: "임계 85", get: (m) => m.temperature_celsius.toFixed(1) },
     { name: "전력", unit: "W", note: "장치당 평균", get: (m) => m.power_watts.toFixed(1) },
-    { name: "사용률", unit: "%", note: "코어 사용률", get: (m) => m.utilization_percent.toFixed(0) },
+    { name: "사용률", unit: "%", note: "카드 사용률", get: (m) => m.utilization_percent.toFixed(0) },
     { name: "메모리 사용량", unit: "", note: "총량 대비", get: (m) => fmtGB(m.memory_used_bytes) },
     { name: "메모리 총량", unit: "", note: "장치 탑재 용량", get: (m) => fmtGB(m.memory_total_bytes) },
     { name: "health", unit: "", note: "정상/전체", get: (m) => `${m.healthy_count}/${m.count} 정상` },
@@ -170,7 +179,12 @@ export default function MonitoringOverviewPage() {
                   <td className="font-mono tabular-nums">{m.rngd}</td>
                   <td className="font-mono tabular-nums">{m.atom}</td>
                   <td className="font-mono tabular-nums">{m.l40s}</td>
-                  <td className="text-muted-foreground">{m.note}</td>
+                  <td className="text-muted-foreground">
+                    <span className="inline-flex items-center gap-1">
+                      {m.note}
+                      {NOTE_HINT[m.name] && <InfoHint text={NOTE_HINT[m.name]} />}
+                    </span>
+                  </td>
                 </tr>
               ))}
             </tbody>
