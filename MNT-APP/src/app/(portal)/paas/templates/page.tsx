@@ -1,0 +1,296 @@
+"use client";
+/**
+ * 클러스터 템플릿 — Magnum ClusterTemplate 관리(관리자 전용, Horizon 과 동일 범위).
+ * 클러스터 생성의 설계도. 이미지·플레이버·네트워크는 IaaS 조회 훅으로 드롭다운.
+ * 레이아웃·폰트는 IaaS 목록 화면 규약과 동일.
+ */
+import * as React from "react";
+import { Boxes, Search, Plus, Pencil, Trash2, Copy } from "lucide-react";
+import { toast } from "sonner";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm";
+import { RefreshControls } from "@/components/iaas/refresh-controls";
+import { useAuth } from "@/lib/auth";
+import { useImages, useFlavors, useNetworks } from "@/lib/iaas-api";
+import {
+  useClusterTemplates, useCreateTemplate, useUpdateTemplate, useDeleteTemplate,
+  type ClusterTemplate, type ClusterTemplateInput,
+} from "@/lib/paas-api";
+
+export default function TemplatesPage() {
+  const isAdmin = useAuth((s) => s.user?.role === "admin");
+  const templates = useClusterTemplates();
+  const confirm = useConfirm();
+  const del = useDeleteTemplate();
+  const [q, setQ] = React.useState("");
+  const [editing, setEditing] = React.useState<ClusterTemplate | "new" | null>(null);
+
+  if (!isAdmin) {
+    return <Card><div className="py-10 text-center text-sm text-muted-foreground">관리자 전용 화면입니다.</div></Card>;
+  }
+
+  const items = (templates.data ?? []).filter((t) => !q || t.name.toLowerCase().includes(q.toLowerCase()));
+
+  async function onDelete(t: ClusterTemplate) {
+    if (!(await confirm({ title: "템플릿 삭제", destructive: true, confirmLabel: "삭제", description: `'${t.name}' 템플릿을 삭제할까요? 이 템플릿으로 만든 클러스터에는 영향이 없습니다.` }))) return;
+    del.mutate(t.id, { onSuccess: () => toast.success(`${t.name} 삭제됨`), onError: (e) => toast.error("삭제 실패", { description: String((e as Error).message) }) });
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="p-4">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+            <Input placeholder="템플릿 검색…" value={q} onChange={(e) => setQ(e.target.value)} className="w-56 pl-9" />
+          </div>
+          <span className="text-xs text-muted-foreground">총 {items.length}개</span>
+          <div className="ml-auto flex items-center gap-2">
+            <RefreshControls queryKeys={[["paas-templates"]]} />
+            <Button size="sm" onClick={() => setEditing("new")}><Plus className="size-3.5" /> 템플릿 생성</Button>
+          </div>
+        </div>
+      </Card>
+
+      <Card>
+        {templates.isLoading ? (
+          <Skeleton className="h-64" />
+        ) : templates.isError ? (
+          <div className="py-10 text-center text-sm text-rose-500">템플릿 조회 실패 — MNT-PAAS 응답 오류.</div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>템플릿</TableHead>
+                <TableHead>COE</TableHead>
+                <TableHead>플레이버(워커/마스터)</TableHead>
+                <TableHead>네트워크</TableHead>
+                <TableHead>공개</TableHead>
+                <TableHead>LB/FIP</TableHead>
+                <TableHead className="w-24" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((t) => (
+                <TableRow key={t.id} className="cursor-pointer" onClick={() => setEditing(t)}>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <Boxes className="size-3.5 text-brand-indigo-600" />
+                      <span className="max-w-[240px] truncate font-mono text-sm font-semibold">{t.name}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell><Badge variant="outline" className="text-[10px]">{t.coe}</Badge></TableCell>
+                  <TableCell className="font-mono text-xs">{t.flavor_id || "—"}{t.master_flavor_id && t.master_flavor_id !== t.flavor_id ? ` / ${t.master_flavor_id}` : ""}</TableCell>
+                  <TableCell className="font-mono text-xs">{t.external_network_id || "—"}</TableCell>
+                  <TableCell>{t.public ? <Badge variant="success" className="text-[10px]">public</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
+                  <TableCell className="font-mono text-[11px] text-muted-foreground">
+                    {[t.master_lb_enabled ? "LB" : null, t.floating_ip_enabled ? "FIP" : null].filter(Boolean).join(" · ") || "—"}
+                  </TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-0.5">
+                      <Button variant="ghost" size="icon-sm" title="수정" onClick={() => setEditing(t)}><Pencil className="size-3.5" /></Button>
+                      <Button variant="ghost" size="icon-sm" title="복제" onClick={() => setEditing({ ...t, name: `${t.name}-copy` })}><Copy className="size-3.5" /></Button>
+                      <Button variant="ghost" size="icon-sm" title="삭제" disabled={del.isPending} onClick={() => onDelete(t)}><Trash2 className="size-3.5 text-rose-600" /></Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {items.length === 0 && (
+                <TableRow><TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">템플릿이 없습니다.</TableCell></TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
+      {editing && <TemplateDialog base={editing === "new" ? null : editing} onClose={() => setEditing(null)} />}
+    </div>
+  );
+}
+
+/** base=null → 생성, base=템플릿 → 수정(복제도 base 에 name 바꿔 넘기면 '수정'이 아니라 '생성'이 되게 isCopy 로 구분) */
+function TemplateDialog({ base, onClose }: { base: ClusterTemplate | null; onClose: () => void }) {
+  const create = useCreateTemplate();
+  const update = useUpdateTemplate();
+  const images = useImages();
+  const flavors = useFlavors();
+  const networks = useNetworks();
+
+  // base 에 id 가 있고 updatedAt 등이 있으면 '수정', 복제는 id 가 있어도 이름이 -copy → 생성으로.
+  const isCopy = !!base && base.name.endsWith("-copy");
+  const isEdit = !!base && !isCopy;
+
+  const [f, setF] = React.useState<ClusterTemplateInput>(() => ({
+    name: base?.name ?? "",
+    coe: base?.coe ?? "kubernetes",
+    image_id: base?.image_id ?? "",
+    flavor_id: base?.flavor_id ?? "",
+    master_flavor_id: base?.master_flavor_id ?? "",
+    keypair_id: base?.keypair_id ?? "",
+    external_network_id: base?.external_network_id ?? "",
+    fixed_network: base?.fixed_network ?? "",
+    fixed_subnet: base?.fixed_subnet ?? "",
+    dns_nameserver: base?.dns_nameserver ?? "",
+    network_driver: base?.network_driver ?? "calico",
+    volume_driver: base?.volume_driver ?? "",
+    docker_storage_driver: base?.docker_storage_driver ?? "overlay2",
+    docker_volume_size: base?.docker_volume_size ?? null,
+    server_type: base?.server_type ?? "vm",
+    public: base?.public ?? false,
+    hidden: base?.hidden ?? false,
+    tls_disabled: base?.tls_disabled ?? false,
+    master_lb_enabled: base?.master_lb_enabled ?? true,
+    floating_ip_enabled: base?.floating_ip_enabled ?? true,
+  }));
+  const [labelsText, setLabelsText] = React.useState(
+    Object.entries(base?.labels ?? {}).map(([k, v]) => `${k}=${v}`).join("\n"),
+  );
+  const set = (k: keyof ClusterTemplateInput, v: unknown) => setF((p) => ({ ...p, [k]: v }));
+  const pending = create.isPending || update.isPending;
+
+  const submit = () => {
+    const labels: Record<string, string> = {};
+    for (const line of labelsText.split("\n")) {
+      const i = line.indexOf("="); if (i < 0) continue;
+      const k = line.slice(0, i).trim(); if (k) labels[k] = line.slice(i + 1).trim();
+    }
+    const body: ClusterTemplateInput = { ...f, labels };
+    const done = { onSuccess: () => { toast.success(`${f.name} ${isEdit ? "수정" : "생성"}됨`); onClose(); }, onError: (e: Error) => toast.error(`${isEdit ? "수정" : "생성"} 실패`, { description: String(e.message) }) };
+    if (isEdit) update.mutate({ id: base!.id, body }, done);
+    else create.mutate(body, done);
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? "템플릿 수정" : isCopy ? "템플릿 복제" : "템플릿 생성"}</DialogTitle>
+          <DialogDescription>클러스터 생성 설계도(Magnum ClusterTemplate).</DialogDescription>
+        </DialogHeader>
+
+        <Tabs defaultValue="info">
+          <TabsList>
+            <TabsTrigger value="info">정보</TabsTrigger>
+            <TabsTrigger value="node">노드</TabsTrigger>
+            <TabsTrigger value="network">네트워크</TabsTrigger>
+            <TabsTrigger value="labels">라벨</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="info" className="space-y-3 pt-3">
+            <Field label="이름"><Input value={f.name ?? ""} onChange={(e) => set("name", e.target.value)} placeholder="k8s-template" /></Field>
+            <Field label="이미지">
+              <DropSelect value={f.image_id ?? ""} onChange={(v) => set("image_id", v)} placeholder="이미지 선택"
+                options={(images.data ?? []).map((i) => ({ value: i.id, label: i.name }))} />
+            </Field>
+            <div className="flex items-center gap-6">
+              <SwitchField label="public" checked={!!f.public} onChange={(v) => set("public", v)} />
+              <SwitchField label="TLS 비활성" checked={!!f.tls_disabled} onChange={(v) => set("tls_disabled", v)} />
+              <SwitchField label="숨김" checked={!!f.hidden} onChange={(v) => set("hidden", v)} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="node" className="space-y-3 pt-3">
+            <Field label="워커 플레이버">
+              <DropSelect value={f.flavor_id ?? ""} onChange={(v) => set("flavor_id", v)} placeholder="플레이버 선택"
+                options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
+            </Field>
+            <Field label="마스터 플레이버">
+              <DropSelect value={f.master_flavor_id ?? ""} onChange={(v) => set("master_flavor_id", v)} placeholder="플레이버 선택"
+                options={(flavors.data ?? []).map((x) => ({ value: x.name, label: `${x.name} (${x.vcpus}vCPU·${Math.round(x.ramMb / 1024)}GB)` }))} />
+            </Field>
+            <Field label="키페어"><Input value={f.keypair_id ?? ""} onChange={(e) => set("keypair_id", e.target.value)} placeholder="my-key" className="font-mono text-xs" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="볼륨 드라이버">
+                <Select value={f.volume_driver || "none"} onValueChange={(v) => set("volume_driver", v === "none" ? "" : v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">없음</SelectItem>
+                    <SelectItem value="cinder">cinder</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="도커 볼륨 크기(GB, 0=없음)">
+                <Input type="number" min={0} value={f.docker_volume_size ?? 0}
+                  onChange={(e) => set("docker_volume_size", Number(e.target.value) || null)} />
+              </Field>
+            </div>
+            <Field label="Docker 스토리지 드라이버"><Input value={f.docker_storage_driver ?? ""} onChange={(e) => set("docker_storage_driver", e.target.value)} className="font-mono text-xs" /></Field>
+          </TabsContent>
+
+          <TabsContent value="network" className="space-y-3 pt-3">
+            <Field label="외부 네트워크">
+              <DropSelect value={f.external_network_id ?? ""} onChange={(v) => set("external_network_id", v)} placeholder="네트워크 선택"
+                options={(networks.data?.items ?? []).map((n) => ({ value: n.name, label: n.name }))} />
+            </Field>
+            <Field label="네트워크 드라이버"><Input value={f.network_driver ?? ""} onChange={(e) => set("network_driver", e.target.value)} className="font-mono text-xs" placeholder="calico" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="고정 네트워크(선택)"><Input value={f.fixed_network ?? ""} onChange={(e) => set("fixed_network", e.target.value)} className="font-mono text-xs" placeholder="네트워크 ID/이름" /></Field>
+              <Field label="고정 서브넷(선택)"><Input value={f.fixed_subnet ?? ""} onChange={(e) => set("fixed_subnet", e.target.value)} className="font-mono text-xs" placeholder="서브넷 ID/이름" /></Field>
+            </div>
+            <Field label="DNS"><Input value={f.dns_nameserver ?? ""} onChange={(e) => set("dns_nameserver", e.target.value)} className="font-mono text-xs" placeholder="8.8.8.8" /></Field>
+            <div className="flex items-center gap-6">
+              <SwitchField label="마스터 LB" checked={!!f.master_lb_enabled} onChange={(v) => set("master_lb_enabled", v)} />
+              <SwitchField label="Floating IP" checked={!!f.floating_ip_enabled} onChange={(v) => set("floating_ip_enabled", v)} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="labels" className="space-y-2 pt-3">
+            <Label>라벨 (KEY=VALUE, 한 줄에 하나)</Label>
+            <textarea
+              value={labelsText} onChange={(e) => setLabelsText(e.target.value)} rows={6}
+              placeholder={"octavia_provider=ovn\nkube_dashboard_enabled=false"}
+              className="w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </TabsContent>
+        </Tabs>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>취소</Button>
+          <Button disabled={pending || !f.name} onClick={submit}>{isEdit ? "저장" : "생성"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      {children}
+    </div>
+  );
+}
+function SwitchField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <Switch checked={checked} onCheckedChange={onChange} /> {label}
+    </label>
+  );
+}
+function DropSelect({ value, onChange, options, placeholder }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; placeholder: string }) {
+  return (
+    <Select value={value || undefined} onValueChange={onChange}>
+      <SelectTrigger><SelectValue placeholder={placeholder} /></SelectTrigger>
+      <SelectContent>
+        {options.map((o) => <SelectItem key={o.value} value={o.value} className="font-mono text-xs">{o.label}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  );
+}
