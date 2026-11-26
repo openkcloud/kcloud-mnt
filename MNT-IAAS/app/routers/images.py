@@ -37,6 +37,8 @@ def _to_image(i: dict) -> dict:
         "name": i.get("name") or i["id"],
         "tenantId": i.get("owner") or "",
         "os": i.get("os_distro") or "",
+        "osVersion": i.get("os_version") or "",      # Glance 속성 os_version (예: 22.04)
+        "kubeVersion": i.get("kube_version") or "",  # Glance 속성 kube_version (클러스터 템플릿용, 예: 1.36.2)
         "diskFormat": i.get("disk_format") or "",
         "containerFormat": i.get("container_format") or "",
         "sizeGb": round((i.get("size") or 0) / _GB, 2),

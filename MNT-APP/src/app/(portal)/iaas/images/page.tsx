@@ -23,7 +23,7 @@ import {
 } from "@/lib/iaas-api";
 
 // 자주 쓰는 Glance 공통 속성 — 새 속성 추가 시 빠른 채움(PaaS 클러스터 템플릿은 os_distro 필수)
-const COMMON_PROPS = ["os_distro", "os_version", "architecture", "hw_disk_bus", "hw_scsi_model"];
+const COMMON_PROPS = ["os_distro", "kube_version", "os_version", "architecture", "hw_disk_bus", "hw_scsi_model"];
 const DISK_FORMATS = ["qcow2", "raw", "vmdk", "vdi", "iso", "ami"];
 
 const VIS_VARIANT: Record<string, "success" | "secondary" | "warning" | "outline"> = {
@@ -243,8 +243,10 @@ function ImageProperties({ imageId, properties }: { imageId: string; properties:
     <Card className="space-y-3 p-4">
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold">속성(메타데이터)</span>
-        {!draft.os_distro && (
-          <span className="text-[10px] text-amber-700">os_distro 가 없으면 PaaS 클러스터 템플릿 생성이 실패합니다.</span>
+        {(!draft.os_distro || !draft.kube_version) && (
+          <span className="text-[10px] text-amber-700">
+            PaaS 클러스터 템플릿 생성에는 {[!draft.os_distro && "os_distro", !draft.kube_version && "kube_version"].filter(Boolean).join(", ")} 가 필요합니다.
+          </span>
         )}
       </div>
 
@@ -278,7 +280,7 @@ function RegisterImageDialog({ open, onClose }: { open: boolean; onClose: () => 
   const reg = useRegisterImage();
   const [f, setF] = React.useState({
     name: "", url: "", diskFormat: "qcow2", containerFormat: "bare",
-    visibility: "private", minDisk: "0", minRam: "0", osDistro: "",
+    visibility: "private", minDisk: "0", minRam: "0", osDistro: "", kubeVersion: "",
   });
   const set = (k: string, v: string) => setF((s) => ({ ...s, [k]: v }));
 
@@ -287,7 +289,10 @@ function RegisterImageDialog({ open, onClose }: { open: boolean; onClose: () => 
     reg.mutate({
       name: f.name.trim(), url: f.url.trim(), diskFormat: f.diskFormat, containerFormat: f.containerFormat,
       visibility: f.visibility, minDisk: Number(f.minDisk) || 0, minRam: Number(f.minRam) || 0,
-      properties: f.osDistro.trim() ? { os_distro: f.osDistro.trim() } : {},
+      properties: {
+        ...(f.osDistro.trim() ? { os_distro: f.osDistro.trim() } : {}),
+        ...(f.kubeVersion.trim() ? { kube_version: f.kubeVersion.trim() } : {}),
+      },
     }, {
       onSuccess: (img) => { toast.success(`이미지 ${img.name} 등록 시작됨`, { description: `상태: ${img.status} — 가져오기가 끝나면 active 가 됩니다.` }); onClose(); },
       onError: (e) => toast.error("이미지 등록 실패", { description: String((e as Error).message) }),
@@ -343,7 +348,11 @@ function RegisterImageDialog({ open, onClose }: { open: boolean; onClose: () => 
             <Label>os_distro (권장)</Label>
             <Input list="common-os-distro" value={f.osDistro} onChange={(e) => set("osDistro", e.target.value)} placeholder="ubuntu" className="font-mono text-xs" />
             <datalist id="common-os-distro">{["ubuntu", "centos", "rhel", "rocky", "debian", "fedora"].map((o) => <option key={o} value={o} />)}</datalist>
-            <p className="text-[10px] text-muted-foreground">PaaS 클러스터 템플릿은 os_distro 가 필요합니다. 나머지 속성은 등록 후 관리 화면에서 추가할 수 있습니다.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label>kube_version (클러스터용 이미지면 권장)</Label>
+            <Input value={f.kubeVersion} onChange={(e) => set("kubeVersion", e.target.value)} placeholder="예: 1.36.2" className="font-mono text-xs" />
+            <p className="text-[10px] text-muted-foreground">PaaS 클러스터 템플릿은 os_distro 와 kube_version 이 모두 있어야 생성됩니다. 나머지 속성은 등록 후 관리 화면에서 추가할 수 있습니다.</p>
           </div>
         </div>
         <DialogFooter>

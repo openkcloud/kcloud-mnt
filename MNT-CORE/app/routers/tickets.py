@@ -130,12 +130,13 @@ def _ticket_name_taken(db: Session, project_id: str, name: str) -> bool:
 _SELECT = """
     SELECT r.id, r.type, r.status, r.project_id, r.request_spec, r.provision_spec, r.result, r.title,
            r.approved_at, r.provisioning_at, r.approved_reject_at, r.approved_reject_reason,
-           r.provisioning_reject_at, r.provisioning_reject_reason, r.error_message, r.created_at,
+           r.provisioning_reject_at, r.provisioning_reject_reason, r.error_message, r.created_at, r.finished_at,
            u.username, u.name AS requester_name, ro.name AS requester_org_name, o.id AS org_id, o.name AS org_name,
            ap.username AS approved_by, ap.name AS approved_by_name,
            pv.username AS provisioning_by, pv.name AS provisioning_by_name,
            ar.username AS approved_reject_by, ar.name AS approved_reject_by_name,
-           pr.username AS provisioning_reject_by, pr.name AS provisioning_reject_by_name
+           pr.username AS provisioning_reject_by, pr.name AS provisioning_reject_by_name,
+           fn.username AS finished_by, fn.name AS finished_by_name
       FROM tkt_request r
       JOIN iam_user u ON u.id = r.requested_by
       LEFT JOIN iam_org ro ON ro.id = u.org_id  -- 신청자 본인 조직(관리자는 다른 조직 프로젝트에도 신청)
@@ -145,6 +146,7 @@ _SELECT = """
       LEFT JOIN iam_user pv ON pv.id = r.provisioning_by
       LEFT JOIN iam_user ar ON ar.id = r.approved_reject_by
       LEFT JOIN iam_user pr ON pr.id = r.provisioning_reject_by
+      LEFT JOIN iam_user fn ON fn.id = r.finished_by
 """
 
 
@@ -169,7 +171,7 @@ def _to_item(r) -> dict:
         "projectId": r["project_id"],
         "provisionSpec": r["provision_spec"],
         "result": r["result"],
-        # 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려)
+        # 처리 기록 — 승인 단계(승인 / 반려) · 프로비저닝 단계(시작 / 반려) · 마감(완료 / 실패)
         "approvedBy": r["approved_by"],
         "approvedByName": r["approved_by_name"],
         "approvedAt": _iso(r["approved_at"]),
@@ -184,6 +186,9 @@ def _to_item(r) -> dict:
         "provisioningRejectByName": r["provisioning_reject_by_name"],
         "provisioningRejectAt": _iso(r["provisioning_reject_at"]),
         "provisioningRejectReason": r["provisioning_reject_reason"],
+        "finishedBy": r["finished_by"],  # 마감 처리자 = 그 회차 프로비저닝을 시작한 관리자
+        "finishedByName": r["finished_by_name"],
+        "finishedAt": _iso(r["finished_at"]),
         "errorMessage": r["error_message"],
     }
 
@@ -272,6 +277,7 @@ class CreateTicketBody(BaseModel):
     projectId: str               # OpenStack 프로젝트 UUID
     title: str | None = None     # 신청 제목(선택) — 별도 컬럼
     vmName: str
+    purpose: str = ""            # 용도(선택, 300자)
     networkType: str             # 희망 망: internal(내부망) | external(인터넷망)
     floatingIp: bool = False     # 공인 IP 희망 (인터넷망일 때만)
     flavorId: str
@@ -351,6 +357,7 @@ def create_ticket(body: CreateTicketBody, user: CurrentUser = Depends(current_us
     spec = {
         "projectName": project["name"],
         "vmName": body.vmName,
+        "purpose": body.purpose.strip()[:300],
         "networkType": body.networkType,
         "floatingIp": body.floatingIp and body.networkType == "external",
         "flavorId": flavor["id"],
@@ -546,6 +553,8 @@ class ProvisionSpecBody(BaseModel):
     fixedIp: str | None = None            # 고정 IP 직접 입력 — 모든 망 (없으면 DHCP 자동 할당)
     securityGroups: list[str] = []        # 보안그룹 이름 (프로젝트 라이브 조회 기준)
     host: str | None = None               # 배치할 컴퓨트 노드(미리보기에서 고름) — 노드 지정 권한이 있을 때만, 없으면 스케줄러
+    # 키페어 — 보내지 않으면 신청 값, 보내면 그 OpenStack(Nova) 키페어 이름(관리자가 직접 선택), null = 넣지 않음
+    novaKeypair: str | None = None
 
 
 def _verified_provision_spec(project_id: str, flavor_id: str, spec: ProvisionSpecBody, token: str) -> dict:
@@ -616,14 +625,14 @@ class ProvisionBody(BaseModel):
 def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = Depends(current_user),
                      db: Session = Depends(get_db)):
     """프로비저닝 시작(관리자) — 승인(approved)된 VM 신청, 또는 실패(failed)한 신청의 재시도.
-    승인 설정(네트워크·IP·보안그룹)과 VM 이름 중복을 라이브 조회로 다시 확인하고, 생성 중(provisioning)으로 바꾼 뒤
+    승인 설정(네트워크·IP·보안그룹·키페어)과 VM 이름 중복을 라이브 조회로 다시 확인하고, 생성 중(provisioning)으로 바꾼 뒤
     Temporal 워크플로를 새 회차로 시작한다(실패한 회차의 자원은 워크플로가 실패 때 정리했으므로 처음부터).
     워크플로 시작에 실패하면 이전 상태·값으로 되돌린다."""
     if not settings.temporal_api_base:
         raise HTTPException(503, "Temporal 주소(TEMPORAL_API_BASE)가 설정되지 않았습니다")
     admin_id = _admin_id(db, user.username, "프로비저닝은 관리자만 할 수 있습니다")
     t = db.execute(text("""SELECT status, type, project_id, request_spec, provision_spec, result, error_message,
-                                  provisioning_by, provisioning_at, workflow_id
+                                  provisioning_by, provisioning_at, workflow_id, finished_by, finished_at
                              FROM tkt_request WHERE id = :id"""),
                    {"id": ticket_id}).mappings().first()
     if t is None:
@@ -643,17 +652,26 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
     spec = _verified_provision_spec(t["project_id"], rs["flavorId"], body.provisionSpec, user.token)
     if _server_name_taken(t["project_id"], rs["vmName"], user.token):  # 신청 뒤에 같은 이름 VM 이 생겼을 수 있다
         raise HTTPException(409, _SERVER_NAME_TAKEN)
+    # 키페어 — 관리자가 바꿨으면 그 OpenStack 키페어(null = 넣지 않음), 아니면 신청 값(사용자 = 본인 SSH 키, 관리자 = OpenStack 키페어)
+    key_changed = "novaKeypair" in body.provisionSpec.model_fields_set
+    nova_name = body.provisionSpec.novaKeypair if key_changed else rs.get("novaKeypair")
+    if key_changed:
+        if nova_name and rs.get("cloudInit") is False:
+            raise HTTPException(400, "cloud-init 이 없는 템플릿에는 키페어를 넣을 수 없습니다")
+        spec["novaKeypair"] = nova_name  # 바꾼 키페어(재시도·상세 표시) — 없으면 신청 값
     public_key = None
-    if rs.get("novaKeypair"):  # 관리자가 고른 OpenStack 키페어 — 지금의 공개키를 cloud-init 으로 넣는다
-        nova_key = _nova_keypair(rs["novaKeypair"], user.token)
+    if nova_name:  # OpenStack 키페어 — 지금의 공개키를 cloud-init 으로 넣는다
+        nova_key = _nova_keypair(nova_name, user.token)
         if not nova_key:
-            raise HTTPException(409, f"신청한 키페어({rs['novaKeypair']})가 삭제되어 주입할 수 없습니다")
+            if key_changed:
+                raise HTTPException(400, "OpenStack 키페어를 찾을 수 없습니다")
+            raise HTTPException(409, f"신청한 키페어({nova_name})가 삭제되어 주입할 수 없습니다")
         public_key = nova_key["publicKey"]
 
     # 여기부터 저장까지 한 트랜잭션
     if spec.get("fixedIp"):
         _check_fixed_ip_unassigned(db, ticket_id, spec)
-    if rs.get("keypairId"):
+    if not key_changed and rs.get("keypairId"):
         public_key = db.execute(text("SELECT public_key FROM iam_ssh_key WHERE id = :id"),
                                 {"id": int(rs["keypairId"])}).scalar()
         if public_key is None:
@@ -666,7 +684,7 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         text("""UPDATE tkt_request
                    SET status = 'provisioning', provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
                        provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL,
-                       queue_expected_sec = :qexp
+                       finished_by = NULL, finished_at = NULL, queue_expected_sec = :qexp
                  WHERE id = :id AND status = :cur"""),
         {"id": ticket_id, "spec": json.dumps(spec, ensure_ascii=False), "by": admin_id, "wf": workflow_id,
          "cur": t["status"], "qexp": expected},
@@ -677,6 +695,7 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
     db.commit()
 
     accel = ", ".join(f"{a['kind']} × {a['count']}" for a in rs.get("accelerators") or [])
+    key_name = nova_name if key_changed else rs.get("keypairName")  # 넣는 키 이름(없으면 키를 넣지 않음)
     inp = {
         "ticketId": ticket_id, "attempt": attempt, "projectId": t["project_id"],
         "vmName": rs["vmName"], "flavorId": rs["flavorId"], "imageId": rs["imageId"],
@@ -687,13 +706,15 @@ def provision_ticket(ticket_id: str, body: ProvisionBody, user: CurrentUser = De
         "floatingNetworkId": spec.get("floatingNetworkId"),
         "host": spec.get("host"),
         "publicKey": public_key,
-        "keypairLabel": rs.get("keypairName") or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
+        "keypairName": key_name,  # Nova 메타데이터로 남겨 가상서버 상세에 표시
+        "keypairLabel": key_name or ("미적용 (cloud-init 없음)" if rs.get("cloudInit") is False else "미지정"),
         "hasAccelerator": bool(rs.get("deviceProfile")),
         "acceleratorLabel": accel or rs.get("deviceProfile"),
         # 누르기 전 상태·값 — 시작 실패·시작 전 취소 때 되돌린다(provision_queue.restore)
         "prev": {"status": t["status"], "provisionSpec": t["provision_spec"], "provisioningBy": t["provisioning_by"],
                  "provisioningAt": _iso(t["provisioning_at"]), "workflowId": t["workflow_id"],
-                 "errorMessage": t["error_message"], "result": t["result"]},
+                 "errorMessage": t["error_message"], "result": t["result"],
+                 "finishedBy": t["finished_by"], "finishedAt": _iso(t["finished_at"])},
     }
     try:
         from_thread.run(runtime.start_vm_provision, workflow_id, inp)  # 이벤트 루프의 Temporal 클라이언트로 시작
@@ -771,7 +792,8 @@ def provision_ai_workspace_ticket(ticket_id: str, body: ProvisionAiWorkspaceBody
     res = db.execute(
         text("""UPDATE tkt_request
                    SET status = 'provisioning', provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
-                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL
+                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL,
+                       finished_by = NULL, finished_at = NULL
                  WHERE id = :id AND status = :cur"""),
         {"id": ticket_id, "spec": json.dumps(spec), "by": admin_id, "wf": workflow_id, "cur": t["status"]},
     )
@@ -860,12 +882,26 @@ def _check_node_counts(master_count: int, node_count: int) -> None:
         raise HTTPException(400, f"Worker 수는 1 ~ {_CLUSTER_MAX_WORKERS} 이어야 합니다")
 
 
-def _cluster_template(template_id: str, token: str) -> dict:
-    """신청할 수 있는 템플릿(공개·숨김 아님)."""
+def _cluster_template(template_id: str, project_id: str, token: str) -> dict:
+    """신청할 수 있는 템플릿 — 숨김이 아니고 공개이거나 신청 프로젝트 소유."""
     t = next((x for x in _paas("/clustertemplates", token)["items"] if x["id"] == template_id), None)
-    if not t or not t.get("public") or t.get("hidden"):
+    if not t or t.get("hidden") or not (t.get("public") or t.get("project_id") == project_id):
         raise HTTPException(400, "신청할 수 없는 클러스터 템플릿입니다")
     return t
+
+
+def _external_network_id(nets: list[dict], ref: str) -> str:
+    """템플릿 외부 네트워크(ID 또는 이름 — 예전 포털 템플릿 화면은 이름으로 저장) → 외부망 ID.
+    Floating IP 확인은 라우터 게이트웨이의 네트워크 ID 와 비교하므로 ID 가 필요하다. nets = 프로젝트 네트워크 목록(외부망 포함)."""
+    ext = [n for n in nets if n["kind"] == "external"]
+    if any(n["id"] == ref for n in ext):
+        return ref
+    named = [n for n in ext if n["name"] == ref]
+    if not named:
+        raise HTTPException(400, f"클러스터 템플릿의 외부 네트워크({ref})를 찾을 수 없습니다")
+    if len(named) > 1:
+        raise HTTPException(400, f"클러스터 템플릿의 외부 네트워크({ref})와 이름이 같은 외부망이 여러 개입니다 — 템플릿에서 다시 고르세요")
+    return named[0]["id"]
 
 
 @router.get("/tickets/cluster-name-check")
@@ -908,7 +944,7 @@ def create_cluster_ticket(body: CreateClusterBody, user: CurrentUser = Depends(c
     chk = _paas(f"/cluster-name-check?name={quote(body.clusterName, safe='')}", user.token)
     if not chk["available"]:
         raise HTTPException(409, chk["reason"])
-    template = _cluster_template(body.templateId, user.token)
+    template = _cluster_template(body.templateId, body.projectId, user.token)
     master, worker = _cluster_flavors(body.projectId, body.masterFlavorId, body.flavorId, user.token)
     _check_nova_keypair(body.novaKeypair, body.keypairId, user)
 
@@ -1003,7 +1039,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
         raise HTTPException(503, "Temporal 주소(TEMPORAL_API_BASE)가 설정되지 않았습니다")
     admin_id = _admin_id(db, user.username, "프로비저닝은 관리자만 할 수 있습니다")
     t = db.execute(text("""SELECT status, type, project_id, request_spec, provision_spec, result, error_message,
-                                  provisioning_by, provisioning_at, workflow_id
+                                  provisioning_by, provisioning_at, workflow_id, finished_by, finished_at
                              FROM tkt_request WHERE id = :id"""),
                    {"id": ticket_id}).mappings().first()
     if t is None:
@@ -1018,7 +1054,7 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     master_count = ps.masterCount or rs["masterCount"]
     node_count = ps.nodeCount or rs["nodeCount"]
     _check_node_counts(master_count, node_count)
-    template = _cluster_template(rs["templateId"], token)
+    template = _cluster_template(rs["templateId"], pid, token)
     floating = template.get("external_network_id")
     if not floating:
         raise HTTPException(400, "클러스터 템플릿에 외부 네트워크(API Floating IP 풀)가 없습니다")
@@ -1026,7 +1062,9 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
 
     # 망·서브넷 — 프로젝트가 쓸 수 있는 망(외부망 제외), DHCP 켜진 서브넷, 그 서브넷으로 API 에 Floating IP 를 붙일 수 있어야.
     # 외부망에 노드를 바로 붙이면 API 로드밸런서(OVN) 주소에 밖에서 닿지 못한다(2026-10-22 req-261022-007 — No route to host)
-    net = next((n for n in _iaas(_project_path(pid) + "/networks", token)["items"] if n["id"] == ps.networkId), None)
+    nets = _iaas(_project_path(pid) + "/networks", token)["items"]
+    floating = _external_network_id(nets, floating)
+    net = next((n for n in nets if n["id"] == ps.networkId), None)
     if not net:
         raise HTTPException(400, "이 프로젝트에서 사용할 수 없는 네트워크입니다")
     if net["kind"] == "external":
@@ -1079,7 +1117,8 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
     res = db.execute(
         text("""UPDATE tkt_request
                    SET status = 'provisioning', provision_spec = CAST(:spec AS jsonb), provisioning_by = :by,
-                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL
+                       provisioning_at = now(), workflow_id = :wf, error_message = NULL, result = NULL,
+                       finished_by = NULL, finished_at = NULL
                  WHERE id = :id AND status = :cur"""),
         {"id": ticket_id, "spec": json.dumps(spec, ensure_ascii=False), "by": admin_id, "wf": workflow_id,
          "cur": t["status"]},
@@ -1093,10 +1132,12 @@ def provision_cluster_ticket(ticket_id: str, body: ProvisionClusterBody, user: C
            "clusterName": rs["clusterName"], "templateId": rs["templateId"], "masterCount": master_count,
            "masterFlavorId": master["id"], "nodeCount": node_count, "flavorId": worker["id"],
            "networkId": net["id"], "subnetId": subnet["id"], "floatingNetworkId": floating,
-           "keypair": key_name or None, "namespace": rs["namespace"], "need": need}
+           "keypair": key_name or None, "namespace": rs["namespace"], "need": need,
+           "skipSetup": settings.cluster_skip_setup}  # 로컬 — K8s API 연결·네임스페이스·접근 권한 건너뜀
     prev = {"status": t["status"], "provisionSpec": t["provision_spec"], "provisioningBy": t["provisioning_by"],
             "provisioningAt": _iso(t["provisioning_at"]), "workflowId": t["workflow_id"],
-            "errorMessage": t["error_message"], "result": t["result"]}
+            "errorMessage": t["error_message"], "result": t["result"],
+            "finishedBy": t["finished_by"], "finishedAt": _iso(t["finished_at"])}
     try:
         from_thread.run(runtime.start_cluster_provision, workflow_id, inp)  # 이벤트 루프의 Temporal 클라이언트로 시작
     except Exception as e:  # noqa: BLE001 — 시작 실패면 이전 상태(승인·실패)와 값으로 되돌린다

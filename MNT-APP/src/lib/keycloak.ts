@@ -72,3 +72,20 @@ export function logoutRedirect(redirectUri: string): Promise<void> {
   k.idToken ??= idTokenHint;
   return k.logout({ redirectUri });
 }
+
+/** 이 브라우저의 Keycloak 세션을 페이지 이동 없이 끝낸다(갱신 토큰 로그아웃 — Keycloak 에 LOGOUT 기록). 끝났으면 true.
+ *  갱신 토큰이 없으면(Keycloak 이 갱신을 거절해 keycloak-js 가 지움) 끝낼 세션이 없는 것으로 본다.
+ *  Keycloak 쿠키는 지우지 못한다 — 남은 쿠키는 다음 로그인 때 Keycloak 이 세션이 없음을 보고 지운다. */
+export async function revokeSession(): Promise<boolean> {
+  const refreshToken = getKeycloak().refreshToken;
+  if (!refreshToken) return true;
+  try {
+    const res = await fetch(`${keycloakUrl()}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/logout`, {
+      method: "POST",
+      body: new URLSearchParams({ client_id: KEYCLOAK_CLIENT_ID, refresh_token: refreshToken }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

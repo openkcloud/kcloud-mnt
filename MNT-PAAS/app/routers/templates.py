@@ -2,6 +2,8 @@
 
 클러스터 생성의 설계도(이미지·플레이버·네트워크·드라이버·라벨 등). Horizon 의
 Cluster Templates 화면과 동일 범위. 조회는 로그인 사용자(클러스터 신청 화면), 생성·수정·삭제는 관리자.
+템플릿은 고른 프로젝트(project_id) 소유로 만든다 — Horizon 처럼 그 프로젝트 + 공유 자원으로 구성.
+조회·수정·삭제는 관리자 계정이라 Magnum 이 모든 프로젝트 템플릿에 대해 처리한다(*_all_projects 정책).
 """
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from ..auth import require_admin
-from ..openstack_client import magnum
+from ..openstack_client import for_project, magnum
 
 router = APIRouter(tags=["cluster-templates"])
 
@@ -34,6 +36,7 @@ _FIELDS = [
     "network_driver", "volume_driver", "docker_storage_driver", "docker_volume_size",
     "cluster_distro", "server_type", "public", "hidden", "tls_disabled",
     "floating_ip_enabled", "master_lb_enabled", "registry_enabled", "labels",
+    "project_id",  # 소유 프로젝트 — 신청 화면은 공개 또는 신청 프로젝트 소유만 보인다
 ]
 # 생성·수정에서 사용자가 지정 가능한 필드(그 외는 Magnum 기본값)
 _WRITABLE = [
@@ -94,22 +97,35 @@ def get_template(template_id: str):
 
 @router.post("/clustertemplates", status_code=201, dependencies=[Depends(require_admin)])
 def create_template(body: dict = Body(...)):
-    """템플릿 생성. 빈 값은 빼서 Magnum 기본값에 맡긴다. coe 기본=kubernetes."""
+    """템플릿 생성. 빈 값은 빼서 Magnum 기본값에 맡긴다. coe 기본=kubernetes.
+    소유 프로젝트(project_id, 필수) — Magnum 은 요청 토큰의 프로젝트를 소유로 두므로 그 프로젝트 범위로 보낸다."""
+    project_id = body.get("project_id")
+    if not project_id:
+        raise HTTPException(status_code=400, detail="프로젝트를 선택하세요")
     payload = {k: v for k, v in body.items() if k in _WRITABLE and v not in (None, "", {})}
     payload.setdefault("coe", "kubernetes")
     try:
-        return magnum.request("POST", "/clustertemplates", json=payload)
+        return for_project(project_id).request("POST", "/clustertemplates", json=payload)
     except Exception as e:  # noqa: BLE001
         raise _err(e)
 
 
 @router.patch("/clustertemplates/{template_id}", dependencies=[Depends(require_admin)])
 def update_template(template_id: str, body: dict = Body(...)):
-    """수정 — Magnum 은 JSON Patch(RFC 6902) 를 받는다. 넘어온 쓰기 가능 필드를 replace."""
-    patch = [
-        {"op": "replace", "path": f"/{k}", "value": v}
-        for k, v in body.items() if k in _WRITABLE
-    ]
+    """수정 — Magnum 은 JSON Patch(RFC 6902) 를 받는다.
+    - 일반 필드: replace. 빈 값(None·""·{}·[])은 제외('operations needs value' 방지).
+    - labels(dict): Magnum 이 /labels 에 dict 통째 replace 를 안 받으므로(값 타입은 str/int)
+      키 단위('/labels/<키>', 값=문자열)로 보낸다."""
+    patch: list[dict] = []
+    for k, v in body.items():
+        if k not in _WRITABLE:
+            continue
+        if k == "labels":
+            if isinstance(v, dict):
+                patch += [{"op": "add", "path": f"/labels/{lk}", "value": str(lv)} for lk, lv in v.items()]
+            continue
+        if v not in (None, "", {}, []):
+            patch.append({"op": "replace", "path": f"/{k}", "value": v})
     if not patch:
         raise HTTPException(status_code=400, detail="변경할 필드가 없습니다.")
     try:

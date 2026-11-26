@@ -241,6 +241,8 @@ export interface Tenant {
   usedRamGb: number;
   usedDiskTb: number;
   usedAcc: number;
+  quotaDiskGb?: number;   // Cinder 원래 단위(GB) — detail 조회 때만
+  usedDiskGb?: number;
   members: number;
   createdAt: string;
   enabled?: boolean; // OpenStack Keystone 프로젝트 활성 여부 (목업엔 없을 수 있음)
@@ -499,6 +501,8 @@ export interface ProvisionSpec {
   securityGroups: string[];
   // 배치할 컴퓨트 노드 — 노드 지정 권한(hostPinning)이 있을 때만, 없으면 스케줄러가 후보 중에서 고름
   host?: string;
+  // 관리자가 바꾼 키페어(OpenStack 키페어 이름, null = 넣지 않음) — 없으면 신청 값
+  novaKeypair?: string | null;
 }
 
 // 클러스터 프로비저닝 입력 — 관리자가 고른 망·서브넷과 조정한 노드 구성(서버가 라이브 조회 값으로 채움)
@@ -700,5 +704,9 @@ export interface ResourceRequest {
   provisioningRejectByName?: string;
   provisioningRejectAt?: string;
   provisioningRejectReason?: string;
+  // 마감(완료 · 실패) — 처리자 = 그 회차 프로비저닝을 시작한 관리자, 시각 = 워크플로가 끝낸 때(재시도 시작 때 비움)
+  finishedBy?: string;
+  finishedByName?: string;
+  finishedAt?: string;
   resultId?: string;
 }

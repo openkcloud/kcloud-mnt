@@ -1,14 +1,14 @@
 "use client";
 import * as React from "react";
 import { onlineManager } from "@tanstack/react-query";
-import { LogIn } from "lucide-react";
+import { LogIn, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { loginAgain, useAuth } from "@/lib/auth";
 
-/** 로그인이 끝났을 때(로그아웃·미사용·다른 탭·관리자 강제·다른 곳 로그인·계정 문제) — 원인 안내 + 로그인 버튼 모달.
+/** 로그인이 끝났을 때(로그아웃·미사용·다른 탭·관리자 강제·다른 곳 로그인·계정 문제) — 원인 안내 + 로그인 버튼 모달(연결 문제는 다시 시도).
  *  닫을 수 없다. 뒤의 화면은 레이아웃이 흐리게 두고(SessionBlur), 데이터 갱신은 멈춘다(다음 로그인은 페이지를 새로 연다). */
 export function SessionEnded() {
   const ended = useAuth((s) => s.ended);
@@ -31,7 +31,15 @@ export function SessionEnded() {
         </DialogHeader>
         <DialogFooter>
           <Button onClick={loginAgain}>
-            <LogIn className="size-4" /> 로그인
+            {ended?.reason === "error" ? (
+              <>
+                <RotateCw className="size-4" /> 다시 시도
+              </>
+            ) : (
+              <>
+                <LogIn className="size-4" /> 로그인
+              </>
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

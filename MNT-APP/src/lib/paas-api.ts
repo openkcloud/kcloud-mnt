@@ -274,6 +274,7 @@ export interface ClusterTemplate {
   master_lb_enabled: boolean;
   registry_enabled: boolean;
   labels: Record<string, string> | null;
+  project_id: string | null; // 소유 프로젝트 — 생성 때 고름(수정 불가). 신청 화면은 공개 또는 신청 프로젝트 소유만
   kubeVersion?: string; // 이미지의 K8s 버전(Glance 속성 kube_version, 앞의 v 없이)
   createdAt: string;
   updatedAt: string;

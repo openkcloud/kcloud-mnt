@@ -7,10 +7,13 @@
  *    자동 갱신 화면이 계속 돌아도 조작이 없으면 끝난다. 조작 시각은 탭끼리 공유(localStorage).
  *  - 끝난 세션은 원인별 안내 모달(보던 화면은 흐리게) + 로그인 버튼. 같은 브라우저 다른 탭에도 알린다(BroadcastChannel).
  *    직접 로그아웃만 안내 없이 정리 후 로그인 화면으로(2026-10-14 결정).
- *  - 다른 곳 로그인·관리자 강제 종료는 MNT-CORE /auth/session 을 보이는 탭이 5초마다 확인. */
+ *  - 다른 곳 로그인·관리자 강제 종료는 MNT-CORE /auth/session 을 보이는 탭이 5초마다 확인.
+ *  - Keycloak 세션은 화면이 끝낸다(2026-10-28) — Keycloak 에 사용자 LOGOUT 이 남게. 직접 로그아웃은 Keycloak 로그아웃 주소로
+ *    이동, 안내 모달은 띄우기 전에 갱신 토큰 로그아웃(이동 없음) → 로그인 버튼은 바로 Keycloak 로그인으로.
+ *    연결 문제(error)는 Keycloak 세션을 두고 버튼이 다시 시도. 동시 로그인의 이전 세션만 MNT-CORE 가 관리 API 로 지운다. */
 import { create } from "zustand";
 import { CORE_BASE } from "@/lib/menu-api";
-import { clearTokens, getKeycloak, initKeycloak, logoutRedirect } from "@/lib/keycloak";
+import { clearTokens, getKeycloak, initKeycloak, loginRedirect, logoutRedirect, revokeSession } from "@/lib/keycloak";
 import { authFetch, readError, setAuthFailureHandler } from "@/lib/http";
 import { getNavByRole, type NavItem } from "@/lib/nav";
 import { ainbLogin, ainbLogout } from "@/lib/ainb-api";
@@ -111,6 +114,7 @@ export function ensureAuth(): Promise<void> {
     if (!res.ok) {
       const err = await readError(res);
       const reason = err.code === "SESSION_ENDED" ? err.reason ?? "expired" : res.status === 403 ? "denied" : "error";
+      if (reason !== "error") keycloakEnded = await revokeSession(); // 끝난 세션·계정 문제 — 안내 전에 Keycloak 세션도 끝낸다
       useAuth.setState({ status: "ended", ended: { reason, message: END_MESSAGES[reason] ?? err.message } });
       return;
     }
@@ -134,24 +138,28 @@ export function ensureAuth(): Promise<void> {
 // ── 세션 종료 ─────────────────────────────────────────────────────
 
 let channel: BroadcastChannel | null = null;
+// 안내 모달 전에 Keycloak 세션을 끝냈는지(다른 탭이 끝낸 경우 포함) — 로그인 버튼이 바로 Keycloak 로그인으로 갈지 정한다
+let keycloakEnded = false;
 
-/** redirect: 안내 모달 없이 Keycloak 로그아웃(세션·쿠키 삭제)을 거쳐 그 주소로 — 사용자가 직접 로그아웃할 때. */
+/** redirect: 안내 모달 없이 Keycloak 로그아웃(세션·쿠키 삭제)을 거쳐 그 주소로 — 사용자가 직접 로그아웃할 때.
+ *  otherTab: 다른 탭이 알려 준 종료 — Keycloak 세션은 그 탭이 끝낸다(같이 끝내면 그 탭의 로그아웃이 LOGOUT_ERROR 로 남는다). */
 async function endSession(
   reason: string,
-  opts: { server?: boolean; broadcast?: boolean; message?: string; redirect?: string } = {},
+  opts: { server?: boolean; broadcast?: boolean; message?: string; redirect?: string; otherTab?: boolean } = {},
 ) {
   if (useAuth.getState().status !== "authenticated") return;
   if (opts.redirect) useAuth.setState({ status: "loading" }); // 이동 전까지 로딩 표시 — 그 사이 다른 종료 처리도 막힌다
   if (opts.broadcast) channel?.postMessage({ type: "ended", reason }); // stopWatchers 가 채널을 닫기 전에 알린다
   stopWatchers();
   if (opts.server) {
-    // 포털 세션 종료 기록 + Keycloak 세션 삭제(서버)
+    // 포털 세션 종료 기록 — Keycloak 로그아웃보다 먼저(늦으면 Keycloak 백채널 통보가 원인을 admin 으로 남긴다)
     try {
       await authFetch(`${CORE_BASE}/api/core/auth/logout`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }),
       });
     } catch {}
   }
+  if (!opts.redirect) keycloakEnded = opts.otherTab || (await revokeSession()); // 안내 전에 Keycloak 세션도 끝낸다
   clearTokens();
   ainbLogout(); // AI 노트북 세션 쿠키도 정리 — redirect 로그아웃 경로에서도 먼저 지운다
   if (opts.redirect) {
@@ -166,22 +174,29 @@ async function endSession(
 }
 
 // 백엔드 응답(401 세션 종료·만료, 403 계정 문제)으로 알게 된 종료
-setAuthFailureHandler((reason, message) => {
+setAuthFailureHandler(async (reason, message) => {
   if (reason === "denied") {
     if (useAuth.getState().status !== "authenticated") return;
     stopWatchers();
+    keycloakEnded = await revokeSession(); // 다른 계정으로 로그인하게 — 남겨 두면 같은 계정으로 조용히 다시 들어온다
     useAuth.setState({ status: "ended", ended: { reason, message } });
     return;
   }
   void endSession(reason, { message });
 });
 
-/** 안내 화면의 로그인 버튼 — 이 브라우저의 Keycloak 세션·쿠키까지 끝내고(Keycloak 로그아웃 경유) 로그인 화면으로.
- *  로그인 화면으로 바로 보내면, Keycloak 세션이 남아 있을 때(서버 쪽 삭제 실패 등) 끝난 세션으로 조용히 다시 들어와 같은 안내가 반복된다.
+/** 안내 화면의 버튼 — Keycloak 세션을 안내 전에 끝냈으면 바로 Keycloak 로그인 화면으로.
+ *  끝내지 못했으면 Keycloak 로그아웃을 거친다 — 세션이 남은 채 로그인으로 보내면 끝난 세션으로 조용히 다시 들어와 같은 안내가 반복된다.
+ *  연결 문제(error)는 Keycloak 세션을 두고 다시 시도 — 로그인 폼 없이 돌아와 /auth/me 를 다시 확인한다.
  *  계정 문제(denied)면 다른 계정으로 로그인하므로 원래 화면(next)으로 돌아가지 않는다. */
 export function loginAgain() {
   const next = window.location.pathname + window.location.search;
-  const keep = useAuth.getState().ended?.reason !== "denied" && !next.startsWith("/auth/");
+  const reason = useAuth.getState().ended?.reason;
+  const keep = reason !== "denied" && !next.startsWith("/auth/");
+  if (reason === "error" || keycloakEnded) {
+    void loginRedirect(keep ? next : undefined);
+    return;
+  }
   void logoutRedirect(`${window.location.origin}/auth/login/${keep ? `?next=${encodeURIComponent(next)}` : ""}`);
 }
 
@@ -209,10 +224,15 @@ function lastActivity(): number {
   }
 }
 
-/** Keycloak 미사용 시간(초) = 갱신 토큰 수명. Keycloak 설정을 바꾸면 그대로 따른다. */
+// 이 페이지에서 본 가장 긴 갱신 토큰 수명 — 세션 최대 수명이 가까워지면 Keycloak 이 남은 시간만큼 짧게 발급한다.
+// 그 짧은 수명을 미사용 시간으로 쓰면 계속 쓰던 사용자도 만료 직전에 '오랫동안 사용하지 않아'로 끝난다(만료 안내가 맞다).
+let idleLimit = 0;
+
+/** Keycloak 미사용 시간(초) = 갱신 토큰 수명(이 페이지에서 본 가장 긴 값). 늘린 설정은 바로, 줄인 설정은 새로 열 때 따른다. */
 function idleLimitSeconds(): number {
   const r = getKeycloak().refreshTokenParsed;
-  return r?.exp && r?.iat ? r.exp - r.iat : 1800;
+  if (r?.exp && r?.iat) idleLimit = Math.max(idleLimit, r.exp - r.iat);
+  return idleLimit || 1800;
 }
 
 async function checkSession() {
@@ -252,7 +272,7 @@ function startWatchers() {
   if ("BroadcastChannel" in window) {
     channel = new BroadcastChannel("okc-auth");
     channel.onmessage = (e: MessageEvent<{ type: string; reason: string }>) => {
-      if (e.data?.type === "ended") void endSession(e.data.reason === "logout" ? "other_tab" : e.data.reason);
+      if (e.data?.type === "ended") void endSession(e.data.reason === "logout" ? "other_tab" : e.data.reason, { otherTab: true });
     };
   }
 }

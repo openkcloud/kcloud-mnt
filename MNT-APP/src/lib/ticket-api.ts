@@ -83,6 +83,7 @@ export interface CreateTicketInput {
   projectId: string;
   title?: string;          // 신청 제목(선택)
   vmName: string;
+  purpose?: string;        // 용도(선택, 300자)
   networkType: string;
   floatingIp: boolean;
   flavorId: string;
@@ -105,7 +106,7 @@ export function useCreateTicket() {
 export interface ProvisionTicketInput {
   id: string;
   expectedStatus: string;  // 화면이 보고 있던 상태 — 그사이 바뀌었으면 서버가 409
-  provisionSpec: Pick<ProvisionSpec, "networkId" | "floatingNetworkId" | "fixedIp" | "securityGroups" | "host">;
+  provisionSpec: Pick<ProvisionSpec, "networkId" | "floatingNetworkId" | "fixedIp" | "securityGroups" | "host" | "novaKeypair">;
 }
 
 /** 프로비저닝 시작(승인 → 생성 중) · 재시도(실패 → 생성 중, 새 회차) — 서버가 승인 설정·VM 이름을 다시 확인한 뒤

@@ -57,6 +57,7 @@ async def _scenarios():
 
     @activity.defn(name="iaas.create_server")
     def create_server(project_id, spec, volume_id):
+        calls.append(("create", spec.get("keypairName")))
         raise ApplicationError("VM 생성 중단(시험)", non_retryable=True)  # 볼륨 다음 단계까지 왔는지만 본다
 
     @activity.defn(name="iaas.cleanup")
@@ -67,7 +68,8 @@ async def _scenarios():
     def inp(tid):
         return {"ticketId": tid, "attempt": 1, "hasAccelerator": False, "projectId": "p-1", "flavorId": "f-1",
                 "imageId": "i-1", "keypairLabel": "미지정", "vmName": "vm-1", "volumeGb": 20, "networkId": "net-1",
-                "fixedIp": None, "securityGroups": [], "publicKey": None, "prev": {}}
+                "fixedIp": None, "securityGroups": [], "publicKey": "ssh-ed25519 AAAA", "keypairName": "ek-key",
+                "prev": {}}
 
     async with await WorkflowEnvironment.start_local(dev_server_existing_path=shutil.which("temporal")) as env:
         with ThreadPoolExecutor(4) as pool:
@@ -89,6 +91,7 @@ async def _scenarios():
     assert calls.count(("wait", "wf-ready")) == 1 and calls.count(("wait", "wf-late")) == 2
     for tid in ("wf-ready", "wf-late"):
         assert fin(tid)[4].startswith("VM 생성 중단(시험)") and "정리함" in fin(tid)[4]
+    assert [c for c in calls if c[0] == "create"] == [("create", "ek-key")] * 2  # 키 이름을 생성 요청에 넘긴다(상세 표시)
     # 2번 다 넘김 — 안내 문구로 실패, 만드는 중인 볼륨은 정리하지 않고 결과에 남긴다
     assert calls.count(("wait", "wf-timeout")) == 2
     _, _, status, result, error = fin("wf-timeout")

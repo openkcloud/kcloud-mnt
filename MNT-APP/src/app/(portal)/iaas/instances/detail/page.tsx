@@ -281,12 +281,25 @@ function fmtSgRule(r: SecurityGroupRuleBrief): string {
   return `${dir} ${proto} ${port} · ${src}`;
 }
 
+// 규칙 전부를 한 줄씩 표시(생략 없음)
+function SgRuleLines({ rules }: { rules?: SecurityGroupRuleBrief[] }) {
+  if (!rules || rules.length === 0) return <span className="text-[10px] text-muted-foreground">규칙 없음</span>;
+  return (
+    <div className="mt-1 flex flex-col gap-0.5">
+      {rules.map((r, i) => <span key={i} className="font-mono text-[10px] text-muted-foreground">· {fmtSgRule(r)}</span>)}
+    </div>
+  );
+}
+
 // 가상서버 보안그룹 편집 — 현재 할당된 SG 배지(제거) + '추가'로 목록 다이얼로그(정보 확인 후 선택).
 function SecurityGroupsCard({ serverId, projectId, current, busy }: { serverId: string; projectId: string; current: string[]; busy: boolean }) {
+  const { data: sgs } = useProjectSecurityGroups(projectId);
   const remove = useRemoveServerSecurityGroup();
   const confirm = useConfirm();
   const [addOpen, setAddOpen] = React.useState(false);
   const pending = remove.isPending || busy;
+  const byName = new Map((sgs ?? []).map((g) => [g.name, g])); // 이름 → 보안그룹(규칙 정보)
+  const names = Array.from(new Set(current)); // Nova 가 NIC 마다 같은 SG 를 중복으로 주므로 중복 제거
 
   async function doRemove(name: string) {
     if (!(await confirm({ title: "보안그룹 제거", destructive: true, confirmLabel: "제거", description: `${name} 을(를) 이 가상서버에서 제거할까요?` }))) return;
@@ -299,22 +312,31 @@ function SecurityGroupsCard({ serverId, projectId, current, busy }: { serverId: 
   return (
     <Card className="p-4">
       <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="size-4 text-emerald-600" /> 보안그룹 ({current.length})</div>
+        <div className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="size-4 text-emerald-600" /> 보안그룹 ({names.length})</div>
         <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}><Plus className="size-3.5" /> 추가</Button>
       </div>
-      {current.length === 0 ? (
+      {names.length === 0 ? (
         <div className="p-3 text-center text-xs text-muted-foreground">할당된 보안그룹이 없습니다.</div>
       ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {current.map((name) => (
-            <Badge key={name} variant="outline" className="gap-1 font-mono text-[11px]">
-              {name}
-              <button type="button" title="제거" disabled={pending} onClick={() => doRemove(name)}
-                className="ml-0.5 rounded-sm text-muted-foreground hover:text-rose-600 disabled:opacity-50">
-                <X className="size-3" />
-              </button>
-            </Badge>
-          ))}
+        <div className="space-y-1.5">
+          {names.map((name) => {
+            const g = byName.get(name);
+            return (
+              <div key={name} className="rounded-md border border-border p-2.5">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="size-3.5 shrink-0 text-emerald-600" />
+                  <span className="truncate font-mono text-xs font-semibold">{name}</span>
+                  {g && <Badge variant="secondary" className="shrink-0 text-[10px]">규칙 {g.rules ?? g.ruleList?.length ?? 0}</Badge>}
+                  <Button variant="ghost" size="icon-sm" className="ml-auto shrink-0" title="제거" disabled={pending} onClick={() => doRemove(name)}>
+                    <X className="size-3.5 text-rose-600" />
+                  </Button>
+                </div>
+                {g
+                  ? <SgRuleLines rules={g.ruleList} />
+                  : <span className="mt-1 block text-[10px] text-muted-foreground">이 프로젝트에서 규칙 정보를 가져올 수 없는 보안그룹입니다(예: 클러스터 전용).</span>}
+              </div>
+            );
+          })}
         </div>
       )}
       <AttachSecurityGroupDialog serverId={serverId} projectId={projectId} attached={new Set(current)} open={addOpen} onClose={() => setAddOpen(false)} />
@@ -347,14 +369,7 @@ function AttachSecurityGroupDialog({ serverId, projectId, attached, open, onClos
                     <Badge variant="secondary" className="shrink-0 text-[10px]">규칙 {g.rules ?? g.ruleList?.length ?? 0}</Badge>
                   </div>
                   {g.description && <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{g.description}</div>}
-                  {g.ruleList && g.ruleList.length > 0 && (
-                    <div className="mt-1 flex flex-col gap-0.5">
-                      {g.ruleList.slice(0, 4).map((r, i) => (
-                        <span key={i} className="font-mono text-[10px] text-muted-foreground">· {fmtSgRule(r)}</span>
-                      ))}
-                      {g.ruleList.length > 4 && <span className="text-[10px] text-muted-foreground">… 외 {g.ruleList.length - 4}개</span>}
-                    </div>
-                  )}
+                  <SgRuleLines rules={g.ruleList} />
                 </div>
                 <Plus className="size-4 shrink-0 text-muted-foreground group-hover:text-emerald-600" />
               </button>
@@ -466,11 +481,17 @@ function AttachVolumeDialog({ serverId, projectId, attached, open, onClose }: { 
                 className="group flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-brand-indigo-300 hover:bg-brand-indigo-50/40 disabled:opacity-50">
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-brand-indigo-100 text-brand-indigo-700"><HardDrive className="size-4" /></div>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-sm font-semibold">{v.name}</div>
-                  <div className="mt-0.5 flex items-center gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate font-mono text-sm font-semibold" title={v.name}>{v.name}</span>
+                    {v.bootable && <Badge variant="warning" className="shrink-0 text-[10px]">부팅 가능</Badge>}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                     <Badge variant="outline" className="text-[10px]">{v.size}GB</Badge>
                     <Badge variant="secondary" className="text-[10px]">{v.type}</Badge>
+                    <span className="font-mono text-[10px] text-muted-foreground">{v.id.slice(0, 8)}</span>
+                    <span className="text-[10px] text-muted-foreground">{fmtDateTime(v.createdAt)}</span>
                   </div>
+                  {v.description && <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={v.description}>{v.description}</div>}
                 </div>
                 <Plus className="size-4 shrink-0 text-muted-foreground group-hover:text-brand-indigo-600" />
               </button>

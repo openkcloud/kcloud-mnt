@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     keycloak_app_client_id: str = "mnt-app-client"  # 브라우저 클라이언트 — 로그아웃 통보(logout token)의 aud
     # 동시 로그인 제한 — 같은 사용자의 새 세션(브라우저)이 오면 이전 세션을 끝낸다. 로컬 개발은 false(admin 공유)
     session_single_login: bool = True
+    # 클러스터 프로비저닝의 'K8s API 연결 · 네임스페이스 · 접근 권한' 단계를 건너뛰고 완료 — 로컬 개발 전용(true).
+    # 로컬 포털(PAAS)은 새 클러스터 K8s API 에 닿지 못해 이 단계에서 실패한다. 네임스페이스·접근 권한은 만들지 않는다
+    cluster_skip_setup: bool = False
 
     class Config:
         env_file = "config.env"
