@@ -17,7 +17,7 @@ import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useAuth } from "@/lib/auth";
 import { useMyProjectIds } from "@/lib/member-api";
 import {
-  useServers, usePowerAction, useDeleteServer, useProjects, type ServerSummary,
+  useServers, usePowerAction, useDeleteServer, useProjects, byProjectThenName, type ServerSummary,
 } from "@/lib/iaas-api";
 
 const STATUS_VARIANT: Record<string, "success" | "secondary" | "warning" | "outline"> = {
@@ -57,7 +57,7 @@ export default function InstancesPage() {
       (!q || s.name.toLowerCase().includes(q.toLowerCase())) &&
       (projFilter === "all" || s.tenantId === projFilter) &&
       (statusFilter === "all" || s.status === statusFilter),
-  );
+  ).sort(byProjectThenName(projName));
   const busy = power.isPending || del.isPending;
   const open = (id: string) => router.push(`/iaas/instances/detail/?id=${id}`);
 

@@ -738,7 +738,9 @@ _ROUTER_IFACE_OWNERS = ("network:router_interface", "network:router_interface_di
 def fip_reachable(network_id: str, floatingNetworkId: str):
     """이 네트워크의 VM 에 floatingNetworkId 풀의 Floating IP 를 붙일 수 있는지.
     Neutron 은 VM 포트 IP 의 서브넷이 'FIP 풀에 게이트웨이를 둔 라우터'에 연결돼 있어야 연결을 허용한다.
-    VM 이 어느 서브넷에서 IP 를 받을지 미리 알 수 없으므로 IPv4 서브넷 전부가 연결돼 있어야 가능으로 본다."""
+    다만 VM 은 응답을 서브넷 게이트웨이 IP 로 보내므로, 그 IP 를 가진 라우터가 FIP 풀에 게이트웨이를 둬야 실제로 통신된다
+    (외부망 라우터가 게이트웨이가 아닌 IP 로만 붙어 있으면 연결은 되지만 응답이 나가지 못한다).
+    VM 이 어느 서브넷에서 IP 를 받을지 미리 알 수 없으므로 IPv4 서브넷 전부가 그래야 가능으로 본다."""
     try:
         subnets = [sn for sn in _neutron_get("/subnets", {"network_id": network_id})["subnets"] if sn.get("ip_version") == 4]
         ports = [pt for pt in _neutron_get("/ports", {"network_id": network_id})["ports"]
@@ -749,9 +751,11 @@ def fip_reachable(network_id: str, floatingNetworkId: str):
         raise HTTPException(502, f"Floating IP 연결 가능 여부 조회 실패: {type(e).__name__}: {e}")
     if not subnets:
         return {"reachable": False, "reason": "네트워크에 IPv4 서브넷이 없습니다."}
-    reached = {ip["subnet_id"] for pt in ports if pt.get("device_id") in gw_routers for ip in pt.get("fixed_ips") or []}
-    missing = [f"{sn.get('name') or sn['id'][:8]}({sn['cidr']})" for sn in subnets if sn["id"] not in reached]
+    reached = {(ip["subnet_id"], ip["ip_address"]) for pt in ports if pt.get("device_id") in gw_routers
+               for ip in pt.get("fixed_ips") or []}
+    missing = [f"{sn.get('name') or sn['id'][:8]}({sn['cidr']})" for sn in subnets
+               if (sn["id"], sn.get("gateway_ip")) not in reached]
     if missing:
         return {"reachable": False,
-                "reason": f"서브넷 {', '.join(missing)} 이(가) Floating IP 풀에 게이트웨이를 둔 라우터와 연결돼 있지 않습니다."}
+                "reason": f"서브넷 {', '.join(missing)} 의 게이트웨이 IP 를 가진 라우터가 Floating IP 풀에 게이트웨이를 두고 있지 않습니다."}
     return {"reachable": True, "reason": None}

@@ -58,8 +58,10 @@ def test_sub_저장_후_다른_sub_거부(client):
 
 def test_내_정보(client):
     add_member("ek.lee", role="viewer")
+    sql("""INSERT INTO paas_project_cluster (project_id, cluster_id, namespace)
+           VALUES (:p, 'c-mine', NULL), (:p, 'c-mine', 'ns-a'), ('other-project', 'c-other', NULL)""", p=PROJECT)
     me = client.get("/api/core/auth/me", headers=bearer(make_token())).json()
-    assert (me["username"], me["role"], me["projectIds"]) == ("ek.lee", "user", [PROJECT])
+    assert (me["username"], me["role"], me["projectIds"], me["clusterIds"]) == ("ek.lee", "user", [PROJECT], ["c-mine"])
     assert client.get("/api/core/auth/me", headers=bearer(make_token("admin"))).json()["role"] == "admin"
 
 

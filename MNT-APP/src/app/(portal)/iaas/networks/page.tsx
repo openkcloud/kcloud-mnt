@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import Link from "next/link";
 import {
   Network as NetworkIcon,
   Wifi,
@@ -28,6 +29,7 @@ import {
   useUpdateFip,
   useAddSubnet,
   useDeleteNetwork,
+  byProjectThenName,
 } from "@/lib/iaas-api";
 import type { NetworkDetail } from "@/lib/iaas-api";
 import { SgRulesDialog } from "@/components/iaas/sg-rules-dialog";
@@ -129,7 +131,7 @@ function AdminNetworksView() {
     (n) =>
       (!q || n.name.toLowerCase().includes(q.toLowerCase())) &&
       (projFilter === "all" || n.tenantId === projFilter),
-  );
+  ).sort(byProjectThenName(projName));
 
   return (
     <div className="space-y-4">
@@ -244,7 +246,7 @@ function AdminNetworksView() {
 
       {/* 상세 — 가운데 모달 */}
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(undefined)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-5xl">
           {selected && <NetworkDetailPanel network={selected} projectLabel={projName(selected.tenantId)} onClose={() => setSelected(undefined)} />}
         </DialogContent>
       </Dialog>
@@ -495,7 +497,19 @@ function NetworkDetailPanel({ network, projectLabel, onClose }: { network: IaasN
                       <TableCell className="font-mono text-[10px]">{p.mac}</TableCell>
                       <TableCell className="font-mono text-[10px] text-muted-foreground">
                         {p.deviceOwner}
-                        {p.vm && <span className="ml-1 text-brand-indigo-600">→ {p.vm}</span>}
+                        {p.vm && (
+                          p.deviceOwner.startsWith("compute:") ? (
+                            <Link
+                              href={`/iaas/instances/detail/?id=${p.vm}`}
+                              className="ml-1 text-brand-indigo-600 hover:underline"
+                              title="인스턴스 상세로 이동"
+                            >
+                              → {p.vm}
+                            </Link>
+                          ) : (
+                            <span className="ml-1 text-brand-indigo-600">→ {p.vm}</span>
+                          )
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant={p.status === "ACTIVE" ? "success" : "secondary"} className="text-[10px]">
@@ -517,11 +531,11 @@ function NetworkDetailPanel({ network, projectLabel, onClose }: { network: IaasN
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-mono font-semibold">{sg.name}</span>
-                      <Badge variant="outline" className="text-[10px]">{sg.rules} 규칙</Badge>
+                      <Badge variant="outline" className="whitespace-nowrap text-[10px]">{sg.rules} 규칙</Badge>
                     </div>
                     <div className="text-xs text-muted-foreground">{sg.desc}</div>
                   </div>
-                  {isAdmin && <Button variant="ghost" size="sm" onClick={() => setSgEditId(sg.id)}>규칙 편집</Button>}
+                  {isAdmin && <Button variant="outline" size="sm" className="shrink-0" onClick={() => setSgEditId(sg.id)}>규칙 편집</Button>}
                 </div>
               </Card>
             ))}

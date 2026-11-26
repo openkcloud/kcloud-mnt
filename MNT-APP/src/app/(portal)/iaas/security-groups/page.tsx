@@ -20,7 +20,7 @@ import { RefreshControls } from "@/components/iaas/refresh-controls";
 import { useAuth } from "@/lib/auth";
 import { useMyProjectIds } from "@/lib/member-api";
 import {
-  useSecurityGroups, useCreateSecurityGroup, useDeleteSecurityGroup, useProjects,
+  useSecurityGroups, useCreateSecurityGroup, useDeleteSecurityGroup, useProjects, byProjectThenName,
   type SgSummary,
 } from "@/lib/iaas-api";
 import type { Tenant } from "@/lib/types";
@@ -58,7 +58,7 @@ export default function SecurityGroupsPage() {
     (s) =>
       (!q || s.name.toLowerCase().includes(q.toLowerCase())) &&
       (projFilter === "all" || s.tenantId === projFilter),
-  );
+  ).sort(byProjectThenName(projName));
 
   async function remove(sg: SgSummary) {
     if (!(await confirm({

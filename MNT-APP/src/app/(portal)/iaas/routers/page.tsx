@@ -17,7 +17,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   useRouters, useRouter, useCreateRouter, useDeleteRouter, useRouterInterface,
-  useProjectSubnets, useProjects, useNetworks,
+  useProjectSubnets, useProjects, useNetworks, byProjectThenName,
   type RouterSummary,
 } from "@/lib/iaas-api";
 import type { Tenant } from "@/lib/types";
@@ -50,7 +50,7 @@ export default function RoutersPage() {
     (r) =>
       (!q || r.name.toLowerCase().includes(q.toLowerCase())) &&
       (projFilter === "all" || r.tenantId === projFilter),
-  );
+  ).sort(byProjectThenName(projName));
 
   async function remove(r: RouterSummary) {
     if (!(await confirm({

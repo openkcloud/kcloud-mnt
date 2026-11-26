@@ -28,9 +28,13 @@ export function useClusterScope() {
     ),
     [clusters.data, isAdmin, myProjectIds],
   );
-  // 선택이 없거나(최초) 더는 존재하지 않으면 첫 클러스터 자동 선택
+  // 선택이 접근 가능 목록에 없으면 보정: 접근 가능한 첫 클러스터로, 하나도 없으면 "" 로 비운다.
+  // (persist 된 이전 clusterId 가 남아 접근 권한 없는 클러스터의 리소스가 보이던 문제 차단)
   React.useEffect(() => {
-    if (ready.length && !ready.some((c) => c.id === clusterId)) setClusterId(ready[0].id);
+    if (!ready.some((c) => c.id === clusterId)) {
+      const next = ready[0]?.id ?? "";
+      if (next !== clusterId) setClusterId(next);
+    }
   }, [ready, clusterId, setClusterId]);
   return { clusterId, setClusterId, clusters: ready, isLoading: clusters.isLoading };
 }
@@ -47,12 +51,15 @@ export function ClusterScopeBar({
 }) {
   const { clusterId, setClusterId, clusters, isLoading } = useClusterScope();
   const namespaces = useNamespaces(clusterId);
+  const noClusters = !isLoading && clusters.length === 0;
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <Select value={clusterId || undefined} onValueChange={setClusterId}>
+      <Select value={clusters.some((c) => c.id === clusterId) ? clusterId : undefined} onValueChange={setClusterId} disabled={noClusters}>
         <SelectTrigger className="w-52">
-          <SelectValue placeholder={isLoading ? "클러스터 불러오는 중…" : "서비스 클러스터 선택"} />
+          <SelectValue
+            placeholder={isLoading ? "클러스터 불러오는 중…" : noClusters ? "사용 가능한 클러스터 없음" : "서비스 클러스터 선택"}
+          />
         </SelectTrigger>
         <SelectContent>
           {clusters.map((c) => (

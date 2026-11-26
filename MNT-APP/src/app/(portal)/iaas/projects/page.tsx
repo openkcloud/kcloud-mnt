@@ -69,7 +69,9 @@ export default function ProjectsPage() {
 
   // 사용자는 자신이 멤버인 프로젝트만 (관리자는 전체) — 멤버십은 포털 DB(iam_project_member)
   const mine = isAdmin ? data.items : data.items.filter((t) => myProjectIds?.has(t.id));
-  const filtered = mine.filter((t) => !q || t.name.toLowerCase().includes(q.toLowerCase()));
+  const filtered = mine
+    .filter((t) => !q || t.name.toLowerCase().includes(q.toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const cur = Math.min(page, totalPages);

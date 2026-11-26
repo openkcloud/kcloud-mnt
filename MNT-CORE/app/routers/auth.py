@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import CurrentUser, bearer_token, current_user, end_session, end_session_by_logout_token, session_status
 from ..db import SessionLocal, get_db
+from .cluster_access import project_cluster_ids
 from .members import member_project_ids
 
 router = APIRouter(tags=["auth"])
@@ -19,7 +20,9 @@ router = APIRouter(tags=["auth"])
 
 @router.get("/auth/me")
 def me(user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
-    """토큰의 포털 사용자 — 화면 사용자 정보, MNT-IAAS 권한 판정(역할·소속 프로젝트)에 쓴다."""
+    """토큰의 포털 사용자 — 화면 사용자 정보, MNT-IAAS 권한 판정(역할·소속 프로젝트),
+    MNT-PAAS 권한 판정(역할·접근 클러스터)에 쓴다."""
+    project_ids = member_project_ids(db, user.username)
     return {
         "id": str(user.id),
         "username": user.username,
@@ -27,7 +30,8 @@ def me(user: CurrentUser = Depends(current_user), db: Session = Depends(get_db))
         "email": user.email,
         "org": user.org,
         "role": user.role,
-        "projectIds": member_project_ids(db, user.username),
+        "projectIds": project_ids,
+        "clusterIds": project_cluster_ids(db, project_ids),
     }
 
 
